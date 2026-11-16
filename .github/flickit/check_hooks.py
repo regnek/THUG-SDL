@@ -9,6 +9,10 @@ they have to keep to what the game's code expects there, whatever the compiler m
   rail search   takes the place of four calls to the game's search for a rail, which pops seven
                 arguments: every return is ret 1Ch (or a jump into the game's function, which does
                 the popping)
+  rail test     the function the search here hands every piece of rail within reach to. It calls
+                the game's own test of a piece of rail, which takes two vectors on the stack (32
+                bytes) and leaves them there: the room is made before the call, the stack is level
+                again at the plain ret
   grind pick    takes the place of a call to a function that pops five arguments: every return is ret 14h
                 (or a jump into the game's function, which does the popping)
   rail balance  takes the place of a call to a function without arguments: every return is a plain ret
@@ -35,6 +39,7 @@ BALANCE_UPDATE = 0x0050B9C0
 GET_LOCAL_SKATER = 0x004F94F0
 GET_PHYSICS_FLOAT = 0x00516110
 RAIL_SEARCH = 0x00514630
+RAIL_VALID = 0x00512760
 
 # push ecx / push edx / push esi / call ... / add esp, 4 / pop edx / pop ecx / ret
 RAIL_CATCH_PATTERN = bytes.fromhex("515256e8") + b"...." + bytes.fromhex("83c4045a59c3")
@@ -46,7 +51,7 @@ NAMES = {
     GET_LOCAL_SKATER: "GetLocalSkater",
     GET_PHYSICS_FLOAT: "GetPhysicsFloat",
     RAIL_SEARCH: "the game's search for a rail",
-    0x00512760: "the game's test of a piece of rail",
+    RAIL_VALID: "the game's test of a piece of rail",
     0x0076A788: "the skate module pointer",
     0x0041BDC0: "GetComponent",
     0x0040FBC0: "CScript::SetScript",
@@ -162,6 +167,48 @@ def returns(insns):
     return out
 
 
+def stack_at_calls(insns):
+    """Follows the stack pointer through a function, one instruction after the other. That is right
+    for code that keeps the stack at one height in all its branches, which is what compilers make
+    of a function this small. Returns (how many bytes are on the stack at each call, how many at
+    each ret), counted from the function's entry, or None if something moves the stack in a way
+    this does not follow."""
+    depth = 0
+    frame = None
+    calls, rets = [], []
+    for ins in insns:
+        m, ops = ins.mnemonic, ins.op_str.replace(" ", "")
+        if m in ("loop", "enter"):
+            return None
+        if m == "push":
+            depth += 4
+        elif m == "pop":
+            depth -= 4
+        elif m in ("sub", "add") and ops.startswith("esp,"):
+            try:
+                n = int(ops.split(",")[1], 0)
+            except ValueError:
+                return None
+            depth += n if m == "sub" else -n
+        elif m == "mov" and ops == "ebp,esp":
+            frame = depth
+        elif m == "mov" and ops == "esp,ebp":
+            if frame is None:
+                return None
+            depth = frame
+        elif m == "leave":
+            if frame is None:
+                return None
+            depth = frame - 4
+        elif m == "call":
+            calls.append((ins, depth))
+        elif m in ("ret", "retn"):
+            rets.append(depth)
+        elif ops.startswith("esp,") and m not in ("cmp", "test"):
+            return None
+    return calls, rets
+
+
 def matches(dll, va, pattern, wild):
     """The bytes at va are the pattern; wild = (start, end) of the part that may be anything."""
     head = dll.bytes(va, len(pattern))
@@ -225,7 +272,7 @@ def check(path):
     pointers = dll.code_pointers()
     print("  %d functions have their address taken" % len(pointers))
 
-    catch, pick, balance, boost, search = [], [], [], [], []
+    catch, pick, balance, boost, search, valid = [], [], [], [], [], []
     for p in sorted(set(dll.entry(p) for p in pointers)):
         if matches(dll, p, RAIL_CATCH_PATTERN, (4, 8)):
             catch.append(p)
@@ -241,6 +288,8 @@ def check(path):
             balance.append((p, insns))
         elif RAIL_SEARCH in refs:
             search.append((p, insns))
+        elif RAIL_VALID in refs:
+            valid.append((p, insns))
 
     # --- rail catch
     if len(catch) != 1:
@@ -266,6 +315,30 @@ def check(path):
         tail = insns and insns[-1].mnemonic == "jmp"
         if any(r != 0x1C for r in rets) or (not rets and not tail):
             problems.append("a rail search hook returns with %s: every return has to pop 0x1C bytes" % [hex(r) for r in rets])
+
+    # --- rail test
+    if len(valid) != 1:
+        problems.append("the function that calls the game's test of a piece of rail was found %d times" % len(valid))
+    for p, insns in valid:
+        show(dll, "rail test at %08X" % p, insns)
+        rets = returns(insns)
+        if not rets or any(r != 0 for r in rets):
+            problems.append("the rail test returns with %s, not with a plain ret" % rets)
+        followed = stack_at_calls(insns)
+        if followed is None:
+            problems.append("the rail test moves the stack in a way this check does not follow")
+            continue
+        calls, depths = followed
+        game = [(ins, depth) for ins, depth in calls if RAIL_VALID in dll.game_refs([ins]) or ins.operands[0].type == capstone.x86.X86_OP_REG]
+        if len(game) != 1:
+            problems.append("the rail test calls the game %d times, not once" % len(game))
+        for ins, depth in game:
+            print("    at the call the stack holds %d bytes more than at the entry" % depth)
+            if depth < 0x20:
+                problems.append("the rail test calls the game's test with %d bytes on the stack: two vectors are 32" % depth)
+        # all but the saved frame pointer, if there is one, is gone again at the end
+        if any(d != 0 for d in depths):
+            problems.append("the rail test returns with %s bytes still on the stack" % depths)
 
     # --- grind pick
     if len(pick) != 1:
