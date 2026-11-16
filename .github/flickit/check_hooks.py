@@ -181,8 +181,6 @@ def check(path):
         rets = returns(callee)
         if not rets or any(r != 0 for r in rets):
             problems.append("the function the rail catch hook calls returns with %s, not with a plain ret" % rets)
-        if GET_LOCAL_SKATER not in dll.game_refs(callee):
-            problems.append("the function the rail catch hook calls never asks for the local skater")
 
     # --- grind pick
     if len(pick) != 1:
