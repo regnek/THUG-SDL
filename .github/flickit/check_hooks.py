@@ -1,4 +1,4 @@
-"""Look at the three hooks of src/flickit_game.cpp in a built thugsdl.dll.
+"""Look at the four hooks of src/flickit_game.cpp in a built thugsdl.dll.
 
 usage: check_hooks.py <built thugsdl.dll> [<built thugsdl.dll> ...]
 
@@ -9,6 +9,11 @@ they have to keep to what the game's code expects there, whatever the compiler m
   grind pick    takes the place of a call to a function that pops five arguments: every return is ret 14h
                 (or a jump into the game's function, which does the popping)
   rail balance  takes the place of a call to a function without arguments: every return is a plain ret
+                (this one also carries the drag on a rail)
+  rail boost    a bare function in the place of a call to GetPhysicsFloat: passes esi to a function
+                that answers with the address to go on at, and jumps there with the stack as it found
+                it. That address is the game's GetPhysicsFloat or a function of the DLL that returns
+                a small number the way the game expects a number back (on the x87 stack, plain ret)
 
 The functions are found without symbols: their addresses are in the DLL's relocation table (they are
 handed to patchCall), and each one refers to the address of the game function it stands in for. The
@@ -25,12 +30,17 @@ import pefile
 DO_GRIND_TRICK = 0x005608C0
 BALANCE_UPDATE = 0x0050B9C0
 GET_LOCAL_SKATER = 0x004F94F0
+GET_PHYSICS_FLOAT = 0x00516110
 
+# push ecx / push edx / push esi / call ... / add esp, 4 / pop edx / pop ecx / ret
 RAIL_CATCH_PATTERN = bytes.fromhex("515256e8") + b"...." + bytes.fromhex("83c4045a59c3")
+# push esi / call ... / add esp, 4 / jmp eax
+RAIL_BOOST_PATTERN = bytes.fromhex("56e8") + b"...." + bytes.fromhex("83c404ffe0")
 NAMES = {
     DO_GRIND_TRICK: "do_grind_trick",
     BALANCE_UPDATE: "the balance update",
     GET_LOCAL_SKATER: "GetLocalSkater",
+    GET_PHYSICS_FLOAT: "GetPhysicsFloat",
     0x0076A788: "the skate module pointer",
     0x0041BDC0: "GetComponent",
     0x0040FBC0: "CScript::SetScript",
@@ -146,6 +156,62 @@ def returns(insns):
     return out
 
 
+def matches(dll, va, pattern, wild):
+    """The bytes at va are the pattern; wild = (start, end) of the part that may be anything."""
+    head = dll.bytes(va, len(pattern))
+    return len(head) == len(pattern) and head[:wild[0]] == pattern[:wild[0]] and head[wild[1]:] == pattern[wild[1]:]
+
+
+def code_values(dll, insns):
+    """Addresses inside the DLL's code that an instruction list holds as numbers (not as call or jump targets)."""
+    out = set()
+    for ins in insns:
+        if ins.mnemonic == "call" or ins.mnemonic.startswith("j"):
+            continue
+        for op in ins.operands:
+            values = []
+            if op.type == capstone.x86.X86_OP_IMM:
+                values.append(op.imm & 0xFFFFFFFF)
+            elif op.type == capstone.x86.X86_OP_MEM and op.mem.base == 0 and op.mem.index == 0:
+                va = op.mem.disp & 0xFFFFFFFF
+                if ins.mnemonic == "lea":
+                    values.append(va)       # the address itself is what is loaded
+                elif dll.in_image(va) and va + 4 <= dll.base + len(dll.image):
+                    values.append(dll.u32(va))
+            for v in values:
+                if dll.in_text(v):
+                    out.add(dll.entry(v))
+    return sorted(out)
+
+
+def small_number(dll, insns):
+    """The number a short function puts on the x87 stack before it returns with a plain ret, or None
+    if the instructions are anything else."""
+    if not insns or len(insns) > 12:
+        return None
+    rets = returns(insns)
+    if not rets or any(r != 0 for r in rets):
+        return None
+    loads = [ins for ins in insns if ins.mnemonic.startswith("f")]
+    if len(loads) != 1:
+        return None
+    load = loads[0]
+    if load.mnemonic == "fldz":
+        return 0.0
+    if load.mnemonic == "fld1":
+        return 1.0
+    if load.mnemonic == "fld" and len(load.operands) == 1:
+        op = load.operands[0]
+        if op.type == capstone.x86.X86_OP_MEM and op.mem.base == 0 and op.mem.index == 0:
+            va = op.mem.disp & 0xFFFFFFFF
+            if dll.in_image(va) and va + 8 <= dll.base + len(dll.image):
+                if op.size == 4:
+                    return struct.unpack("<f", dll.bytes(va, 4))[0]
+                if op.size == 8:
+                    return struct.unpack("<d", dll.bytes(va, 8))[0]
+    return None
+
+
 def check(path):
     dll = Dll(path)
     problems = []
@@ -153,12 +219,13 @@ def check(path):
     pointers = dll.code_pointers()
     print("  %d functions have their address taken" % len(pointers))
 
-    catch, pick, balance = [], [], []
+    catch, pick, balance, boost = [], [], [], []
     for p in sorted(set(dll.entry(p) for p in pointers)):
-        head = dll.bytes(p, len(RAIL_CATCH_PATTERN))
-        if len(head) == len(RAIL_CATCH_PATTERN) and all(b == ord(".") or a == b for a, b in zip(head, RAIL_CATCH_PATTERN)) \
-                and head[:4] == RAIL_CATCH_PATTERN[:4] and head[8:] == RAIL_CATCH_PATTERN[8:]:
+        if matches(dll, p, RAIL_CATCH_PATTERN, (4, 8)):
             catch.append(p)
+            continue
+        if matches(dll, p, RAIL_BOOST_PATTERN, (2, 6)):
+            boost.append(p)
             continue
         insns = dll.function(p)
         refs = dll.game_refs(insns)
@@ -200,6 +267,35 @@ def check(path):
         rets = returns(insns)
         if not rets or any(r != 0 for r in rets):
             problems.append("the rail balance hook returns with %s, not with a plain ret" % rets)
+
+    # --- rail boost
+    if len(boost) != 1:
+        problems.append("the rail boost hook was found %d times" % len(boost))
+    for p in boost:
+        show(dll, "rail boost hook at %08X" % p, dll.function(p))
+        target = dll.entry((p + 6 + struct.unpack("<i", dll.bytes(p + 2, 4))[0]) & 0xFFFFFFFF)
+        if not dll.in_text(target):
+            problems.append("the rail boost hook calls %08X, outside the code" % target)
+            continue
+        callee = dll.function(target)
+        show(dll, "which calls %08X" % target, callee)
+        rets = returns(callee)
+        if not rets or any(r != 0 for r in rets):
+            problems.append("the function the rail boost hook calls returns with %s, not with a plain ret" % rets)
+        if GET_PHYSICS_FLOAT not in dll.game_refs(callee):
+            problems.append("the function the rail boost hook calls does not hand out the game's GetPhysicsFloat")
+        small = []
+        for v in code_values(dll, callee):
+            body = dll.function(v)
+            number = small_number(dll, body)
+            if number is not None:
+                small.append((v, body, number))
+        if len(small) != 1:
+            problems.append("the function that answers for the rail boost in the game's place was found %d times" % len(small))
+        for v, body, number in small:
+            show(dll, "or hands out %08X, which answers %g" % (v, number), body)
+            if not 0.0 < number <= 20.0:
+                problems.append("the rail boost that replaces the game's is %g, not a small speed" % number)
 
     for problem in problems:
         print("::error::%s: %s" % (path, problem))

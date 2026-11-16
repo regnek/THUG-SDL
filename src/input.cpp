@@ -315,6 +315,12 @@ bool flickitGrindReady = false;
 uint32_t flickitRailSince = 0;
 bool flickitOnRail = false;
 bool flickitNoReportLogged = false;
+int flickitDragClass = -1;                               // for the log: what the drag on the rail was last reported for
+int flickitDragSurface = -1;
+bool flickitRailTimed = false;                           // for the log: the stay on the rail as the game's rail code saw it
+float flickitRailSeconds = 0.0f;
+float flickitRailSpeedIn = 0.0f;
+float flickitRailSpeed = 0.0f;
 
 // Reads the stick pattern file named in the ini (default: skater.pat) from the folder the ini is in.
 // Without the file, or with Patterns=0, Flickit decides tricks from its built-in directions.
@@ -403,11 +409,14 @@ void loadFlickitSettings() {
 	s.switchHold = (int)GetPrivateProfileInt(FLICKIT_SECTION, "SwitchHold", s.switchHold, configFile);
 	s.railTap = (int)GetPrivateProfileInt(FLICKIT_SECTION, "RailTap", s.railTap, configFile);
 	s.flickSpeed = (int)GetPrivateProfileInt(FLICKIT_SECTION, "FlickSpeed", s.flickSpeed, configFile);
+	s.grindDrag = (int)GetPrivateProfileInt(FLICKIT_SECTION, "GrindDrag", s.grindDrag, configFile);
+	s.grindExit = (int)GetPrivateProfileInt(FLICKIT_SECTION, "GrindExit", s.grindExit, configFile);
+	s.grindBoost = (int)GetPrivateProfileInt(FLICKIT_SECTION, "GrindBoost", s.grindBoost, configFile);
 
 	Flickit::Sanitize(s);
 	flickitSettings = s;
 
-	// The grinds need three changes in the game's rail code. They go in once and do nothing on
+	// The grinds need four changes in the game's rail code. They go in once and do nothing on
 	// frames where Flickit does not ask for them, so switching the settings off later is enough.
 	bool hooks = false;
 	if (s.enabled && s.gameHooks) {
@@ -428,6 +437,13 @@ void loadFlickitSettings() {
 		if (hooks) {
 			Log::TypedLog(CHN_SDL, "Flickit grinds: rails catch by themselves %d, the stick picks the grind %d, switches on the rail %d, balance %d, mirrored %d\n",
 				s.grindCatch, s.grindPick, s.grindSwitch, s.grindBalance, s.grindMirror);
+			if (s.grindDrag > 0) {
+				Log::TypedLog(CHN_SDL, "Flickit rails: drag %d%% of Skate's, %s when the speed is gone, %s for landing on a rail\n",
+					s.grindDrag, s.grindExit ? "the board steps off" : "the board stays", s.grindBoost ? "the game's speed boost" : "no speed boost");
+			}
+			else {
+				Log::TypedLog(CHN_SDL, "Flickit rails: no drag, %s\n", s.grindExit ? "the board steps off a rail it has stopped on" : "the board stays on a rail it has stopped on");
+			}
 		}
 		else {
 			Log::TypedLog(CHN_SDL, "Flickit grinds: %s, the Grind button is held after a pop instead\n",
@@ -469,7 +485,30 @@ static void flickitLogGame(const FlickitGame::Skater& sk, uint32_t now) {
 	}
 	flickitOnRail = onRail;
 	if (!onRail) {
+		if (flickitRailTimed) {
+			Log::TypedLog(CHN_SDL, "Flickit: off the rail after %.1f s, speed %.0f -> %.0f\n", flickitRailSeconds, flickitRailSpeedIn, flickitRailSpeed);
+		}
+		flickitRailTimed = false;
+		flickitDragClass = -1;
+		flickitDragSurface = -1;
 		return;
+	}
+	if (sk.railSeconds > 0.0f) {
+		// The game's rail code has run with the drag or the step-off on
+		if (!flickitRailTimed || sk.railSeconds < flickitRailSeconds) {
+			flickitRailTimed = true;
+			flickitRailSpeedIn = sk.railSpeed;
+		}
+		flickitRailSeconds = sk.railSeconds;
+		flickitRailSpeed = sk.railSpeed;
+		if (flickitSettings.grindDrag > 0 && (sk.dragClass != flickitDragClass || sk.railSurface != flickitDragSurface)) {
+			flickitDragClass = sk.dragClass;
+			flickitDragSurface = sk.railSurface;
+			const float scale = Flickit::kUnitsPerMetre * (float)flickitSettings.grindDrag * 0.01f;
+			Log::TypedLog(CHN_SDL, "Flickit: on a %s (terrain %d), %s: the drag starts at %.0f and grows to %.0f units/s2\n",
+				Flickit::SurfaceName(sk.railSurface), sk.railTerrain, Flickit::DragClassName(sk.dragClass),
+				Flickit::SkateDrag(sk.dragClass, sk.railSurface, 0.0f) * scale, Flickit::SkateDrag(sk.dragClass, sk.railSurface, 60.0f) * scale);
+		}
 	}
 	if (sk.grindSerial != flickitGrindSerial || sk.grind != flickitGrindKind || sk.grindReady != flickitGrindReady) {
 		if (sk.grind != Flickit::GRIND_UNKNOWN && (sk.grind != flickitGrindKind || sk.grindSerial != flickitGrindSerial)) {
@@ -542,6 +581,8 @@ int flickitPoll(device* dev, SDL_GameController* controller, Flickit::Output* ou
 			in.grind = skater.grind;
 			in.grindReady = skater.grindReady;
 			in.grindSerial = skater.grindSerial;
+			in.railOff = skater.railOff;
+			in.offSide = skater.offSide;
 			if (flickitSettings.debug) {
 				flickitLogGame(skater, in.now);
 			}
@@ -557,6 +598,10 @@ int flickitPoll(device* dev, SDL_GameController* controller, Flickit::Output* ou
 		const char* where = (out->state == Flickit::STATE_UNKNOWN) ? "" : (out->state == Flickit::STATE_RAIL) ? ", on a rail" : (out->state == Flickit::STATE_AIR) ? ", in the air" : "";
 		if (out->switchTo != Flickit::GRIND_UNKNOWN) {
 			Log::TypedLog(CHN_SDL, "Flickit: on the rail, switching to the %s\n", Flickit::GrindName(out->switchTo));
+		}
+		if (out->stepStarted) {
+			Log::TypedLog(CHN_SDL, "Flickit: out of speed on the rail, stepping off %s\n",
+				out->stepSide < 0 ? "to the left, where the board came from" : out->stepSide > 0 ? "to the right, where the board came from" : "wherever the game finds room");
 		}
 		if (out->gesture == Flickit::GESTURE_GRAB) {
 			Log::TypedLog(CHN_SDL, "Flickit: grab, %s trigger\n", out->slot == Flickit::DIR_L ? "left" : "right");
@@ -588,6 +633,9 @@ void flickitGameFrame(device* dev) {
 	frame.mirror = flickitSettings.grindMirror != 0;
 	frame.classicGrind = (dev->controlData[3] & (0x01 << 4)) != 0;
 	frame.tilt = flickitRecognizers[0].GetTilt();
+	frame.drag = flickitSettings.grindDrag;
+	frame.stepOff = flickitSettings.grindExit != 0;
+	frame.boost = flickitSettings.grindBoost != 0;
 	FlickitGame::SetFrame(frame);
 }
 
@@ -612,6 +660,22 @@ void flickitApply(device* dev, const Flickit::Output& o) {
 	if (o.nollie) {
 		dev->controlData[3] |= 0x01 << 0;
 		dev->controlData[18] = 0xff;
+	}
+	if (o.stepOff) {
+		// The game's own button for getting off a rail: Revert / Switch (R2 on its PlayStation pad)
+		dev->controlData[3] |= 0x01 << 1;
+		dev->controlData[19] = 0xff;
+		// With Left or Right held the skater steps off to that side. A direction the player holds wins.
+		const bool playerSide = (dev->controlData[2] & ((0x01 << 5) | (0x01 << 7))) != 0
+			|| dev->controlData[6] < 0x80 - 0x30 || dev->controlData[6] > 0x80 + 0x30;
+		if (!playerSide && o.stepSide < 0) {
+			dev->controlData[2] |= 0x01 << 7;
+			dev->controlData[9] = 0xFF;
+		}
+		else if (!playerSide && o.stepSide > 0) {
+			dev->controlData[2] |= 0x01 << 5;
+			dev->controlData[8] = 0xFF;
+		}
 	}
 
 	if (o.ownsDirection) {

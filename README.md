@@ -137,6 +137,7 @@ On the rail:
 - A flick pops off the rail, with the flip the flick asks for. Letting the stick go does not pop. A flick is a fast move: taking the stick from one end to the other slowly switches the grind instead.
 - The right bumper drops off the rail (THUG SDL's drop-down key).
 - The board does not drift off balance. `GrindBalance=1` gives the balance meter its job back.
+- The board loses speed, and steps off when it has none left (see below).
 
 In the air a flick across the stick is still a flip trick. Rolling the stick round to a side leans the board; it is a shove-it only when the roll starts on the ground or on a rail.
 
@@ -144,7 +145,20 @@ The Grind button itself works as it always did. While it is held the game picks 
 
 Off the board Flickit stands down: the right stick is the camera again and the triggers are the game's. Both bumpers get the skater back on, as they got him off.
 
-For all this the mod looks at the skater's state and changes three places in the game's rail code: the test for the Grind button before a rail is caught, the pick of the grind, and the balance of a grind. The code at every address it uses is compared with what is expected there first. If anything differs nothing is touched and grinds work as in earlier versions, with the Grind button held for a moment after each pop. `GameHooks=0` does the same on purpose. All of it applies to the first player's skater.
+### Speed on a rail
+In THUG a grind lasts as long as the rail does. With Flickit the board loses speed on a rail the way it does in Skate, and steps off by itself when the speed is gone.
+
+- What it slides on counts. Metal rails, wires, glass and plastic slide best. Ledges of concrete and wood drag about twice as hard, and brick, rough stone, logs and rope a third more than a ledge.
+- How it slides counts. Least on the trucks (50-50, 5-0, nosegrind). On a metal rail a boardslide or lipslide drags a tenth more, a nose- or tailslide a fifth more, and the grinds with truck and deck both on the rail (crooked, overcrook, smith, feeble, salad) two fifths more. On a ledge the steps are bigger: a third more, half more, and twice as much.
+- The drag grows over the first four seconds of a grind, from five eighths of its full strength to all of it.
+- In numbers, for a 50-50 on a level rail: metal takes 63 units of speed per second at first and 100 from four seconds on, a ledge 109 and 173. From a fast roll (700) that is about eight seconds and 2900 units of metal rail or five seconds and 1800 units of ledge; a smith on a ledge is over in under three seconds. `GrindDrag` scales all of it: 50 is half, 200 double, 0 none.
+- Slopes are the game's as before: downhill the board picks up speed, uphill it loses more.
+- After at least a second on the rail, a board that has all but stopped steps off: THUG's own skate-in, the one on the right bumper. Where there is ground next to the rail the skater rolls onto it, where there is none he hops off and drops. He goes to the side the board came from; hold left or right to pick the side yourself. On a rail that goes uphill the board steps off at the point where THUG would let it slide back down. `GrindExit=0` leaves the board on the rail.
+- THUG pushes the board every time it lands on a rail, by 150 units of speed, which is a third of a kick. Skate does not, and with a drag on the rail that push would be a way to get the speed back by hopping. So while the drag is on, next to nothing is left of it. `GrindBoost=1` brings it back.
+
+The numbers are Skate 3's, put into THUG's units at 80 units of speed for one metre per second. That makes a grind last as long as it would in Skate when both skaters come in at their own rolling speed. THUG's skater is about twice as fast as Skate's, so measured in rail the grinds go about twice as far; `GrindDrag=200` gives roughly Skate's distances instead.
+
+For all this the mod looks at the skater's state and changes four places in the game's rail code: the test for the Grind button before a rail is caught, the pick of the grind, the balance of a grind (the drag is applied in the same place, once per frame of the game's rail physics), and the speed the game adds when the board lands on a rail. The code at every address it uses is compared with what is expected there first. If anything differs nothing is touched and grinds work as in earlier versions, with the Grind button held for a moment after each pop. `GameHooks=0` does the same on purpose. All of it applies to the first player's skater.
 
 The settings live in the `[Flickit]` section of `thugsdl.ini`. Thresholds are percent of full stick deflection, times are milliseconds. Press F9 in game to re-read the section without restarting.
 
@@ -181,6 +195,9 @@ The settings live in the `[Flickit]` section of `thugsdl.ini`. Thresholds are pe
 | SwitchHold | 250 | How long the stick has to rest on a rail before the grind switches |
 | RailTap | 50 | How long Ollie is pressed for the pop off a rail. Longer pops higher, up to about 200 |
 | FlickSpeed | 100 | On a rail and in the air, how fast the stick has to travel to be a flick: percent of full deflection per 100 ms. 0: any speed |
+| GrindDrag | 100 | How much speed the board loses on a rail, in percent of Skate's drag (see Speed on a rail). 0: none, as in THUG. Up to 1000 |
+| GrindExit | 1 | A board that has run out of speed on a rail steps off by itself. 0: it stays on |
+| GrindBoost | 0 | 1: keep the speed THUG adds when the board lands on a rail. Without the drag (`GrindDrag=0`) it is always kept |
 
 ### Stick patterns
 Out of the box Flickit sorts a flick by where it starts and ends, in eight directions (the table above). If a pattern file is present, it uses that instead: each trick is then a short list of stick positions that have to be passed in order, each with a tolerance radius. This is how the Skate games define their gestures, and the file format is theirs, so if you own Skate 3 you can copy its `skater.pat` next to `thugsdl.ini` and flick the tricks the way that game expects them. No pattern file comes with THUG SDL; without one nothing changes.
@@ -205,7 +222,7 @@ g++ -std=c++11 -I src tests/flickit_test.cpp src/flickit.cpp -o flickit_test && 
 g++ -std=c++11 -I src tests/flickit_pattern_test.cpp src/flickit.cpp -o flickit_pattern_test && ./flickit_pattern_test
 g++ -std=c++11 -I src tests/flickit_grind_test.cpp src/flickit.cpp -o flickit_grind_test && ./flickit_grind_test
 ```
-The second one also takes a pattern file: `./flickit_pattern_test skater.pat` draws every pattern in it and reports what was recognized. The third one is run from the top of the repository: it checks the grinds the mod asks the game for against the game's own grind table in `scripts/qb/source/scripts/game/skater/grindlist.q`.
+The second one also takes a pattern file: `./flickit_pattern_test skater.pat` draws every pattern in it and reports what was recognized. The third one is run from the top of the repository: it checks the grinds the mod asks the game for against the game's own grind table in `scripts/qb/source/scripts/game/skater/grindlist.q`, and the drag on a rail against the times and distances a grind lasts in Skate.
 
 ## TROUBLESHOOTING
 

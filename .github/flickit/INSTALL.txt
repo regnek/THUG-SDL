@@ -43,6 +43,27 @@ On the rail: stick down = 5-0, up = nosegrind, let go = 50-50 (the game takes
 the switch about three quarters of a second into a grind). A flick pops off;
 letting go does not. Right bumper = drop off the rail. No balancing.
 
+Speed on a rail
+---------------
+New in this build: the board loses speed on a rail, as in Skate, and steps off
+by itself when it has none left.
+
+  - Metal rails slide best, ledges drag about twice as hard, rough stone and
+    brick more. Least in a 50-50, 5-0 or nosegrind, most in a smith, feeble
+    or crooked. From a fast roll a 50-50 lasts about eight seconds on a metal
+    rail and five on a ledge; a smith on a ledge under three.
+  - Out of speed, the skater steps off to the side the board came from (hold
+    left or right to pick the side). On an uphill rail he steps off where
+    THUG would have let him slide back down.
+  - Landing on a rail no longer adds speed (THUG adds 150 every time).
+
+  GrindDrag=100   percent of Skate's drag. 200 = Skate's distances, 0 = off
+  GrindExit=1     0 = the board stays on the rail when it has stopped
+  GrindBoost=0    1 = THUG's push for landing on a rail is back
+
+With the console on ([Logger] Console=1) every grind gets a line saying what
+the rail is made of, which drag that gives, and how fast the board came off.
+
 On foot and in a car Flickit switches itself off. Both bumpers get the skater
 back on the board.
 
@@ -60,7 +81,8 @@ If something is wrong
 - Grinds misbehave: put GameHooks=0 under [Flickit] in thugsdl.ini and press
   F9 in game. The mod then leaves the game's rail code alone and grinds work
   as in the build before this one (Grind held for a moment after each pop).
-  GrindCatch, GrindPick, GrindSwitch and GrindBalance switch the parts one by one.
+  GrindCatch, GrindPick, GrindSwitch and GrindBalance switch the parts one by one,
+  and GrindDrag=0 with GrindExit=0 gives THUG's endless grinds back.
 - To go back to stock: delete thugsdl.dll and rename thugsdl.dll.bak back.
 
 Skate 3 stick patterns (optional)

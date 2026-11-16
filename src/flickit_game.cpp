@@ -2,6 +2,7 @@
 
 #include <windows.h>
 #include <string.h>
+#include <cmath>
 
 #include "patch.h"
 #include "Logger/Logger.h"
@@ -52,20 +53,35 @@ namespace FlickitGame {
 	typedef bool(__thiscall* StructGetChecksum_t)(void* structure, uint32_t name, uint32_t* out, bool assert);
 	static const StructGetChecksum_t StructGetChecksum = (StructGetChecksum_t)0x004110B0;
 
+	// One of the skater's physics values (physics.q) by the checksum of its name
+	typedef float(__cdecl* GetPhysicsFloat_t)(uint32_t name, int flag);
+	static const GetPhysicsFloat_t GetPhysicsFloat = (GetPhysicsFloat_t)0x00516110;
+
 	enum {
 		// any component
 		COMPONENT_OBJECT = 0x0C,        // the object it belongs to
 
 		// the skater object
 		OBJECT_SCRIPT = 0x10,           // its script
+		OBJECT_LEFT = 0x60,             // the way its left side points (the first row of its matrix; "Move x = 1" in a script goes there)
+		OBJECT_VELOCITY = 0xA0,
 
 		// Script::CScript
 		SCRIPT_PARAMS = 0x14,           // the parameters of the script that is running
 
 		// CSkaterCorePhysicsComponent
+		CORE_FRAME_LENGTH = 0x8C,       // seconds, the frame its physics are working on
+		CORE_RAIL_NODE = 0x22C,         // the rail it is on: the node the segment starts at
 		CORE_GRIND_TWEAK = 0x368,
 		CORE_INPUT = 0x4B4,             // CInputComponent
+		CORE_BALANCE = 0x4CC,           // CSkaterBalanceTrickComponent
 		CORE_STATE = 0x4D0,             // CSkaterStateComponent
+
+		// CSkaterBalanceTrickComponent
+		BALANCE_TYPE = 0x18,            // checksum of what is being balanced: grind, slide, lip, manual...
+
+		// a rail node
+		RAIL_TERRAIN = 0x4E,            // one byte: what the rail is made of, for the sound and the sparks
 
 		// CInputComponent
 		INPUT_GRIND_PRESSED = 0x1A0,    // the Grind button (Triangle) is down
@@ -85,6 +101,8 @@ namespace FlickitGame {
 
 	// Name checksums
 	static const uint32_t kSkaterState = 0x43686585;          // SkaterState
+	static const uint32_t kSkaterCorePhysics = 0x5BD63B29;    // SkaterCorePhysics
+	static const uint32_t kSlideBalance = 0x8D10119D;         // slide: the balance of a slide. A grind's is "grind"
 	static const uint32_t kSkaterFlipAndRotate = 0x488AF07A;  // SkaterFlipAndRotate
 	static const uint32_t kAnim = 0x98549BA4;                 // Anim
 	static const uint32_t kTailGrindRange = 0x7896F05F;       // TailGrind_Range: the 5-0
@@ -98,6 +116,7 @@ namespace FlickitGame {
 	static uint8_t* const kCatchTest2 = (uint8_t*)0x0056FA36;   // cmp byte ptr [edx+1A0h], 0   the same test in the skater's update
 	static uint8_t* const kPickCall = (uint8_t*)0x0056AFDC;     // call do_grind_trick          at the end of stick_to_rail
 	static uint8_t* const kBalanceCall = (uint8_t*)0x0056D065;  // call the balance update      in the rail physics
+	static uint8_t* const kBoostCall = (uint8_t*)0x0056A9D9;    // call GetPhysicsFloat         for Rail_Speed_Boost, in stick_to_rail
 
 	/******************************************************************/
 	/*                                                                */
@@ -112,11 +131,13 @@ namespace FlickitGame {
 	};
 
 	static const Expect kExpect[] = {
-		// the four places that get changed, with the instruction before each
+		// the places that get changed, with the instruction before each
 		{ 0x0056CB5A, 15, { 0x8B, 0x86, 0xB4, 0x04, 0x00, 0x00, 0x80, 0xB8, 0xA0, 0x01, 0x00, 0x00, 0x00, 0x0F, 0x84 }, "rail catch test" },
 		{ 0x0056FA30, 15, { 0x8B, 0x96, 0xB4, 0x04, 0x00, 0x00, 0x80, 0xBA, 0xA0, 0x01, 0x00, 0x00, 0x00, 0x0F, 0x84 }, "rail catch test in the update" },
 		{ 0x0056AFDA, 7, { 0x8B, 0xCE, 0xE8, 0xDF, 0x58, 0xFF, 0xFF }, "grind pick" },
 		{ 0x0056D062, 8, { 0x8D, 0x48, 0x7C, 0xE8, 0x56, 0xE9, 0xF9, 0xFF }, "rail balance" },
+		{ 0x0056A9A7, 5, { 0x68, 0x95, 0xB3, 0x7B, 0x45 }, "rail boost name" },
+		{ 0x0056A9D9, 5, { 0xE8, 0x32, 0xB7, 0xFA, 0xFF }, "rail boost" },
 		// the functions that get called
 		{ 0x004F94F0, 12, { 0x53, 0x56, 0x57, 0x8B, 0xF9, 0x33, 0xF6, 0xE8, 0x84, 0xC0, 0xF3, 0xFF }, "GetLocalSkater" },
 		{ 0x0041BDC0, 12, { 0x8B, 0x81, 0xF0, 0x00, 0x00, 0x00, 0x85, 0xC0, 0x74, 0x12, 0x8B, 0x4C }, "GetComponent" },
@@ -127,6 +148,16 @@ namespace FlickitGame {
 		{ 0x00570560, 12, { 0x53, 0x56, 0x8B, 0xF1, 0x32, 0xDB, 0x38, 0x5E, 0x19, 0x74, 0x08, 0xE8 }, "flip and rotate afters" },
 		{ 0x004133A0, 12, { 0x8B, 0x4C, 0x24, 0x04, 0x8B, 0xC1, 0x25, 0xFF, 0x0F, 0x00, 0x00, 0x56 }, "LookUpSymbol" },
 		{ 0x004110B0, 12, { 0x51, 0x53, 0x56, 0x8B, 0x31, 0x32, 0xDB, 0x85, 0xF6, 0x89, 0x4C, 0x24 }, "CStruct::GetChecksum" },
+		{ 0x00516110, 14, { 0x51, 0x56, 0x6A, 0x00, 0x68, 0xDD, 0x89, 0xBC, 0x8C, 0xE8, 0xE2, 0xD4, 0xEF, 0xFF }, "GetPhysicsFloat" },
+		// the game's rail physics, where it uses what the drag reads and changes: the balance component and
+		// what it balances, the rail node, the length of the frame, the speed, a rail node's terrain
+		{ 0x0056D049, 15, { 0x8B, 0x86, 0xCC, 0x04, 0x00, 0x00, 0x8B, 0x48, 0x18, 0x81, 0xF9, 0x6F, 0xD8, 0x5E, 0x25 }, "balance kind" },
+		{ 0x0056D0C1, 6, { 0x8B, 0x9E, 0x2C, 0x02, 0x00, 0x00 }, "rail node" },
+		{ 0x0056D234, 6, { 0xD9, 0x86, 0x8C, 0x00, 0x00, 0x00 }, "frame length" },
+		{ 0x0056D23E, 15, { 0x8B, 0x46, 0x0C, 0xD9, 0x84, 0x24, 0x94, 0x00, 0x00, 0x00, 0x05, 0xA0, 0x00, 0x00, 0x00 }, "speed" },
+		{ 0x0056D6F8, 10, { 0x89, 0x86, 0x2C, 0x02, 0x00, 0x00, 0x0F, 0xB6, 0x40, 0x4E }, "rail terrain" },
+		// the game's own test for stepping off a rail to the left or right: the skater's left
+		{ 0x00567E7F, 3, { 0x8D, 0x4F, 0x60 }, "the skater's left" },
 		// the game's own "is he skating" test: the two offsets ReadSkater uses for it
 		{ 0x0044F8A0, 18, { 0x8B, 0x41, 0x2C, 0x80, 0xB8, 0x14, 0x01, 0x00, 0x00, 0x00, 0x75, 0x0C, 0x83, 0x78, 0x1C, 0x00, 0x75, 0x06 }, "skating test" },
 	};
@@ -148,7 +179,8 @@ namespace FlickitGame {
 			}
 		}
 		// The checksums in this file are the game's (and the code that computes them is right)
-		if (Flickit::NameChecksum("SkaterState") != kSkaterState || Flickit::NameChecksum("SkaterFlipAndRotate") != kSkaterFlipAndRotate) {
+		if (Flickit::NameChecksum("SkaterState") != kSkaterState || Flickit::NameChecksum("SkaterFlipAndRotate") != kSkaterFlipAndRotate
+			|| Flickit::NameChecksum("SkaterCorePhysics") != kSkaterCorePhysics || Flickit::NameChecksum("slide") != kSlideBalance) {
 			s_available = false;
 		}
 		if (!s_available) {
@@ -203,6 +235,40 @@ namespace FlickitGame {
 
 	/******************************************************************/
 	/*                                                                */
+	/*  The stay on a rail                                            */
+	/******************************************************************/
+
+	struct RailStay {
+		Flickit::RailRun run;   // how long, how fast, and whether the speed is gone
+		bool hasDirection;      // the direction of travel on the frame before
+		float direction[3];
+		bool hasFrom;           // which way the board came onto the rail from: from the rail to that side, level
+		float from[3];
+		bool hasPick;           // the grind Flickit's pick started on this rail
+		int pick;
+		int side;               // that side seen from the skater: -1 left, 1 right, 0 not known
+		int terrain;
+		int surface;
+		int dragClass;
+	};
+	static RailStay s_rail;
+
+	// A board that stepped off a rail because it had stopped there stands right next to that rail.
+	// Until it has been on the ground, or a few seconds have passed, rails do not catch by themselves.
+	static bool s_noCatch = false;
+	static int s_noCatchPolls = 0;
+	static const int kNoCatchPolls = 240;
+
+	static void RailForget() {
+		s_rail.run.Begin();
+		s_rail.hasDirection = false;
+		s_rail.hasFrom = false;
+		s_rail.hasPick = false;
+		s_rail.side = 0;
+	}
+
+	/******************************************************************/
+	/*                                                                */
 	/*  The grind in progress, as its script reports it               */
 	/******************************************************************/
 
@@ -237,6 +303,7 @@ namespace FlickitGame {
 		if (s_grindCalls >= 2) {
 			// A third call: the grind was switched and this is the new one
 			NewGrind();
+			s_rail.hasPick = false;
 		}
 		s_grindCalls++;
 		s_grindReady = (s_grindCalls >= 2);
@@ -297,6 +364,22 @@ namespace FlickitGame {
 		out.grind = s_grind;
 		out.grindReady = s_grindReady;
 		out.grindSerial = s_grindSerial;
+
+		if (out.state != Flickit::STATE_RAIL) {
+			// Off the rail: what was known of the stay on it is history
+			RailForget();
+			if (s_noCatch && (out.state == Flickit::STATE_GROUND || ++s_noCatchPolls > kNoCatchPolls)) {
+				s_noCatch = false;
+			}
+		}
+		out.railOff = out.state == Flickit::STATE_RAIL && s_rail.run.WantsOff();
+		out.offSide = s_rail.side;
+		out.railSeconds = s_rail.run.Seconds();
+		out.railSpeed = s_rail.run.Speed();
+		out.railDrag = s_rail.run.Drag();
+		out.railTerrain = s_rail.terrain;
+		out.railSurface = s_rail.surface;
+		out.dragClass = s_rail.dragClass;
 		return true;
 	}
 
@@ -314,6 +397,9 @@ namespace FlickitGame {
 		}
 		if (!s_active || !s_frame.catchRails || !IsLocal(core)) {
 			return false;
+		}
+		if (s_noCatch) {
+			return false;   // it has just stepped off a rail it had stopped on
 		}
 		// Out of a ramp the coping is left alone: lip tricks and grinding the coping stay on the button
 		const uint8_t* state = *(const uint8_t* const*)(core + CORE_STATE);
@@ -336,6 +422,35 @@ namespace FlickitGame {
 			pop edx
 			pop ecx
 			ret
+		}
+	}
+
+	/******************************************************************/
+	/*                                                                */
+	/*  The board touches a rail                                      */
+	/******************************************************************/
+
+	// At the end of the game's stick_to_rail, for the skater Flickit drives. railOnLeft is the
+	// game's own flag for the side the rail was on.
+	static void RailTouched(const uint8_t* core, bool railOnLeft) {
+		RailForget();
+		s_noCatch = false;
+
+		// By now the speed points along the rail. With (x, z) the level direction of travel, the
+		// game's flag says the rail lay toward (z, -x) from the board. The board came from the
+		// other side.
+		const uint8_t* skater = *(const uint8_t* const*)(core + COMPONENT_OBJECT);
+		if (!skater) {
+			return;
+		}
+		const float* velocity = (const float*)(skater + OBJECT_VELOCITY);
+		const float length = std::sqrt(velocity[0] * velocity[0] + velocity[2] * velocity[2]);
+		if (length > 1.0f) {
+			const float sign = railOnLeft ? -1.0f : 1.0f;
+			s_rail.from[0] = sign * velocity[2] / length;
+			s_rail.from[1] = 0.0f;
+			s_rail.from[2] = -sign * velocity[0] / length;
+			s_rail.hasFrom = true;
 		}
 	}
 
@@ -387,13 +502,17 @@ namespace FlickitGame {
 	// Stands in for do_grind_trick at the one place it is called from, when the board has just
 	// touched a rail. Same calling convention: this in ecx, five arguments, the callee pops them.
 	static void __fastcall GrindPickHook(uint8_t* core, void* /*edx*/, uint32_t direction, uint32_t railOnLeft, uint32_t parallel, uint32_t backwards, uint32_t flipped) {
-		if (!s_active || !s_frame.pickGrind || s_frame.classicGrind || !IsLocal(core)) {
+		const bool left = (railOnLeft & 0xFF) != 0;
+		const bool local = s_active && IsLocal(core);
+		if (local) {
+			RailTouched(core, left);
+		}
+		if (!local || !s_frame.pickGrind || s_frame.classicGrind) {
 			// Not Flickit's skater, or the player holds the Grind button: the direction buttons pick
 			DoGrindTrick(core, direction, railOnLeft, parallel, backwards, flipped);
 			return;
 		}
 
-		const bool left = (railOnLeft & 0xFF) != 0;
 		int grind = Flickit::GrindFromTilt(s_frame.tilt, left != s_frame.mirror);
 
 		s_pick.grind = grind;
@@ -408,13 +527,79 @@ namespace FlickitGame {
 			if (StartGrindScript(core, plan.prefix, left, (backwards & 0xFF) != 0, (flipped & 0xFF) != 0)) {
 				s_pick.started = grind;
 				s_pick.byName = true;
+				s_rail.pick = grind;
+				s_rail.hasPick = true;
 				return;
 			}
 			grind = plan.fallback;
 			Flickit::PlanGrind(grind, left, plan);
 		}
 		s_pick.started = grind;
+		s_rail.pick = grind;
+		s_rail.hasPick = true;
 		DoGrindTrick(core, (uint32_t)plan.row, railOnLeft, plan.parallel < 0 ? parallel : (uint32_t)plan.parallel, backwards, flipped);
+	}
+
+	/******************************************************************/
+	/*                                                                */
+	/*  The board loses speed on a rail                               */
+	/******************************************************************/
+
+	// One frame of the game's rail physics for the skater Flickit drives, before they look at the
+	// speed. balance: his CSkaterBalanceTrickComponent.
+	static void RailFrame(uint8_t* balance) {
+		uint8_t* skater = *(uint8_t**)(balance + COMPONENT_OBJECT);
+		uint8_t* core = skater ? (uint8_t*)GetComponent(skater, kSkaterCorePhysics) : 0;
+		if (!core || *(uint8_t**)(core + CORE_BALANCE) != balance) {
+			return;
+		}
+
+		// On a rail the speed points along the rail
+		float* velocity = (float*)(skater + OBJECT_VELOCITY);
+		const float speed = std::sqrt(velocity[0] * velocity[0] + velocity[1] * velocity[1] + velocity[2] * velocity[2]);
+		const bool moving = speed > 0.001f;
+		const float level = moving ? std::sqrt(velocity[0] * velocity[0] + velocity[2] * velocity[2]) / speed : 1.0f;
+		const bool turned = moving && s_rail.hasDirection
+			&& velocity[0] * s_rail.direction[0] + velocity[1] * s_rail.direction[1] + velocity[2] * s_rail.direction[2] < 0.0f;
+
+		const uint8_t* node = *(const uint8_t* const*)(core + CORE_RAIL_NODE);
+		s_rail.terrain = node ? node[RAIL_TERRAIN] : 0;
+		s_rail.surface = Flickit::SurfaceOfTerrain(s_rail.terrain);
+
+		// What kind of grind: the game balances it as a grind or as a slide, its script has said
+		// whether it is one of the three on the trucks, and the pick knows what it started
+		const bool slide = *(const uint32_t*)(balance + BALANCE_TYPE) == kSlideBalance;
+		int grind = slide ? Flickit::GRIND_UNKNOWN : s_grind;
+		if (s_rail.hasPick && (slide || grind == Flickit::GRIND_UNKNOWN)) {
+			grind = s_rail.pick;
+		}
+		s_rail.dragClass = Flickit::DragClassOf(grind, slide);
+
+		const float after = s_rail.run.Step(*(const float*)(core + CORE_FRAME_LENGTH), speed, level,
+			s_rail.dragClass, s_rail.surface, turned, s_frame.drag, s_frame.stepOff);
+		if (moving) {
+			s_rail.direction[0] = velocity[0] / speed;
+			s_rail.direction[1] = velocity[1] / speed;
+			s_rail.direction[2] = velocity[2] / speed;
+			s_rail.hasDirection = true;
+			if (after < speed) {
+				const float scale = after / speed;
+				velocity[0] *= scale;
+				velocity[1] *= scale;
+				velocity[2] *= scale;
+			}
+		}
+
+		// The side the board came from, as the skater stands now
+		s_rail.side = 0;
+		if (s_rail.hasFrom) {
+			const float* left = (const float*)(skater + OBJECT_LEFT);
+			const float toLeft = left[0] * s_rail.from[0] + left[1] * s_rail.from[1] + left[2] * s_rail.from[2];
+			s_rail.side = toLeft > 0.0f ? -1 : 1;
+		}
+
+		s_noCatch = s_rail.run.WantsOff();
+		s_noCatchPolls = 0;
 	}
 
 	/******************************************************************/
@@ -427,9 +612,55 @@ namespace FlickitGame {
 	// the cheat being on. record: the balance component + 0x7C.
 	static void __fastcall RailBalanceHook(uint8_t* record, void* /*edx*/) {
 		BalanceUpdate(record);
-		if (s_active && s_frame.noBalance && IsLocal(record - BALANCE_RECORD)) {
+		if (!s_active || (!s_frame.noBalance && s_frame.drag <= 0 && !s_frame.stepOff)) {
+			return;
+		}
+		uint8_t* balance = record - BALANCE_RECORD;
+		if (!IsLocal(balance)) {
+			return;
+		}
+		if (s_frame.noBalance) {
 			*(float*)(record + BALANCE_LEAN) = 0.0f;
 			*(float*)(record + BALANCE_LEAN_SPEED) = 0.0f;
+		}
+		// This call is made once on every frame of a grind or slide, before the rail physics look at
+		// the speed: the place for the drag
+		if (s_frame.drag > 0 || s_frame.stepOff) {
+			RailFrame(balance);
+		}
+	}
+
+	/******************************************************************/
+	/*                                                                */
+	/*  No speed for landing on a rail                                */
+	/******************************************************************/
+
+	// THUG adds speed whenever the board lands on a rail (Rail_Speed_Boost in physics.q, 150). Skate
+	// does not, and with a drag on the rail it would be a way to get the speed back by hopping. So
+	// for the skater Flickit drives, while the drag is on, the game is told the boost is next to
+	// nothing. Not nothing at all: a board that lands on a rail with no speed along it gets its only
+	// speed from this boost, and the game's rail code reads the direction of travel off the speed.
+	static float __cdecl SmallRailBoost(uint32_t /*name*/, int /*flag*/) {
+		return 4.0f;
+	}
+
+	// The function that is to answer the game's question for Rail_Speed_Boost
+	static void* __cdecl RailBoostAnswer(const uint8_t* core) {
+		if (s_active && s_frame.drag > 0 && !s_frame.boost && IsLocal(core)) {
+			return (void*)&SmallRailBoost;
+		}
+		return (void*)GetPhysicsFloat;
+	}
+
+	// Stands where stick_to_rail calls GetPhysicsFloat for Rail_Speed_Boost. esi is the physics
+	// component there. The two arguments of that call are still on the stack, and stay there for the
+	// function that is jumped to: it returns straight to the game, which takes them off.
+	static __declspec(naked) void RailBoostHook() {
+		__asm {
+			push esi
+			call RailBoostAnswer
+			add esp, 4
+			jmp eax
 		}
 	}
 
@@ -454,9 +685,10 @@ namespace FlickitGame {
 		patchBytesM(kCatchTest2 + 5, testAl, 2);
 		patchCall(kPickCall, (void*)&GrindPickHook);
 		patchCall(kBalanceCall, (void*)&RailBalanceHook);
+		patchCall(kBoostCall, (void*)&RailBoostHook);
 
 		s_installed = true;
-		Log::TypedLog(CHN_SDL, "Flickit: grind hooks are in (rail catch, grind pick, rail balance)\n");
+		Log::TypedLog(CHN_SDL, "Flickit: grind hooks are in (rail catch, grind pick, rail balance, rail boost)\n");
 		return true;
 	}
 }

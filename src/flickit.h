@@ -20,6 +20,7 @@
 //   on a rail the stick at rest switches between 50-50, 5-0 and nosegrind
 //   on a rail only a flick pops; letting the stick go does not
 //   in the air a flick across the stick is a flip, rolling it to a side is not a shove-it
+//   on a rail the board loses speed, and steps off when the speed is gone (see RailRun)
 
 #include <stdint.h>
 #include <stddef.h>
@@ -99,6 +100,9 @@ namespace Flickit {
 		int railTap;          // ms Ollie is pressed for the pop out of a grind
 		int flickSpeed;       // on a rail and in the air, where a slow move of the stick is something else:
 		                      // how fast it has to travel to be a flick, percent of full deflection per 100 ms
+		int grindDrag;        // percent of Skate's drag on a rail, 0: none, as THUG has it
+		int grindExit;        // 1: the board steps off a rail when it has run out of speed
+		int grindBoost;       // 1: keep the game's speed boost for landing on a rail while the drag is on
 	};
 
 	void SetDefaults(Settings& s);
@@ -148,9 +152,12 @@ namespace Flickit {
 		int grind;            // Grind the skater is in (GRIND_FIFTY, GRIND_FIVE_O, GRIND_NOSEGRIND, GRIND_OTHER or GRIND_UNKNOWN)
 		bool grindReady;      // the game takes a switch to another grind now
 		uint32_t grindSerial; // changes whenever the game starts a grind
+		bool railOff;         // the board has run out of speed on this rail: time to step off
+		int offSide;          // the side to step off to: -1 left, 1 right, 0 wherever the game finds room
 
 		Input() : now(0), rx(0.0f), ry(0.0f), leftTrigger(false), rightTrigger(false),
-			state(STATE_UNKNOWN), railCatch(false), grind(GRIND_UNKNOWN), grindReady(false), grindSerial(0) {}
+			state(STATE_UNKNOWN), railCatch(false), grind(GRIND_UNKNOWN), grindReady(false), grindSerial(0),
+			railOff(false), offSide(0) {}
 	};
 
 	struct Output {
@@ -177,6 +184,13 @@ namespace Flickit {
 
 		int state;            // SkaterState the frame was made in
 		int switchTo;         // Grind a switch on the rail was started for on this frame, GRIND_UNKNOWN otherwise
+
+		// Stepping off a rail that the board has stopped on. THUG has this on a button (R2 on its
+		// PlayStation pad: the skater steps down next to the rail, or hops off it where there is no
+		// ground to step on). The direction held with it picks the side.
+		bool stepOff;         // hold that button
+		int stepSide;         // with Left (-1) or Right (1), 0 for neither
+		bool stepStarted;     // set on the frame the press starts, for logging
 	};
 
 	// ------------------------------------------------------------------------------------------
@@ -248,6 +262,87 @@ namespace Flickit {
 		uint32_t m_since;
 		bool m_expectEnd;
 		uint32_t m_flickAt;
+	};
+
+	// ------------------------------------------------------------------------------------------
+	// Losing speed on a rail
+	//
+	// THUG has no friction on a rail: a grind on a level rail never ends. In Skate it does. There a
+	// drag works against the slide for as long as the board is on the rail:
+	//
+	//   - it is a force, the same at any speed (it takes off so much speed per second)
+	//   - it depends on the grind: least on the trucks (50-50, 5-0, nosegrind), more in slides, most
+	//     in the grinds that put a truck and the deck on the rail (crooked, smith and their kin)
+	//   - it depends on what is ground: a metal rail slides far, a ledge takes about twice the speed,
+	//     a rough one more
+	//   - it starts at about two thirds and grows to its full strength over the first four seconds
+	//   - on a slope it shrinks with the slope (the pull of gravity is the game's own business)
+	//
+	// When the speed is gone the board does not sit there: after at least a second on the rail, with
+	// almost no speed left (or once the slope has turned it around), it steps off.
+	//
+	// The numbers are Skate 3's, measured there in metres and seconds. THUG's skater is quicker than
+	// Skate's by the factor kUnitsPerMetre (Skate's best push is 8 m/s, THUG's about 600 to 675 of
+	// its units a second), so that is the scale used: the drag takes the same share of the speed per
+	// second in both games.
+	// ------------------------------------------------------------------------------------------
+
+	// What a rail is made of, as far as the drag cares
+	enum RailSurface {
+		SURFACE_RAIL = 0,     // metal, wire, plastic, glass: slides far
+		SURFACE_LEDGE = 1,    // concrete, wood and whatever else
+		SURFACE_ROUGH = 2     // rock, brick, logs, rope
+	};
+
+	enum DragClass {
+		DRAG_TRUCKS = 0,      // 50-50, 5-0, nosegrind
+		DRAG_ANGLED = 1,      // crooked, overcrook, smith, feeble, salad and the specials
+		DRAG_TIPSLIDE = 2,    // nose-, tail-, blunt- and nosebluntslide
+		DRAG_BOARDSLIDE = 3   // boardslide, lipslide
+	};
+
+	// THUG gives every rail a terrain number (TERRAIN_GRINDMETAL is 45, TERRAIN_GRINDCONC 42, ...),
+	// which it uses for the sound and the sparks.
+	int SurfaceOfTerrain(int terrain);
+	const char* SurfaceName(int surface);
+	// grind: what is known of the grind (a Grind, GRIND_OTHER or GRIND_UNKNOWN). slide: the game
+	// balances it as a slide, not as a grind.
+	int DragClassOf(int grind, bool slide);
+	const char* DragClassName(int dragClass);
+	// The share of the full drag after so many seconds on the rail
+	float DragRamp(float seconds);
+	// Skate's drag on a level rail, in m/s^2
+	float SkateDrag(int dragClass, int surface, float seconds);
+
+	extern const float kUnitsPerMetre;   // THUG's speed units for one of Skate's metres
+	extern const float kStopSpeed;       // m/s: below this the board is out of speed
+	extern const float kStopAfter;       // s: a board that has not been on the rail this long stays on it
+	extern const float kCreepSpeed;      // m/s: the drag never takes the speed below this
+
+	// One stay on a rail
+	class RailRun {
+	public:
+		RailRun();
+		// The board has just touched a rail
+		void Begin();
+		// One frame of the game's rail physics. dt: its length in seconds. speed: the speed along
+		// the rail, in the game's units per second. level: how level the rail is where the board is,
+		// 1 for level, 0 for vertical. turned: the board moves the other way than on the frame
+		// before. dragPercent: Settings::grindDrag. mayStepOff: Settings::grindExit.
+		// Returns the speed the board goes on with.
+		float Step(float dt, float speed, float level, int dragClass, int surface, bool turned, int dragPercent, bool mayStepOff);
+		// The board is out of speed: it should step off now
+		bool WantsOff() const { return m_wantsOff; }
+		float Seconds() const { return m_seconds; }
+		// For the log: the drag of the last frame in the game's units per second squared, and the speed after it
+		float Drag() const { return m_drag; }
+		float Speed() const { return m_speed; }
+
+	private:
+		float m_seconds;
+		float m_drag;
+		float m_speed;
+		bool m_wantsOff;
 	};
 
 	// ------------------------------------------------------------------------------------------
@@ -382,6 +477,7 @@ namespace Flickit {
 		void RunTaps(uint32_t now, Output& out);
 		void RunQueue(const Input& in, const Settings& cfg, Output& out);
 		void RunRailSwitch(const Input& in, const Settings& cfg, float mag, int sector, Output& out);
+		void RunStepOff(const Input& in, const Settings& cfg, Output& out);
 		void NoteSpeed(const Input& in, const Settings& cfg);
 		bool WasFast(const Settings& cfg) const;
 
@@ -466,6 +562,15 @@ namespace Flickit {
 		uint32_t m_switchSerial;
 		uint32_t m_switchSent;
 		int m_switchWaitFrames;
+
+		// Stepping off a rail the board has stopped on
+		bool m_offDown;           // the button is down
+		int m_offSide;
+		uint32_t m_offStart;
+		int m_offFrames;
+		bool m_offWait;           // it was pressed: the game gets a moment before it is pressed again
+		uint32_t m_offSent;
+		int m_offWaitFrames;
 	};
 
 	// Helpers, exposed for the tests and for logging

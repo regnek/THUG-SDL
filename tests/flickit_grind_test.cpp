@@ -1,5 +1,6 @@
 // Offline tests for the grind side of src/flickit.cpp: the board tilt in the air, the flick-only pop
-// on a rail and the switches between 50-50, 5-0 and nosegrind. No game, SDL or Windows needed:
+// on a rail, the switches between 50-50, 5-0 and nosegrind, the drag on a rail and stepping off it
+// when the speed is gone. No game, SDL or Windows needed:
 //   g++ -std=c++11 -Wall -Wextra -I src tests/flickit_grind_test.cpp src/flickit.cpp -o flickit_grind_test && ./flickit_grind_test
 // Run it from the top of the repository, or pass the folder scripts/qb/source/scripts/game/skater: the rows the mod
 // hands the game are checked against the game's own grind table in grindlist.q.
@@ -7,6 +8,7 @@
 // The skater's state, which the mod reads from the game, is scripted here. For the switches a
 // small stand-in for the game watches the buttons the way THUG's grind script does: two presses in
 // order within 300 ms, taken only once the grind has settled, the new grind reported 15 frames later.
+// It also takes the button that steps off a rail, from 16 frames into a grind on.
 
 #include "flickit.h"
 
@@ -43,6 +45,7 @@ struct FakeGame {
 	int sinceStart;        // frames since the grind started
 	bool buggyNoseEntry;   // the nosegrind entry that is not ignored while in a nosegrind (the BS table in the game)
 	bool deaf;             // presses get lost
+	bool noRelease;        // the button that steps off the rail does nothing
 
 	// What the mod has been told (it hears of a new grind 15 frames after it started)
 	int reportedKind;
@@ -55,8 +58,15 @@ struct FakeGame {
 	int switches;
 	int restarts;          // the same grind started again (the bug above, if the mod ever triggers it)
 
-	FakeGame() : on(false), kind(GRIND_UNKNOWN), extraTricks(false), settleFrames(45), sinceStart(0), buggyNoseEntry(true), deaf(false),
-		reportedKind(GRIND_UNKNOWN), reportedReady(false), serial(0), switches(0), restarts(0) {
+	// Stepping off the rail: the game takes a new press of that button from 16 frames into a grind
+	bool prevStep;
+	bool tookStep;         // on this frame
+	int stepOffs;
+	int stepSide;          // the side that was held with the last one
+
+	FakeGame() : on(false), kind(GRIND_UNKNOWN), extraTricks(false), settleFrames(45), sinceStart(0), buggyNoseEntry(true), deaf(false), noRelease(false),
+		reportedKind(GRIND_UNKNOWN), reportedReady(false), serial(0), switches(0), restarts(0),
+		prevStep(false), tookStep(false), stepOffs(0), stepSide(0) {
 		prev[0] = prev[1] = prev[2] = false;
 	}
 
@@ -103,6 +113,13 @@ struct FakeGame {
 			}
 			prev[b] = cur[b];
 		}
+		tookStep = false;
+		if (on && o.stepOff && !prevStep && !noRelease && sinceStart >= 16) {
+			tookStep = true;
+			stepOffs++;
+			stepSide = o.stepSide;
+		}
+		prevStep = o.stepOff;
 		if (!on) return;
 
 		if (extraTricks && !deaf) {
@@ -141,13 +158,16 @@ struct Sim {
 	bool lt, rt;
 	int state;
 	bool railCatch;
+	bool railOff;          // the game says the board is out of speed on its rail
+	int offSide;
 	FakeGame game;
 	std::vector<Output> outs;
 	std::vector<uint32_t> times;
 	std::vector<int> states;
 	std::vector<Tilt> tilts;
 
-	explicit Sim(double rate = 60.0, int startState = STATE_GROUND) : hz(rate), clock(0.0), epoch(5000), x(0), y(0), lt(false), rt(false), state(startState), railCatch(true) {
+	explicit Sim(double rate = 60.0, int startState = STATE_GROUND) : hz(rate), clock(0.0), epoch(5000), x(0), y(0), lt(false), rt(false), state(startState), railCatch(true),
+		railOff(false), offSide(0) {
 		SetDefaults(cfg);
 		// a grind takes its switches about three quarters of a second in
 		game.settleFrames = (int)(0.75 * rate);
@@ -169,6 +189,8 @@ struct Sim {
 		in.grind = game.reportedKind;
 		in.grindReady = game.reportedReady;
 		in.grindSerial = game.serial;
+		in.railOff = railOff;
+		in.offSide = offSide;
 		Output o;
 		rec.Update(in, cfg, o);
 		outs.push_back(o);
@@ -179,6 +201,11 @@ struct Sim {
 		// As in the game: letting go of Ollie on a rail is the jump off it
 		if (state == STATE_RAIL && outs.size() >= 2 && outs[outs.size() - 2].ollie && !o.ollie) {
 			state = STATE_AIR;
+			game.leave();
+		}
+		// and the button that steps off the rail puts the skater on the ground next to it
+		if (state == STATE_RAIL && game.tookStep) {
+			state = STATE_GROUND;
 			game.leave();
 		}
 		clock += 1000.0 / hz;
@@ -1599,6 +1626,603 @@ static void testUnknownState(double hz) {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Losing speed on a rail: Skate's numbers
+// ---------------------------------------------------------------------------------------------
+
+static bool near(double a, double b, double tolerance) {
+	return fabs(a - b) <= tolerance;
+}
+
+static void testDragNumbers() {
+	g_case = "drag: what the rail is made of";
+	CHECK_EQ(SurfaceOfTerrain(45), SURFACE_RAIL);     // TERRAIN_GRINDMETAL
+	CHECK_EQ(SurfaceOfTerrain(43), SURFACE_RAIL);     // TERRAIN_GRINDROUNDMETALPOLE
+	CHECK_EQ(SurfaceOfTerrain(41), SURFACE_RAIL);     // TERRAIN_GRINDWIRE
+	CHECK_EQ(SurfaceOfTerrain(57), SURFACE_RAIL);     // TERRAIN_GRINDBRASSRAIL
+	CHECK_EQ(SurfaceOfTerrain(3), SURFACE_RAIL);      // TERRAIN_METALSMOOTH
+	CHECK_EQ(SurfaceOfTerrain(49), SURFACE_RAIL);     // TERRAIN_GRINDPLASTIC
+	CHECK_EQ(SurfaceOfTerrain(42), SURFACE_LEDGE);    // TERRAIN_GRINDCONC
+	CHECK_EQ(SurfaceOfTerrain(48), SURFACE_LEDGE);    // TERRAIN_GRINDWOOD
+	CHECK_EQ(SurfaceOfTerrain(46), SURFACE_LEDGE);    // TERRAIN_GRINDWOODRAILING
+	CHECK_EQ(SurfaceOfTerrain(1), SURFACE_LEDGE);     // TERRAIN_CONCSMOOTH
+	CHECK_EQ(SurfaceOfTerrain(0), SURFACE_LEDGE);     // TERRAIN_DEFAULT
+	CHECK_EQ(SurfaceOfTerrain(47), SURFACE_ROUGH);    // TERRAIN_GRINDWOODLOG
+	CHECK_EQ(SurfaceOfTerrain(14), SURFACE_ROUGH);    // TERRAIN_BRICK
+	CHECK_EQ(SurfaceOfTerrain(40), SURFACE_ROUGH);    // TERRAIN_GRINDROPE
+	// a number the game does not have is a plain ledge
+	CHECK_EQ(SurfaceOfTerrain(-1), SURFACE_LEDGE);
+	CHECK_EQ(SurfaceOfTerrain(60), SURFACE_LEDGE);
+	CHECK_EQ(SurfaceOfTerrain(255), SURFACE_LEDGE);
+	// the game has sixty terrains, 0 to 59
+	int counts[3] = { 0, 0, 0 };
+	for (int t = 0; t < 60; t++) {
+		const int surface = SurfaceOfTerrain(t);
+		CHECK(surface >= SURFACE_RAIL && surface <= SURFACE_ROUGH);
+		if (surface >= SURFACE_RAIL && surface <= SURFACE_ROUGH) counts[surface]++;
+	}
+	CHECK_EQ(counts[SURFACE_RAIL], 26);
+	CHECK_EQ(counts[SURFACE_ROUGH], 13);
+	CHECK_EQ(counts[SURFACE_LEDGE], 21);
+	CHECK(std::string(SurfaceName(SURFACE_RAIL)) == "rail");
+	CHECK(std::string(SurfaceName(SURFACE_LEDGE)) == "ledge");
+
+	g_case = "drag: which grind";
+	CHECK_EQ(DragClassOf(GRIND_FIFTY, false), DRAG_TRUCKS);
+	CHECK_EQ(DragClassOf(GRIND_FIVE_O, false), DRAG_TRUCKS);
+	CHECK_EQ(DragClassOf(GRIND_NOSEGRIND, false), DRAG_TRUCKS);
+	CHECK_EQ(DragClassOf(GRIND_UNKNOWN, false), DRAG_TRUCKS);
+	CHECK_EQ(DragClassOf(GRIND_CROOKED, false), DRAG_ANGLED);
+	CHECK_EQ(DragClassOf(GRIND_OVERCROOK, false), DRAG_ANGLED);
+	CHECK_EQ(DragClassOf(GRIND_FEEBLE, false), DRAG_ANGLED);
+	CHECK_EQ(DragClassOf(GRIND_SMITH, false), DRAG_ANGLED);
+	CHECK_EQ(DragClassOf(GRIND_SALAD, false), DRAG_ANGLED);
+	CHECK_EQ(DragClassOf(GRIND_OTHER, false), DRAG_ANGLED);
+	CHECK_EQ(DragClassOf(GRIND_BOARDLIP, true), DRAG_BOARDSLIDE);
+	CHECK_EQ(DragClassOf(GRIND_FIFTY, true), DRAG_BOARDSLIDE);      // no lean asked for, and the board landed across the rail
+	CHECK_EQ(DragClassOf(GRIND_TAILSLIDE, true), DRAG_TIPSLIDE);
+	CHECK_EQ(DragClassOf(GRIND_NOSESLIDE, true), DRAG_TIPSLIDE);
+	CHECK_EQ(DragClassOf(GRIND_BLUNTSLIDE, true), DRAG_TIPSLIDE);
+	CHECK_EQ(DragClassOf(GRIND_NOSEBLUNT, true), DRAG_TIPSLIDE);
+	CHECK_EQ(DragClassOf(GRIND_UNKNOWN, true), DRAG_TIPSLIDE);
+	CHECK_EQ(DragClassOf(GRIND_OTHER, true), DRAG_TIPSLIDE);
+
+	g_case = "drag: the first four seconds";
+	CHECK(near(DragRamp(0.0f), 0.63, 0.001));
+	CHECK(near(DragRamp(-5.0f), 0.63, 0.001));
+	CHECK(near(DragRamp(0.5f), 0.675, 0.001));
+	CHECK(near(DragRamp(1.0f), 0.72, 0.001));
+	CHECK(near(DragRamp(2.2f), 0.83, 0.001));
+	CHECK(near(DragRamp(3.1f), 0.915, 0.001));
+	CHECK(near(DragRamp(4.0f), 1.0, 0.001));
+	CHECK(near(DragRamp(100.0f), 1.0, 0.001));
+	float last = DragRamp(0.0f);
+	for (int i = 1; i <= 500; i++) {
+		const float share = DragRamp((float)i * 0.01f);
+		CHECK(share >= last && share <= 1.0f);
+		last = share;
+	}
+
+	g_case = "drag: Skate's numbers";
+	// m/s^2 on a level rail when the board touches down and from four seconds on, as found in Skate 3
+	static const struct { int dragClass; int surface; double start; double full; } want[] = {
+		{ DRAG_TRUCKS, SURFACE_RAIL, 0.79, 1.25 },
+		{ DRAG_TRUCKS, SURFACE_LEDGE, 1.37, 2.16 },
+		{ DRAG_TRUCKS, SURFACE_ROUGH, 1.78, 2.82 },
+		{ DRAG_BOARDSLIDE, SURFACE_RAIL, 0.87, 1.37 },
+		{ DRAG_BOARDSLIDE, SURFACE_LEDGE, 1.88, 2.97 },
+		{ DRAG_TIPSLIDE, SURFACE_RAIL, 0.94, 1.49 },
+		{ DRAG_TIPSLIDE, SURFACE_LEDGE, 2.05, 3.24 },
+		{ DRAG_ANGLED, SURFACE_RAIL, 1.10, 1.74 },
+		{ DRAG_ANGLED, SURFACE_LEDGE, 2.73, 4.32 },
+	};
+	for (size_t i = 0; i < sizeof(want) / sizeof(want[0]); i++) {
+		CHECK(near(SkateDrag(want[i].dragClass, want[i].surface, 0.0f), want[i].start, 0.02));
+		CHECK(near(SkateDrag(want[i].dragClass, want[i].surface, 4.0f), want[i].full, 0.02));
+		CHECK(near(SkateDrag(want[i].dragClass, want[i].surface, 60.0f), want[i].full, 0.02));
+	}
+	// least on the trucks, most with truck and deck on the rail; a rail slides furthest, a rough ledge least far
+	for (int surface = SURFACE_RAIL; surface <= SURFACE_ROUGH; surface++) {
+		CHECK(SkateDrag(DRAG_TRUCKS, surface, 2.0f) < SkateDrag(DRAG_BOARDSLIDE, surface, 2.0f));
+		CHECK(SkateDrag(DRAG_BOARDSLIDE, surface, 2.0f) < SkateDrag(DRAG_TIPSLIDE, surface, 2.0f));
+		CHECK(SkateDrag(DRAG_TIPSLIDE, surface, 2.0f) < SkateDrag(DRAG_ANGLED, surface, 2.0f));
+	}
+	for (int dragClass = DRAG_TRUCKS; dragClass <= DRAG_BOARDSLIDE; dragClass++) {
+		CHECK(SkateDrag(dragClass, SURFACE_RAIL, 2.0f) < SkateDrag(dragClass, SURFACE_LEDGE, 2.0f));
+		CHECK(SkateDrag(dragClass, SURFACE_LEDGE, 2.0f) < SkateDrag(dragClass, SURFACE_ROUGH, 2.0f));
+	}
+	// numbers from nowhere are taken for a 50-50 on a ledge
+	CHECK(near(SkateDrag(99, 99, 1.0f), SkateDrag(DRAG_TRUCKS, SURFACE_LEDGE, 1.0f), 1e-6));
+	CHECK(near(SkateDrag(-1, -1, 1.0f), SkateDrag(DRAG_TRUCKS, SURFACE_LEDGE, 1.0f), 1e-6));
+
+	// the scale: the board is out of speed well above the creep the drag leaves it
+	CHECK(kUnitsPerMetre > 39.37f);     // THUG's skater is quicker than a real one, whose metre is 39.37 inches
+	CHECK(kCreepSpeed > 0.0f && kCreepSpeed < kStopSpeed);
+	CHECK(kStopAfter >= 0.5f);
+
+	// the settings
+	Settings cfg;
+	SetDefaults(cfg);
+	CHECK_EQ(cfg.grindDrag, 100);
+	CHECK_EQ(cfg.grindExit, 1);
+	CHECK_EQ(cfg.grindBoost, 0);
+	cfg.grindDrag = -5; cfg.grindExit = 7; cfg.grindBoost = -1;
+	Sanitize(cfg);
+	CHECK_EQ(cfg.grindDrag, 0);
+	CHECK_EQ(cfg.grindExit, 1);
+	CHECK_EQ(cfg.grindBoost, 1);
+	cfg.grindDrag = 5000;
+	Sanitize(cfg);
+	CHECK_EQ(cfg.grindDrag, 1000);
+}
+
+struct Stay {
+	double seconds;     // by the number of frames
+	double counted;     // as the rail run counted them
+	double metres;
+	bool off;
+};
+
+// A board that comes onto a rail at so many m/s and is left alone until it wants off
+static Stay ride(double hz, double start, int dragClass, int surface, int percent = 100, float level = 1.0f) {
+	RailRun run;
+	float speed = (float)start * kUnitsPerMetre;
+	const float dt = (float)(1.0 / hz);
+	double way = 0.0;
+	const int limit = (int)(hz * 60.0);
+	int frames = 0;
+	while (frames < limit && !run.WantsOff()) {
+		speed = run.Step(dt, speed, level, dragClass, surface, false, percent, true);
+		way += (double)speed / hz;
+		frames++;
+	}
+	Stay stay;
+	stay.seconds = frames / hz;
+	stay.counted = run.Seconds();
+	stay.metres = way / kUnitsPerMetre;
+	stay.off = run.WantsOff();
+	return stay;
+}
+
+static void testRailRun(double hz) {
+	char name[128];
+	const float dt = (float)(1.0 / hz);
+	const float stop = kStopSpeed * kUnitsPerMetre;
+	const float creep = kCreepSpeed * kUnitsPerMetre;
+
+	snprintf(name, sizeof(name), "rail run: how far a grind goes, %g Hz", hz);
+	g_case = name;
+	{
+		// As in Skate 3: a 50-50 from 6 m/s goes about 18 m in 5.4 s on a rail, 11 m in 3.4 s on a ledge
+		const Stay rail = ride(hz, 6.0, DRAG_TRUCKS, SURFACE_RAIL);
+		CHECK(rail.off);
+		CHECK(near(rail.seconds, 5.4, 0.2));
+		CHECK(near(rail.metres, 18.0, 0.7));
+		const Stay ledge = ride(hz, 6.0, DRAG_TRUCKS, SURFACE_LEDGE);
+		CHECK(ledge.off);
+		CHECK(near(ledge.seconds, 3.4, 0.2));
+		CHECK(near(ledge.metres, 11.2, 0.6));
+		// from 4 and from 8 m/s on a rail: 8.5 m in 3.8 s, 30.7 m in 7.0 s
+		const Stay slow = ride(hz, 4.0, DRAG_TRUCKS, SURFACE_RAIL);
+		CHECK(near(slow.seconds, 3.8, 0.2));
+		CHECK(near(slow.metres, 8.5, 0.5));
+		const Stay fast = ride(hz, 8.0, DRAG_TRUCKS, SURFACE_RAIL);
+		CHECK(near(fast.seconds, 7.0, 0.2));
+		CHECK(near(fast.metres, 30.7, 1.0));
+		// a smith on a ledge from 6 m/s: 6 m in 1.9 s
+		const Stay smith = ride(hz, 6.0, DRAG_ANGLED, SURFACE_LEDGE);
+		CHECK(near(smith.seconds, 1.9, 0.15));
+		CHECK(near(smith.metres, 6.0, 0.5));
+
+		// GrindDrag=200: twice the drag
+		const Stay twice = ride(hz, 6.0, DRAG_TRUCKS, SURFACE_RAIL, 200);
+		CHECK(twice.off);
+		CHECK(twice.seconds < rail.seconds * 0.62 && twice.seconds > rail.seconds * 0.45);
+		// a rail at 60 degrees has half the drag of a level one (what gravity does there is the game's business)
+		const Stay steep = ride(hz, 6.0, DRAG_TRUCKS, SURFACE_RAIL, 100, 0.5f);
+		const Stay half = ride(hz, 6.0, DRAG_TRUCKS, SURFACE_RAIL, 50);
+		CHECK(near(steep.seconds, half.seconds, 0.05));
+		// GrindDrag=0: the board keeps its speed and never wants off
+		const Stay none = ride(hz, 6.0, DRAG_TRUCKS, SURFACE_RAIL, 0);
+		CHECK(!none.off);
+		CHECK(near(none.seconds, 60.0, 0.01));
+		CHECK(near(none.metres, 6.0 * 60.0, 0.5));
+		// the seconds are counted frame by frame; over a minute that is good to a small part of one
+		CHECK(near(none.counted, 60.0, 0.5));
+		CHECK(near(rail.counted, rail.seconds, 0.01));
+	}
+
+	snprintf(name, sizeof(name), "rail run: the drag only slows, %g Hz", hz);
+	g_case = name;
+	{
+		RailRun run;
+		float speed = 500.0f;
+		bool slower = true, aboveCreep = true;
+		for (int i = 0; i < (int)(hz * 20.0); i++) {
+			const float before = speed;
+			speed = run.Step(dt, speed, 1.0f, DRAG_ANGLED, SURFACE_ROUGH, false, 1000, false);
+			slower = slower && speed <= before;
+			aboveCreep = aboveCreep && speed >= creep - 0.001f;
+		}
+		CHECK(slower);
+		CHECK(aboveCreep);
+		CHECK(near(speed, creep, 0.001));
+		CHECK(!run.WantsOff());     // stepping off was switched off
+
+		// a board slower than that is left as it is
+		run.Begin();
+		CHECK(near(run.Step(dt, creep * 0.5f, 1.0f, DRAG_TRUCKS, SURFACE_RAIL, false, 100, true), creep * 0.5f, 1e-6));
+		CHECK(run.Step(dt, 0.0f, 1.0f, DRAG_TRUCKS, SURFACE_RAIL, false, 100, true) == 0.0f);
+
+		// what it reports for the log
+		run.Begin();
+		const float after = run.Step(dt, 400.0f, 1.0f, DRAG_TRUCKS, SURFACE_RAIL, false, 100, true);
+		CHECK(near(run.Drag(), SkateDrag(DRAG_TRUCKS, SURFACE_RAIL, 0.0f) * kUnitsPerMetre, 0.01));
+		CHECK(near(after, 400.0f - run.Drag() * dt, 0.01));
+		CHECK(near(run.Speed(), after, 1e-6));
+		CHECK(near(run.Seconds(), dt, 1e-6));
+		run.Begin();
+		run.Step(dt, 400.0f, 1.0f, DRAG_TRUCKS, SURFACE_RAIL, false, 250, true);
+		CHECK(near(run.Drag(), SkateDrag(DRAG_TRUCKS, SURFACE_RAIL, 0.0f) * kUnitsPerMetre * 2.5f, 0.01));
+	}
+
+	snprintf(name, sizeof(name), "rail run: when the board wants off, %g Hz", hz);
+	g_case = name;
+	{
+		// not in the first second, however slow it is
+		RailRun run;
+		bool early = false;
+		for (int i = 0; i < (int)(hz * 0.95); i++) {
+			run.Step(dt, 0.0f, 1.0f, DRAG_TRUCKS, SURFACE_RAIL, false, 100, true);
+			early = early || run.WantsOff();
+		}
+		CHECK(!early);
+		for (int i = 0; i < (int)(hz * 0.2) + 1; i++) run.Step(dt, 0.0f, 1.0f, DRAG_TRUCKS, SURFACE_RAIL, false, 100, true);
+		CHECK(run.WantsOff());
+		// the next rail starts over
+		run.Begin();
+		CHECK(!run.WantsOff());
+		CHECK(run.Seconds() == 0.0f);
+
+		// with speed left it stays on, however long
+		for (int i = 0; i < (int)(hz * 30.0); i++) run.Step(dt, 300.0f, 1.0f, DRAG_TRUCKS, SURFACE_RAIL, false, 0, true);
+		CHECK(!run.WantsOff());
+		// a slope turns the board around: off, even though it has a little speed again
+		run.Step(dt, 30.0f, 1.0f, DRAG_TRUCKS, SURFACE_RAIL, true, 0, true);
+		CHECK(run.WantsOff());
+		run.Step(dt, stop * 3.0f, 1.0f, DRAG_TRUCKS, SURFACE_RAIL, false, 0, true);
+		CHECK(run.WantsOff());
+		// it did not get off and is clearly moving again: it stays
+		run.Step(dt, stop * 4.0f + 5.0f, 1.0f, DRAG_TRUCKS, SURFACE_RAIL, false, 0, true);
+		CHECK(!run.WantsOff());
+		// under the stop speed, above it
+		run.Step(dt, stop + 1.0f, 1.0f, DRAG_TRUCKS, SURFACE_RAIL, false, 0, true);
+		CHECK(!run.WantsOff());
+		run.Step(dt, stop - 1.0f, 1.0f, DRAG_TRUCKS, SURFACE_RAIL, false, 0, true);
+		CHECK(run.WantsOff());
+		// GrindExit=0
+		run.Step(dt, 0.0f, 1.0f, DRAG_TRUCKS, SURFACE_RAIL, false, 0, false);
+		CHECK(!run.WantsOff());
+	}
+
+	snprintf(name, sizeof(name), "rail run: numbers the game should never hand over, %g Hz", hz);
+	g_case = name;
+	{
+		RailRun run;
+		// a frame of no or negative length
+		CHECK(run.Step(-1.0f, 100.0f, 1.0f, DRAG_TRUCKS, SURFACE_RAIL, false, 100, true) == 100.0f);
+		CHECK(run.Step(0.0f, 100.0f, 1.0f, DRAG_TRUCKS, SURFACE_RAIL, false, 100, true) == 100.0f);
+		CHECK(run.Seconds() == 0.0f);
+		// a negative speed, and not-a-numbers
+		CHECK(run.Step(dt, -50.0f, 1.0f, DRAG_TRUCKS, SURFACE_RAIL, false, 100, true) == 0.0f);
+		run.Begin();
+		const float nan = (float)sqrt(-1.0);
+		CHECK(run.Step(nan, nan, nan, DRAG_TRUCKS, SURFACE_RAIL, false, 100, true) == 0.0f);
+		CHECK(run.Seconds() == 0.0f);
+		CHECK(!run.WantsOff());
+		// a hitch of fifty seconds counts as a tenth of one
+		run.Begin();
+		const float hitch = run.Step(50.0f, 400.0f, 1.0f, DRAG_TRUCKS, SURFACE_RAIL, false, 100, true);
+		CHECK(hitch > 390.0f && hitch < 400.0f);
+		CHECK(near(run.Seconds(), 0.1, 1e-4));
+		// how level the rail is: more than level is level, less than vertical is no drag
+		run.Begin();
+		const float level = run.Step(dt, 400.0f, 1.0f, DRAG_TRUCKS, SURFACE_RAIL, false, 100, true);
+		run.Begin();
+		CHECK(near(run.Step(dt, 400.0f, 5.0f, DRAG_TRUCKS, SURFACE_RAIL, false, 100, true), level, 1e-6));
+		run.Begin();
+		CHECK(run.Step(dt, 400.0f, -1.0f, DRAG_TRUCKS, SURFACE_RAIL, false, 100, true) == 400.0f);
+	}
+}
+
+// ---------------------------------------------------------------------------------------------
+// On a rail: stepping off when the speed is gone
+// ---------------------------------------------------------------------------------------------
+
+// A press of the button that steps off the rail, the way the game needs it
+static void expectStepPress(Sim& s, const Press& p, int side) {
+	const int n = (int)s.outs.size();
+	CHECK(p.frames >= 2);
+	CHECK(p.frames * 1000.0 / s.hz >= 50.0 - 1000.0 / s.hz);
+	CHECK(p.frames * 1000.0 / s.hz <= 50.0 + 3000.0 / s.hz + 1.0);
+	for (int i = p.first; i < p.first + p.frames && i < n; i++) {
+		CHECK_EQ(s.outs[i].stepSide, side);
+		CHECK(s.outs[i].stepStarted == (i == p.first));
+		CHECK(!s.outs[i].flip);
+		CHECK(!s.outs[i].grab);
+		CHECK(!s.outs[i].grind);
+		CHECK(!s.outs[i].ollie);
+		CHECK(!s.outs[i].ownsDirection);
+	}
+}
+
+static int countStepStarts(const Sim& s, size_t from) {
+	int n = 0;
+	for (size_t i = from; i < s.outs.size(); i++) if (s.outs[i].stepStarted) n++;
+	return n;
+}
+
+static void testStepOff(double hz) {
+	char name[128];
+
+	snprintf(name, sizeof(name), "step off: the speed is gone, %g Hz", hz);
+	g_case = name;
+	{
+		Sim s(hz);
+		ollieIntoAir(s);
+		s.landOn(GRIND_FIFTY);
+		s.hold(1500);
+		CHECK_EQ(s.count(&Output::stepOff), 0);
+		const size_t m = s.mark();
+		s.offSide = -1;
+		s.railOff = true;
+		s.hold(300);
+		// pressed on the very frame, with the side the board came from, and the skater is off the rail
+		const std::vector<Press> off = s.presses(&Output::stepOff, m);
+		CHECK_EQ(off.size(), 1);
+		if (off.size() == 1) {
+			CHECK_EQ(off[0].first, (int)m);
+			CHECK(s.outs[off[0].first].stepStarted);
+			CHECK_EQ(s.outs[off[0].first].stepSide, -1);
+		}
+		CHECK_EQ(countStepStarts(s, m), 1);
+		CHECK_EQ(s.game.stepOffs, 1);
+		CHECK_EQ(s.game.stepSide, -1);
+		CHECK_EQ(s.state, STATE_GROUND);
+		// nothing else was pressed for it
+		CHECK_EQ(s.count(&Output::flip, m) + s.count(&Output::grab, m) + s.count(&Output::grind, m) + s.count(&Output::ollie, m), 0);
+		// off the rail there is nothing to step off, whatever the game goes on saying
+		s.hold(2000);
+		CHECK_EQ(s.presses(&Output::stepOff, m).size(), 1);
+		CHECK(!s.rec.Busy());
+	}
+
+	snprintf(name, sizeof(name), "step off: the side, %g Hz", hz);
+	g_case = name;
+	{
+		static const int sides[][2] = { { -1, -1 }, { 1, 1 }, { 0, 0 }, { 7, 1 }, { -3, -1 } };
+		for (size_t i = 0; i < sizeof(sides) / sizeof(sides[0]); i++) {
+			Sim s(hz);
+			ollieIntoAir(s);
+			s.landOn(GRIND_NOSEGRIND);
+			s.hold(1200);
+			s.offSide = sides[i][0];
+			s.railOff = true;
+			s.hold(200);
+			CHECK_EQ(s.game.stepOffs, 1);
+			CHECK_EQ(s.game.stepSide, sides[i][1]);
+		}
+	}
+
+	snprintf(name, sizeof(name), "step off: pressed again when nothing happens, %g Hz", hz);
+	g_case = name;
+	{
+		Sim s(hz);
+		ollieIntoAir(s);
+		s.landOn(GRIND_FIFTY);
+		s.game.noRelease = true;
+		s.hold(1500);
+		size_t m = s.mark();
+		s.offSide = 1;
+		s.railOff = true;
+		s.hold(2600);
+		const std::vector<Press> off = s.presses(&Output::stepOff, m);
+		CHECK(off.size() >= 4 && off.size() <= 5);
+		for (size_t k = 0; k < off.size(); k++) {
+			// the last one may still be down
+			if (off[k].first + off[k].frames < (int)s.outs.size()) expectStepPress(s, off[k], 1);
+			if (k > 0) CHECK(s.msBetween(off[k - 1].first + off[k - 1].frames, off[k].first) >= 500.0);
+		}
+		CHECK_EQ(s.state, STATE_RAIL);
+		CHECK_EQ(s.game.stepOffs, 0);
+		CHECK_EQ(s.count(&Output::flip, m) + s.count(&Output::grab, m) + s.count(&Output::grind, m) + s.count(&Output::ollie, m), 0);
+
+		// a slope has the board moving again and the game takes its word back: no more presses
+		while (s.outs.back().stepOff) s.step();
+		s.railOff = false;
+		m = s.mark();
+		s.hold(3000);
+		CHECK_EQ(s.count(&Output::stepOff, m), 0);
+		CHECK(!s.rec.Busy());
+	}
+
+	snprintf(name, sizeof(name), "step off: switched off, %g Hz", hz);
+	g_case = name;
+	{
+		Sim s(hz);
+		s.cfg.grindExit = 0;
+		ollieIntoAir(s);
+		s.landOn(GRIND_FIFTY);
+		s.hold(1500);
+		size_t m = s.mark();
+		s.railOff = true;
+		s.hold(3000);
+		CHECK_EQ(s.count(&Output::stepOff, m), 0);
+		CHECK_EQ(countStepStarts(s, m), 0);
+		CHECK_EQ(s.state, STATE_RAIL);
+		// and the stick still switches grinds
+		m = s.mark();
+		s.toward(D, 60);
+		s.hold(1200);
+		expectSequence(s, m, GRIND_FIVE_O);
+		CHECK_EQ(s.game.kind, GRIND_FIVE_O);
+	}
+
+	snprintf(name, sizeof(name), "step off: only on a rail, %g Hz", hz);
+	g_case = name;
+	{
+		Sim s(hz);
+		s.railOff = true;
+		s.offSide = 1;
+		s.hold(1000);                       // on the ground
+		ollieIntoAir(s);
+		s.hold(600);                        // in the air
+		s.state = STATE_WALL;
+		s.hold(300);
+		s.state = STATE_AIR;
+		s.hold(100);
+		s.state = STATE_GROUND;
+		s.hold(500);
+		CHECK_EQ(s.count(&Output::stepOff), 0);
+		CHECK_EQ(countStepStarts(s, 0), 0);
+		// and with nothing known about the skater
+		Sim blind(hz, STATE_UNKNOWN);
+		blind.railOff = true;
+		blind.hold(2000);
+		CHECK_EQ(blind.count(&Output::stepOff), 0);
+	}
+
+	snprintf(name, sizeof(name), "step off: a stick that is held does not keep the board on the rail, %g Hz", hz);
+	g_case = name;
+	{
+		// Stick down for the 5-0, and the speed runs out before the switch went: the board steps off,
+		// and no switch is started on the way
+		Sim s(hz);
+		ollieIntoAir(s);
+		s.landOn(GRIND_FIFTY);
+		s.game.noRelease = true;
+		s.hold(1500);
+		const size_t m = s.mark();
+		s.toward(D, 60);
+		s.railOff = true;
+		s.hold(1500);
+		const std::vector<Press> off = s.presses(&Output::stepOff, m);
+		CHECK(off.size() >= 2);
+		if (!off.empty()) CHECK(s.msBetween((int)m, off[0].first) <= 2000.0 / hz + 70.0);
+		CHECK_EQ(s.count(&Output::flip, m) + s.count(&Output::grab, m) + s.count(&Output::grind, m), 0);
+		CHECK_EQ(s.game.switches, 0);
+		CHECK_EQ(s.count(&Output::ollie, m), 0);
+	}
+
+	snprintf(name, sizeof(name), "step off: a switch under way goes first, %g Hz", hz);
+	g_case = name;
+	{
+		Sim s(hz);
+		ollieIntoAir(s);
+		s.landOn(GRIND_FIFTY);
+		s.hold(1500);
+		const size_t m = s.mark();
+		s.toward(D, 60);
+		// wait for the first press of the switch, then the speed is gone
+		int guard = 0;
+		while (!s.outs.back().flip && guard++ < (int)(hz * 2.0)) s.step();
+		CHECK(s.outs.back().flip);
+		s.offSide = -1;
+		s.railOff = true;
+		s.hold(2500);
+		// the two presses of the switch came out whole, the step-off after them, never together
+		int lastSwitch = -1, firstStep = -1;
+		for (int i = (int)m; i < (int)s.outs.size(); i++) {
+			const Output& o = s.outs[i];
+			CHECK(!(o.stepOff && (o.flip || o.grab || o.grind)));
+			if (o.flip || o.grab || o.grind) lastSwitch = i;
+			if (o.stepOff && firstStep < 0) firstStep = i;
+		}
+		CHECK(firstStep > lastSwitch && lastSwitch >= 0);
+		CHECK_EQ(s.game.switches, 1);
+		CHECK_EQ(s.game.kind, GRIND_FIVE_O);
+		// The new grind takes the button only after its first frames, as THUG's does, so the first
+		// press may be lost. The second is not.
+		const std::vector<Press> off = s.presses(&Output::stepOff, m);
+		CHECK(off.size() >= 1 && off.size() <= 2);
+		CHECK_EQ(s.game.stepOffs, 1);
+		CHECK_EQ(s.game.stepSide, -1);
+		CHECK_EQ(s.state, STATE_GROUND);
+	}
+
+	snprintf(name, sizeof(name), "step off: a flick under way goes first, %g Hz", hz);
+	g_case = name;
+	{
+		// The stick is on its way out of the wind-up when the speed runs out: if that is a flick it pops
+		Sim s(hz);
+		ollieIntoAir(s);
+		s.landOn(GRIND_FIFTY);
+		s.hold(100);
+		s.toward(D, 40);
+		s.hold(60);
+		const size_t m = s.mark();
+		s.moveTo(0.0f, 0.0f, 20);
+		s.railOff = true;
+		s.toward(U, 20);
+		s.hold(40);
+		s.spring();
+		s.hold(400);
+		CHECK_EQ(s.count(&Output::stepOff, m), 0);
+		CHECK_EQ(s.presses(&Output::ollie, m).size(), 1);
+		CHECK_EQ(s.state, STATE_AIR);
+		CHECK_EQ(s.game.stepOffs, 0);
+	}
+	{
+		// ... and if it was no flick, the board steps off once that is clear
+		Sim s(hz);
+		ollieIntoAir(s);
+		s.landOn(GRIND_FIFTY);
+		s.hold(1500);
+		s.toward(D, 300, 0.9f);             // slowly, and not held long enough to switch
+		const size_t m = s.mark();
+		s.moveTo(0.0f, -0.3f, 150);         // slowly out of the wind-up
+		s.railOff = true;
+		s.offSide = 1;
+		s.moveTo(0.0f, 0.0f, 100);
+		s.hold(600);
+		CHECK_EQ(s.count(&Output::ollie, m), 0);
+		CHECK_EQ(s.game.stepOffs, 1);
+		CHECK_EQ(s.game.stepSide, 1);
+		CHECK_EQ(s.state, STATE_GROUND);
+		const std::vector<Press> off = s.presses(&Output::stepOff, m);
+		CHECK_EQ(off.size(), 1);
+		if (off.size() == 1) CHECK(s.msBetween((int)m, off[0].first) <= s.cfg.flickWindow + 150.0 + 3000.0 / hz);
+	}
+
+	snprintf(name, sizeof(name), "step off: the next rail starts fresh, %g Hz", hz);
+	g_case = name;
+	{
+		Sim s(hz);
+		ollieIntoAir(s);
+		s.landOn(GRIND_FIFTY);
+		s.game.noRelease = true;
+		s.hold(1500);
+		s.railOff = true;
+		s.hold(120);                        // a press is out or under way, and the wait for the next one runs
+		// the player pops off, lands on another rail, and that one is out of speed at once (the game
+		// would not say so in the first second, but nothing here relies on that)
+		s.railOff = false;
+		s.state = STATE_AIR;
+		s.game.leave();
+		s.hold(200);
+		s.game.noRelease = false;
+		s.landOn(GRIND_FIFTY);
+		s.hold(800);
+		const size_t m = s.mark();
+		s.railOff = true;
+		s.hold(100);
+		CHECK_EQ(s.game.stepOffs, 1);
+		const std::vector<Press> off = s.presses(&Output::stepOff, m);
+		CHECK_EQ(off.size(), 1);
+		if (off.size() == 1) CHECK_EQ(off[0].first, (int)m);     // no leftover wait from the rail before
+	}
+}
+
+// ---------------------------------------------------------------------------------------------
 // Random play: things that must hold whatever the stick and the skater do
 // ---------------------------------------------------------------------------------------------
 
@@ -1613,11 +2237,13 @@ static void testFuzz(double hz) {
 	snprintf(name, sizeof(name), "fuzz, %g Hz", hz);
 	g_case = name;
 
-	int railPops = 0, switches = 0;
+	int railPops = 0, switches = 0, stepPresses = 0, stepOffs = 0;
 	for (int run = 0; run < 150; run++) {
 		Sim s(hz);
 		s.cfg.nollie = run % 5 == 0;
 		s.railCatch = run % 7 != 0;
+		s.cfg.grindExit = run % 11 != 0;
+		s.game.noRelease = run % 3 == 0;
 		int phase = 0;                          // what the skater does next
 		for (int move = 0; move < 60; move++) {
 			// a stick move
@@ -1628,6 +2254,17 @@ static void testFuzz(double hz) {
 			else s.hold(20 + frand() * 400);
 			s.lt = frand() < 0.15f;
 			s.rt = frand() < 0.1f;
+
+			// The game's word that the board is out of speed: on a rail, now and then, sometimes
+			// taken back. Off a rail it says nothing (one run in four it talks nonsense there too).
+			if (s.state == STATE_RAIL || run % 4 == 0) {
+				const float w = frand();
+				if (w < 0.25f) { s.railOff = true; s.offSide = (int)(frand() * 3.0f) - 1; }
+				else if (w < 0.35f) s.railOff = false;
+			}
+			else {
+				s.railOff = false;
+			}
 
 			// a change of state now and then, in an order the game could produce
 			if (frand() < 0.3f) {
@@ -1643,10 +2280,12 @@ static void testFuzz(double hz) {
 		}
 		s.spring();
 		s.lt = s.rt = false;
+		s.railOff = false;
 		s.state = STATE_GROUND;
 		s.game.leave();
 		s.hold(3000);
 		CHECK(!s.rec.Busy());
+		stepOffs += s.game.stepOffs;
 
 		const int n = (int)s.outs.size();
 		for (int i = 0; i < n; i++) {
@@ -1664,6 +2303,38 @@ static void testFuzz(double hz) {
 			if (o.ownsDirection) CHECK(o.dir != DIR_NONE);
 			// Tilt only in the air
 			if (s.tilts[i].valid) CHECK_EQ(s.states[i], STATE_AIR);
+			// The button that steps off a rail: on a rail only, only where that is switched on, and
+			// with no switch or trick press beside it
+			if (o.stepOff) {
+				CHECK_EQ(s.states[i], STATE_RAIL);
+				CHECK(s.cfg.grindExit != 0);
+				CHECK(!o.flip);
+				CHECK(!o.grab);
+				CHECK(!o.grind);
+				CHECK(!o.ownsDirection);
+				CHECK(o.stepSide >= -1 && o.stepSide <= 1);
+			}
+			CHECK(o.stepStarted == (o.stepOff && (i == 0 || !s.outs[i - 1].stepOff)));
+		}
+
+		// Every press of it lasts at least two frames, unless the board left the rail under it or
+		// the player popped off, and two presses on one rail are half a second apart
+		{
+			const std::vector<Press> v = s.presses(&Output::stepOff);
+			stepPresses += (int)v.size();
+			for (size_t k = 0; k < v.size(); k++) {
+				const int last = v[k].first + v[k].frames - 1;
+				if (last + 1 < n) {
+					const bool cutShort = s.states[last + 1] != STATE_RAIL || s.outs[last + 1].ollie;
+					if (!cutShort) CHECK(v[k].frames >= 2);
+				}
+				CHECK(v[k].frames * 1000.0 / hz <= 50.0 + 4000.0 / hz + 1.0);
+				if (k > 0) {
+					bool sameRail = true;
+					for (int i = v[k - 1].first; i <= v[k].first; i++) sameRail = sameRail && s.states[i] == STATE_RAIL && !s.outs[i].ollie;
+					if (sameRail) CHECK(s.msBetween(v[k - 1].first + v[k - 1].frames, v[k].first) >= 500.0);
+				}
+			}
 		}
 
 		// Every press of Ollie that starts on a rail is a tap of at least two frames, with nothing
@@ -1696,7 +2367,7 @@ static void testFuzz(double hz) {
 		// The stand-in game never saw the same grind started twice by the buttons
 		CHECK_EQ(s.game.restarts, 0);
 	}
-	printf("  %3g Hz: %d pops out of grinds, %d switches in the random runs\n", hz, railPops, switches);
+	printf("  %3g Hz: %d pops out of grinds, %d switches, %d presses to step off a rail (%d taken) in the random runs\n", hz, railPops, switches, stepPresses, stepOffs);
 }
 
 int main(int argc, char** argv) {
@@ -1705,6 +2376,7 @@ int main(int argc, char** argv) {
 	testNameChecksum();
 	testGrindTable(scriptDir);
 	testTiltTable();
+	testDragNumbers();
 	const double rates[] = { 30.0, 60.0, 120.0, 144.0, 240.0 };
 	for (size_t i = 0; i < sizeof(rates) / sizeof(rates[0]); i++) {
 		const double hz = rates[i];
@@ -1714,6 +2386,8 @@ int main(int argc, char** argv) {
 		testRailPop(hz);
 		testRailPopPatterns(hz);
 		testRailSwitch(hz);
+		testRailRun(hz);
+		testStepOff(hz);
 		testGrabs(hz);
 		testUnknownState(hz);
 		testFuzz(hz);

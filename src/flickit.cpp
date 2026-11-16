@@ -32,6 +32,12 @@ namespace Flickit {
 	// The speed of the stick is its travel over about this long
 	static const int kSpeedWindowMs = 60;
 
+	// Stepping off a rail: how long the button is pressed, and how long the game gets to act on
+	// it before it is pressed again
+	static const int kOffTapMs = 50;
+	static const int kOffWaitMs = 500;
+	static const int kOffWaitFrames = 20;
+
 	static inline int32_t Since(uint32_t now, uint32_t then) {
 		return (int32_t)(now - then);
 	}
@@ -82,6 +88,9 @@ namespace Flickit {
 		s.switchHold = 250;
 		s.railTap = 50;
 		s.flickSpeed = 100;
+		s.grindDrag = 100;
+		s.grindExit = 1;
+		s.grindBoost = 0;
 	}
 
 	void Sanitize(Settings& s) {
@@ -123,6 +132,9 @@ namespace Flickit {
 		s.switchHold = Clamp(s.switchHold, 50, 2000);
 		s.railTap = Clamp(s.railTap, 10, 300);
 		s.flickSpeed = Clamp(s.flickSpeed, 0, 1000);
+		s.grindDrag = Clamp(s.grindDrag, 0, 1000);
+		s.grindExit = s.grindExit ? 1 : 0;
+		s.grindBoost = s.grindBoost ? 1 : 0;
 	}
 
 	float AngleDeg(float x, float y) {
@@ -755,6 +767,174 @@ namespace Flickit {
 		return crc;
 	}
 
+	/******************************************************************/
+	/*                                                                */
+	/*  Losing speed on a rail                                        */
+	/******************************************************************/
+
+	const float kUnitsPerMetre = 80.0f;
+	const float kStopSpeed = 0.15f;
+	const float kStopAfter = 1.0f;
+	const float kCreepSpeed = 0.05f;
+
+	// Skate's drag is a force on its board: 0.48 * (the grind) * (the surface) * (the time on the
+	// rail). The board it pushes is deck, two trucks and four wheels: 11.56 kg.
+	static const float kDragBase = 0.48f;
+	static const float kBoardMass = 11.56f;
+	// by DragClass: on a rail, on a ledge
+	static const float kDragOfGrind[4][2] = {
+		{ 50.0f, 40.0f },   // on the trucks
+		{ 70.0f, 80.0f },   // truck and deck
+		{ 60.0f, 60.0f },   // nose and tail slides
+		{ 55.0f, 55.0f },   // the board across the rail
+	};
+	// by RailSurface
+	static const float kDragOfSurface[3] = { 0.6f, 1.3f, 1.7f };
+	// A board that was out of speed counts as moving again above this many times kStopSpeed
+	static const float kMovingAgain = 4.0f;
+
+	int SurfaceOfTerrain(int terrain) {
+		switch (terrain) {
+		// Metal of every kind, wires, cables and chains
+		case 3: case 4: case 5: case 6: case 7:         // METALSMOOTH, METALROUGH, METALCORRUGATED, METALGRATING, METALTIN
+		case 32: case 33: case 38:                      // CHAINLINK, METALFUTURE, METALFENCE
+		case 39: case 41: case 43: case 44: case 45:    // GRINDTRAIN, GRINDWIRE, GRINDROUNDMETALPOLE, GRINDCHAINLINK, GRINDMETAL
+		case 50: case 51: case 52: case 54:             // GRINDELECTRICWIRE, GRINDCABLE, GRINDCHAIN, GRINDNEONLIGHT
+		case 57: case 58: case 59:                      // GRINDBRASSRAIL, GRINDCATWALK, GRINDTANKTURRET
+		// and what is as slick: ice, plastic, glass
+		case 25: case 28: case 29:                      // ICE, PLEXIGLASS, FIBERGLASS
+		case 49: case 53: case 55:                      // GRINDPLASTIC, GRINDPLASTICBARRIER, GRINDGLASSMONSTER
+			return SURFACE_RAIL;
+		case 2: case 14: case 16: case 17: case 18:     // CONCROUGH, BRICK, ASPHALT, ROCK, GRAVEL
+		case 20: case 21: case 22: case 23: case 27:    // GRASS, GRASSDRIED, DIRT, DIRTPACKED, SAND
+		case 40: case 47: case 56:                      // GRINDROPE, GRINDWOODLOG, GRINDBANYONTREE
+			return SURFACE_ROUGH;
+		default:
+			// concrete, wood, tiles, and every number this list does not know
+			return SURFACE_LEDGE;
+		}
+	}
+
+	const char* SurfaceName(int surface) {
+		switch (surface) {
+		case SURFACE_RAIL: return "rail";
+		case SURFACE_LEDGE: return "ledge";
+		case SURFACE_ROUGH: return "rough ledge";
+		default: return "?";
+		}
+	}
+
+	int DragClassOf(int grind, bool slide) {
+		if (slide) {
+			// A board that lands across a rail with no lean asked for is in a board- or lipslide
+			return (grind == GRIND_BOARDLIP || grind == GRIND_FIFTY) ? DRAG_BOARDSLIDE : DRAG_TIPSLIDE;
+		}
+		switch (grind) {
+		case GRIND_UNKNOWN:
+		case GRIND_FIFTY:
+		case GRIND_FIVE_O:
+		case GRIND_NOSEGRIND:
+			return DRAG_TRUCKS;
+		default:
+			return DRAG_ANGLED;
+		}
+	}
+
+	const char* DragClassName(int dragClass) {
+		switch (dragClass) {
+		case DRAG_TRUCKS: return "on the trucks";
+		case DRAG_ANGLED: return "truck and deck";
+		case DRAG_TIPSLIDE: return "nose or tail slide";
+		case DRAG_BOARDSLIDE: return "boardslide";
+		default: return "?";
+		}
+	}
+
+	float DragRamp(float seconds) {
+		static const float kAt[4] = { 0.0f, 1.0f, 2.2f, 4.0f };
+		static const float kShare[4] = { 0.63f, 0.72f, 0.83f, 1.0f };
+		if (!(seconds > kAt[0])) {
+			return kShare[0];
+		}
+		for (int i = 1; i < 4; i++) {
+			if (seconds < kAt[i]) {
+				return kShare[i - 1] + (kShare[i] - kShare[i - 1]) * (seconds - kAt[i - 1]) / (kAt[i] - kAt[i - 1]);
+			}
+		}
+		return kShare[3];
+	}
+
+	float SkateDrag(int dragClass, int surface, float seconds) {
+		if (dragClass < DRAG_TRUCKS || dragClass > DRAG_BOARDSLIDE) {
+			dragClass = DRAG_TRUCKS;
+		}
+		if (surface < SURFACE_RAIL || surface > SURFACE_ROUGH) {
+			surface = SURFACE_LEDGE;
+		}
+		const float force = kDragBase * kDragOfGrind[dragClass][surface == SURFACE_RAIL ? 0 : 1] * kDragOfSurface[surface] * DragRamp(seconds);
+		return force / kBoardMass;
+	}
+
+	RailRun::RailRun() {
+		Begin();
+	}
+
+	void RailRun::Begin() {
+		m_seconds = 0.0f;
+		m_drag = 0.0f;
+		m_speed = 0.0f;
+		m_wantsOff = false;
+	}
+
+	float RailRun::Step(float dt, float speed, float level, int dragClass, int surface, bool turned, int dragPercent, bool mayStepOff) {
+		// Whatever the game hands over, nothing here may turn into a wild number
+		if (!(dt > 0.0f)) {
+			dt = 0.0f;
+		}
+		else if (dt > 0.1f) {
+			dt = 0.1f;
+		}
+		if (!(speed > 0.0f)) {
+			speed = 0.0f;
+		}
+		if (!(level > 0.0f)) {
+			level = 0.0f;
+		}
+		else if (level > 1.0f) {
+			level = 1.0f;
+		}
+
+		const float stop = kStopSpeed * kUnitsPerMetre;
+		const float creep = kCreepSpeed * kUnitsPerMetre;
+
+		m_drag = 0.0f;
+		if (dragPercent > 0) {
+			m_drag = SkateDrag(dragClass, surface, m_seconds) * level * kUnitsPerMetre * (float)dragPercent * 0.01f;
+			// The drag slows the board down. It never stops it dead and never turns it around: the
+			// game's rail code reads the direction of travel off the speed.
+			if (speed > creep) {
+				speed -= m_drag * dt;
+				if (speed < creep) {
+					speed = creep;
+				}
+			}
+		}
+		m_seconds += dt;
+		m_speed = speed;
+
+		if (!mayStepOff) {
+			m_wantsOff = false;
+		}
+		else if (m_seconds > kStopAfter && (speed < stop || turned)) {
+			m_wantsOff = true;
+		}
+		else if (m_wantsOff && speed > stop * kMovingAgain) {
+			// It did not get off, and a slope has it moving again
+			m_wantsOff = false;
+		}
+		return speed;
+	}
+
 	TiltTracker::TiltTracker() {
 		m_expectEnd = false;
 		m_flickAt = 0;
@@ -941,10 +1121,18 @@ namespace Flickit {
 		m_switchSerial = 0;
 		m_switchSent = 0;
 		m_switchWaitFrames = 0;
+
+		m_offDown = false;
+		m_offSide = 0;
+		m_offStart = 0;
+		m_offFrames = 0;
+		m_offWait = false;
+		m_offSent = 0;
+		m_offWaitFrames = 0;
 	}
 
 	bool Recognizer::Busy() const {
-		return m_phase != PH_IDLE || m_queued > 0 || m_grabHeld || m_grindPending || m_tapsLeft > 0 || m_railTap || m_seqStep != SEQ_IDLE;
+		return m_phase != PH_IDLE || m_queued > 0 || m_grabHeld || m_grindPending || m_tapsLeft > 0 || m_railTap || m_seqStep != SEQ_IDLE || m_offDown;
 	}
 
 	void Recognizer::StartNollieTaps(uint32_t now, const Settings& cfg) {
@@ -1334,6 +1522,10 @@ namespace Flickit {
 		}
 
 		if (m_seqStep == SEQ_IDLE) {
+			if (m_offDown || (cfg.grindExit && in.railOff)) {
+				// The board is out of speed and stepping off this rail: no other grind is started on it
+				return;
+			}
 			if (m_switchWait) {
 				// Sent already. The game reports the new grind a moment later; if it never does, the
 				// presses were lost and may go out again.
@@ -1415,6 +1607,57 @@ namespace Flickit {
 		}
 	}
 
+	// The game says the board has stopped on this rail (RailRun::WantsOff). THUG has a button that
+	// takes the skater off a rail, and it is pressed here: for a moment, together with the side to
+	// step off to. A skater who is still on the rail half a second later gets it again.
+	void Recognizer::RunStepOff(const Input& in, const Settings& cfg, Output& out) {
+		const uint32_t now = in.now;
+
+		if (m_railTap) {
+			// The player pops off the rail: that is the way off, and Ollie the only button for it.
+			// The frame Ollie is let go the game has not jumped yet, so nothing is pressed then
+			// either: a board that is still on the rail after that gets the button once the wait
+			// below has run.
+			m_offDown = false;
+			m_offWait = true;
+			m_offSent = now;
+			m_offWaitFrames = 0;
+			return;
+		}
+
+		// A trick press that is on its way has the buttons and the direction to itself
+		const bool others = out.flip || out.grab || out.grind || out.ownsDirection;
+
+		if (m_offDown) {
+			if (others || (m_offFrames >= 2 && Since(now, m_offStart) >= kOffTapMs)) {
+				m_offDown = false;
+				m_offWait = true;
+				m_offSent = now;
+				m_offWaitFrames = 0;
+			}
+		}
+		else if (m_offWait) {
+			m_offWaitFrames++;
+			if (Since(now, m_offSent) >= kOffWaitMs && m_offWaitFrames >= kOffWaitFrames) {
+				m_offWait = false;
+			}
+		}
+		else if (cfg.grindExit && in.railOff && !others && m_phase != PH_TRACK && m_seqStep == SEQ_IDLE && m_queued == 0) {
+			// Not while a flick may still turn into a pop, and not in the middle of other presses
+			m_offDown = true;
+			m_offSide = in.offSide < 0 ? -1 : (in.offSide > 0 ? 1 : 0);
+			m_offStart = now;
+			m_offFrames = 0;
+			out.stepStarted = true;
+		}
+
+		if (m_offDown) {
+			out.stepOff = true;
+			out.stepSide = m_offSide;
+			m_offFrames++;
+		}
+	}
+
 	void Recognizer::Update(const Input& in, const Settings& cfg, Output& out) {
 		out.ollie = false;
 		out.flip = false;
@@ -1434,6 +1677,9 @@ namespace Flickit {
 		out.ticks = 0;
 		out.state = in.state;
 		out.switchTo = GRIND_UNKNOWN;
+		out.stepOff = false;
+		out.stepSide = 0;
+		out.stepStarted = false;
 
 		const uint32_t now = in.now;
 		const float dead = (float)cfg.deadzone * 0.01f;
@@ -1471,6 +1717,8 @@ namespace Flickit {
 			m_zoneSince = now;
 			m_seqStep = SEQ_IDLE;
 			m_switchWait = false;
+			m_offDown = false;
+			m_offWait = false;
 			// The grab ends where the grind begins, and one that was about to start does not
 			m_grabHeld = false;
 			int kept = 0;
@@ -1484,6 +1732,8 @@ namespace Flickit {
 		if (!onRail) {
 			m_seqStep = SEQ_IDLE;
 			m_switchWait = false;
+			m_offDown = false;
+			m_offWait = false;
 		}
 
 		// The Ollie press of a pop out of a grind ends here. Trick presses that waited for it may
@@ -1729,8 +1979,10 @@ namespace Flickit {
 		m_lastNollie = out.nollie;
 		m_lastGrab = out.grab;
 
-		// The presses that switch grinds come on top and are not part of the above
+		// The presses that switch grinds and the one that steps off the rail come on top and are
+		// not part of the above
 		if (onRail) {
+			RunStepOff(in, cfg, out);
 			RunRailSwitch(in, cfg, mag, sector, out);
 		}
 
