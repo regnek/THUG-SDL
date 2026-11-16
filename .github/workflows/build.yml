@@ -22,6 +22,8 @@ jobs:
         run: |
           g++ -std=c++11 -Wall -Wextra -I src tests/flickit_test.cpp src/flickit.cpp -o flickit_test
           ./flickit_test
+          g++ -std=c++11 -Wall -Wextra -I src tests/flickit_pattern_test.cpp src/flickit.cpp -o flickit_pattern_test
+          ./flickit_pattern_test
 
   build:
     runs-on: windows-latest

@@ -137,11 +137,33 @@ The settings live in the `[Flickit]` section of `thugsdl.ini`. Thresholds are pe
 | Settle | 50 | How long a drag to the side has to rest to count |
 | Dwell | 60 | How long the stick has to rest in down-left / down-right to make it the start |
 | AfterPop, DirLead, Pulse | 10, 15, 30 | Timing of the synthetic direction + button press |
+| Patterns | 1 | Decide tricks from a stick pattern file when one is found (see below). 0: always use the built-in directions |
+| PatternFile | skater.pat | Name of the pattern file, looked for in the folder `thugsdl.ini` is in |
+| MissTicks | 10 | How many 60 Hz ticks the stick may spend between two points of a pattern before the pattern is dropped |
+
+### Stick patterns
+Out of the box Flickit sorts a flick by where it starts and ends, in eight directions (the table above). If a pattern file is present, it uses that instead: each trick is then a short list of stick positions that have to be passed in order, each with a tolerance radius. This is how the Skate games define their gestures, and the file format is theirs, so if you own Skate 3 you can copy its `skater.pat` next to `thugsdl.ini` and flick the tricks the way that game expects them. No pattern file comes with THUG SDL; without one nothing changes.
+
+```
+global_tolerance_dist 0.4        tolerance for the patterns that follow
+pattern Kickflip                 the name says which trick it is
+    tolerance_dist 0.4           tolerance of this pattern
+    coord 0.0 0.7                a point: x (right is positive), y (down is positive), the rim is 1.0
+    clock 2 1.0                  a point by clock face: hour (12 = up, 3 = right, 0 = center) and radius
+```
+
+- A pattern starts when the stick is within tolerance of its first point and is complete when the last point is reached. Time spent resting on the first point does not count.
+- If several patterns are complete at once the one with the most points wins, then the most accurate and fastest. A complete pattern waits up to two ticks for a longer one that has only its last point to go.
+- Names: `Ollie`, `Kickflip`, `Heelflip`, `PopShuvit`, `FSPopShuvit`, `VarialKickflip`, `VarialHeelflip`, `Hardflip`, `InwardHeelflip` press the slots of the table above. `360PopShuvit`, `FS360PopShuvit`, `360Flip`, `Laserflip`, `360Hardflip` and `360InwardHeelflip` press the slot of their base trick twice, which is how THUG turns a Varial Kickflip into a 360 Flip. `Nollie` and names starting with `N_` are followed only with `Nollie=1`. Other names are ignored.
+- The crouch and the pop work as before: the stick in the lower half crouches, leaving it pops, and a pop without a completed pattern is a plain ollie.
+- With `Debug=1` the log shows the pattern that was recognized and how fast it was drawn (speed 1 = fast, 0 = slow; measured, not used yet).
 
 The recognizer has offline tests that need neither the game nor Windows:
 ```
 g++ -std=c++11 -I src tests/flickit_test.cpp src/flickit.cpp -o flickit_test && ./flickit_test
+g++ -std=c++11 -I src tests/flickit_pattern_test.cpp src/flickit.cpp -o flickit_pattern_test && ./flickit_pattern_test
 ```
+The second one also takes a pattern file: `./flickit_pattern_test skater.pat` draws every pattern in it and reports what was recognized.
 
 ## TROUBLESHOOTING
 

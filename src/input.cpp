@@ -300,6 +300,46 @@ Flickit::Settings flickitSettings;
 Flickit::Recognizer flickitRecognizers[MAX_PLAYERS];
 bool flickitOn[MAX_PLAYERS] = { true, true };            // switched in a level with the toggle button
 bool flickitToggleDown[MAX_PLAYERS] = { false, false };
+Flickit::PatternSet flickitPatterns;                     // stick patterns from the pattern file, if there is one
+
+// Reads the stick pattern file named in the ini (default: skater.pat) from the folder the ini is in.
+// Without the file, or with Patterns=0, Flickit decides tricks from its built-in directions.
+void loadFlickitPatterns(const char* configFile, int enabled) {
+	flickitPatterns.Clear();
+	if (!enabled) {
+		return;
+	}
+
+	char name[MAX_PATH];
+	GetPrivateProfileString(FLICKIT_SECTION, "PatternFile", "skater.pat", name, sizeof(name), configFile);
+
+	int dirLength = 0;
+	for (int i = 0; configFile[i] != '\0'; i++) {
+		if (configFile[i] == '\\' || configFile[i] == '/') {
+			dirLength = i + 1;
+		}
+	}
+	char path[MAX_PATH * 2];
+	sprintf_s(path, sizeof(path), "%.*s%s", dirLength, configFile, name);
+
+	FILE* f = nullptr;
+	if (fopen_s(&f, path, "rb") != 0 || !f) {
+		Log::TypedLog(CHN_SDL, "Flickit: no pattern file at %s, using the built-in directions\n", path);
+		return;
+	}
+	static char text[256 * 1024];
+	const size_t length = fread(text, 1, sizeof(text), f);
+	fclose(f);
+
+	const int count = flickitPatterns.Parse(text, length);
+	int tricks = 0;
+	for (int i = 0; i < count; i++) {
+		if (flickitPatterns.At(i).known) {
+			tricks++;
+		}
+	}
+	Log::TypedLog(CHN_SDL, "Flickit: %d stick patterns read from %s, %d of them name a trick\n", count, path, tricks);
+}
 
 void loadFlickitSettings() {
 	char configFile[MAX_PATH];
@@ -334,15 +374,22 @@ void loadFlickitSettings() {
 	s.autoGrindDelay = (int)GetPrivateProfileInt(FLICKIT_SECTION, "AutoGrindDelay", s.autoGrindDelay, configFile);
 	s.autoGrindHold = (int)GetPrivateProfileInt(FLICKIT_SECTION, "AutoGrindHold", s.autoGrindHold, configFile);
 
+	s.patterns = (int)GetPrivateProfileInt(FLICKIT_SECTION, "Patterns", s.patterns, configFile);
+	s.missTicks = (int)GetPrivateProfileInt(FLICKIT_SECTION, "MissTicks", s.missTicks, configFile);
+
 	Flickit::Sanitize(s);
 	flickitSettings = s;
 
+	loadFlickitPatterns(configFile, s.enabled && s.patterns);
+
 	for (int i = 0; i < MAX_PLAYERS; i++) {
 		flickitRecognizers[i].Reset();
+		flickitRecognizers[i].UsePatterns(flickitPatterns.Count() > 0 ? &flickitPatterns : nullptr);
 	}
 
-	Log::TypedLog(CHN_SDL, "Flickit %s: kickflip side %d, trigger grabs %d, auto grind %d, nollie %d\n",
-		s.enabled ? "enabled" : "disabled", s.kickflipSide, s.triggerGrabs, s.autoGrind, s.nollie);
+	Log::TypedLog(CHN_SDL, "Flickit %s: kickflip side %d, trigger grabs %d, auto grind %d, nollie %d, tricks from %s\n",
+		s.enabled ? "enabled" : "disabled", s.kickflipSide, s.triggerGrabs, s.autoGrind, s.nollie,
+		flickitPatterns.Count() > 0 ? "stick patterns" : "built-in directions");
 }
 
 // Reads the camera stick and the triggers and asks the recognizer which buttons to hold on this frame.
@@ -382,6 +429,10 @@ bool flickitPoll(device* dev, SDL_GameController* controller, Flickit::Output* o
 	if (flickitSettings.debug && out->gesture != Flickit::GESTURE_NONE) {
 		if (out->gesture == Flickit::GESTURE_GRAB) {
 			Log::TypedLog(CHN_SDL, "Flickit: grab, %s trigger\n", out->slot == Flickit::DIR_L ? "left" : "right");
+		}
+		else if (out->pattern) {
+			Log::TypedLog(CHN_SDL, "Flickit: pattern %s, speed %.2f, %d ticks: %s\n", out->pattern, out->speed, out->ticks,
+				out->gesture == Flickit::GESTURE_FLIP ? Flickit::SlotName(out->slot) : "ollie");
 		}
 		else {
 			Log::TypedLog(CHN_SDL, "Flickit: %s %s -> %s after %u ms: %s\n",

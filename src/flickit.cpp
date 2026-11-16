@@ -1,6 +1,8 @@
 #include "flickit.h"
 
 #include <cmath>
+#include <cstdlib>
+#include <cstring>
 
 namespace Flickit {
 
@@ -45,6 +47,9 @@ namespace Flickit {
 		s.pulse = 30;
 		s.autoGrindDelay = 200;
 		s.autoGrindHold = 1500;
+
+		s.patterns = 1;
+		s.missTicks = 10;
 	}
 
 	void Sanitize(Settings& s) {
@@ -70,6 +75,9 @@ namespace Flickit {
 		s.pulse = Clamp(s.pulse, 10, 300);
 		s.autoGrindDelay = Clamp(s.autoGrindDelay, 0, 2000);
 		s.autoGrindHold = Clamp(s.autoGrindHold, 0, 10000);
+
+		s.patterns = s.patterns ? 1 : 0;
+		s.missTicks = Clamp(s.missTicks, 1, 60);
 	}
 
 	float AngleDeg(float x, float y) {
@@ -197,8 +205,329 @@ namespace Flickit {
 		}
 	}
 
-	Recognizer::Recognizer() {
+	// ------------------------------------------------------------------------------------------
+	// Stick patterns
+	// ------------------------------------------------------------------------------------------
+
+	// Trick names as Skate's pattern files spell them, and the THUG flip slot each one gets.
+	// The 360 versions are the base trick plus a second tap of Flip, which is how THUG does them.
+	struct TrickName {
+		const char* name;
+		int slot;
+		int taps;
+	};
+
+	static const TrickName kTrickNames[] = {
+		{ "Ollie", DIR_NONE, 0 },
+		{ "Kickflip", DIR_L, 1 },
+		{ "Heelflip", DIR_R, 1 },
+		{ "PopShuvit", DIR_D, 1 },
+		{ "FSPopShuvit", DIR_U, 1 },
+		{ "VarialKickflip", DIR_DL, 1 },
+		{ "VarialHeelflip", DIR_DR, 1 },
+		{ "Hardflip", DIR_UL, 1 },
+		{ "InwardHeelflip", DIR_UR, 1 },
+		{ "360PopShuvit", DIR_D, 2 },
+		{ "FS360PopShuvit", DIR_U, 2 },
+		{ "360Flip", DIR_DL, 2 },
+		{ "Laserflip", DIR_DR, 2 },
+		{ "360Hardflip", DIR_UL, 2 },
+		{ "360InwardHeelflip", DIR_UR, 2 },
+	};
+
+	int NamePattern(Pattern& p) {
+		p.known = 0;
+		p.slot = DIR_NONE;
+		p.taps = 0;
+		p.nollie = 0;
+
+		const char* name = p.name;
+		if (std::strcmp(name, "Nollie") == 0) {
+			p.known = 1;
+			p.nollie = 1;
+			return 1;
+		}
+		if (std::strncmp(name, "N_", 2) == 0) {
+			p.nollie = 1;
+			name += 2;
+		}
+		for (size_t i = 0; i < sizeof(kTrickNames) / sizeof(kTrickNames[0]); i++) {
+			if (std::strcmp(name, kTrickNames[i].name) == 0) {
+				if (p.nollie && kTrickNames[i].slot == DIR_NONE) {
+					break;   // "N_Ollie" is not a name the files use
+				}
+				p.known = 1;
+				p.slot = kTrickNames[i].slot;
+				p.taps = kTrickNames[i].taps;
+				return 1;
+			}
+		}
+		p.nollie = 0;
+		return 0;
+	}
+
+	PatternSet::PatternSet() {
+		Clear();
+	}
+
+	void PatternSet::Clear() {
+		m_count = 0;
+	}
+
+	// Copies the next whitespace separated word of the text into word. Returns false at the end.
+	static bool NextWord(const char* text, size_t length, size_t& pos, char* word, size_t wordSize) {
+		while (pos < length && (unsigned char)text[pos] <= ' ') {
+			pos++;
+		}
+		if (pos >= length) {
+			return false;
+		}
+		size_t n = 0;
+		while (pos < length && (unsigned char)text[pos] > ' ') {
+			if (n + 1 < wordSize) {
+				word[n++] = text[pos];
+			}
+			pos++;
+		}
+		word[n] = '\0';
+		return true;
+	}
+
+	int PatternSet::Parse(const char* text, size_t length) {
+		float globalTolerance = 0.4f;
+		Pattern* cur = 0;
+		size_t pos = 0;
+		char word[64];
+		char arg[64];
+
+		while (NextWord(text, length, pos, word, sizeof(word))) {
+			if (std::strcmp(word, "pattern") == 0) {
+				cur = 0;
+				if (!NextWord(text, length, pos, arg, sizeof(arg))) {
+					break;
+				}
+				if (m_count < MAX_PATTERNS) {
+					cur = &m_patterns[m_count++];
+					std::strncpy(cur->name, arg, MAX_PATTERN_NAME - 1);
+					cur->name[MAX_PATTERN_NAME - 1] = '\0';
+					cur->tolerance = globalTolerance;
+					cur->count = 0;
+					NamePattern(*cur);
+				}
+			}
+			else if (std::strcmp(word, "coord") == 0 || std::strcmp(word, "clock") == 0) {
+				char second[64];
+				if (!NextWord(text, length, pos, arg, sizeof(arg)) || !NextWord(text, length, pos, second, sizeof(second))) {
+					break;
+				}
+				float x = (float)std::atof(arg);
+				float y = (float)std::atof(second);
+				if (word[1] == 'l') {
+					// clock face: hour, radius. 12 is up, 3 is right, 0 is the center
+					const int hour = std::atoi(arg);
+					const float radius = y;
+					const float a = (float)hour * 0.5235987756f;
+					x = (hour == 0) ? 0.0f : std::sin(a) * radius;
+					y = (hour == 0) ? 0.0f : -std::cos(a) * radius;
+				}
+				if (cur && cur->count < MAX_PATTERN_POINTS) {
+					cur->x[cur->count] = x;
+					cur->y[cur->count] = y;
+					cur->count++;
+				}
+			}
+			else if (std::strcmp(word, "tolerance_dist") == 0 || std::strcmp(word, "global_tolerance_dist") == 0) {
+				if (!NextWord(text, length, pos, arg, sizeof(arg))) {
+					break;
+				}
+				float t = (float)std::atof(arg);
+				if (t < 0.05f) {
+					t = 0.05f;
+				}
+				if (word[0] == 'g') {
+					globalTolerance = t;
+				}
+				else if (cur) {
+					cur->tolerance = t;
+				}
+			}
+			else {
+				// min_time, global_tolerance_time and the like: one number, not used
+				const char c = word[0];
+				if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')) {
+					size_t peek = pos;
+					if (NextWord(text, length, peek, arg, sizeof(arg))) {
+						const char d = arg[0];
+						if ((d >= '0' && d <= '9') || d == '-' || d == '+' || d == '.') {
+							pos = peek;
+						}
+					}
+				}
+			}
+		}
+
+		// A pattern needs a start and an end
+		int kept = 0;
+		for (int i = 0; i < m_count; i++) {
+			if (m_patterns[i].count >= 2) {
+				if (kept != i) {
+					m_patterns[kept] = m_patterns[i];
+				}
+				kept++;
+			}
+		}
+		m_count = kept;
+		return m_count;
+	}
+
+	PatternMatcher::PatternMatcher() {
 		Reset();
+	}
+
+	void PatternMatcher::Reset() {
+		std::memset(m_state, 0, sizeof(m_state));
+		m_pending = false;
+		m_pendingRating = 0.0f;
+		m_pendingPoints = 0;
+		m_grace = 0;
+	}
+
+	static inline float Dist2(float ax, float ay, float bx, float by) {
+		const float dx = ax - bx;
+		const float dy = ay - by;
+		return dx * dx + dy * dy;
+	}
+
+	bool PatternMatcher::Tick(const PatternSet& set, float x, float yDown, int missTicks, bool nollie, PatternMatch& out) {
+		// A completed pattern is rated by its length first: with n points the rating grows with n^4,
+		// so a varial that also passes a kickflip's two points wins. Then accuracy and speed count.
+		static const float kErrorFloor = 0.15f;
+		// Ticks per point at which the speed reads 1 and 0
+		static const float kFastTicks = 1.75f;
+		static const float kSlowTicks = 4.4f;
+		// How long a completed pattern waits for a longer one that is one point short
+		static const int kGraceTicks = 2;
+
+		int best = -1;
+		float bestRating = 0.0f;
+		PatternMatch bestMatch;
+		bestMatch.index = 0;
+		bestMatch.speed = 0.0f;
+		bestMatch.ticks = 0;
+		bestMatch.error = 0.0f;
+		const int count = set.Count();
+
+		for (int i = 0; i < count; i++) {
+			const Pattern& p = set.At(i);
+			State& st = m_state[i];
+			if (!p.known || (p.nollie && !nollie)) {
+				st.active = 0;
+				continue;
+			}
+			const float tol2 = p.tolerance * p.tolerance;
+
+			if (!st.active) {
+				// While a result is waiting, nothing new starts: the gesture is over
+				const float d2 = Dist2(x, yDown, p.x[0], p.y[0]);
+				if (!m_pending && d2 <= tol2) {
+					st.active = 1;
+					st.next = 1;
+					st.misses = 0;
+					st.ticks = 1;
+					st.error = d2;
+				}
+				continue;
+			}
+
+			const float d2 = Dist2(x, yDown, p.x[st.next], p.y[st.next]);
+			if (d2 <= tol2) {
+				st.error += d2;
+				st.ticks++;
+				st.misses = 0;
+				if (st.next == p.count - 1) {
+					const float n = (float)p.count;
+					float err = st.error > kErrorFloor ? st.error : kErrorFloor;
+					err /= n;
+					if (err > kErrorFloor) {
+						err = kErrorFloor;
+					}
+					const float rating = (n * n * n * n) / (err * (float)st.ticks);
+					// Equal ratings (same length, same speed, both accurate enough): the closer one
+					if (best < 0 || rating > bestRating || (rating == bestRating && st.error < bestMatch.error)) {
+						best = i;
+						bestRating = rating;
+						bestMatch.index = i;
+						bestMatch.ticks = st.ticks;
+						bestMatch.error = st.error;
+					}
+					st.active = 0;
+				}
+				else {
+					st.next++;
+				}
+			}
+			else if (st.next == 1 && Dist2(x, yDown, p.x[0], p.y[0]) <= tol2) {
+				// Resting on the start point: the clock has not started yet
+			}
+			else {
+				st.ticks++;
+				st.misses++;
+				if ((int)st.misses > missTicks) {
+					st.active = 0;
+				}
+			}
+		}
+
+		if (best >= 0 && (!m_pending || bestRating > m_pendingRating)) {
+			if (!m_pending) {
+				m_grace = kGraceTicks;
+			}
+			m_pending = true;
+			m_pendingMatch = bestMatch;
+			m_pendingRating = bestRating;
+			m_pendingPoints = set.At(best).count;
+		}
+		if (!m_pending) {
+			return false;
+		}
+
+		if (m_grace > 0) {
+			for (int i = 0; i < count; i++) {
+				const Pattern& p = set.At(i);
+				const State& st = m_state[i];
+				if (st.active && p.count > m_pendingPoints && st.next == p.count - 1) {
+					m_grace--;
+					return false;
+				}
+			}
+		}
+
+		out = m_pendingMatch;
+		const float perPoint = (float)out.ticks / (float)m_pendingPoints;
+		if (perPoint <= kFastTicks) {
+			out.speed = 1.0f;
+		}
+		else if (perPoint >= kSlowTicks) {
+			out.speed = 0.0f;
+		}
+		else {
+			out.speed = (kSlowTicks - perPoint) / (kSlowTicks - kFastTicks);
+		}
+
+		// One gesture, one trick: every pattern starts over
+		Reset();
+		return true;
+	}
+
+	Recognizer::Recognizer() {
+		m_patterns = 0;
+		Reset();
+	}
+
+	void Recognizer::UsePatterns(const PatternSet* set) {
+		m_patterns = set;
+		m_matcher.Reset();
+		m_tickInit = false;
 	}
 
 	void Recognizer::Reset() {
@@ -234,6 +563,11 @@ namespace Flickit {
 		m_lastGrind = false;
 		m_lastNollie = false;
 		m_lastGrab = false;
+
+		m_matcher.Reset();
+		m_tickLast = 0;
+		m_tickAccum = 0;
+		m_tickInit = false;
 	}
 
 	bool Recognizer::Busy() const {
@@ -304,6 +638,25 @@ namespace Flickit {
 		if (slot != DIR_NONE) {
 			// Never on the frame of the pop itself: the game has to see Ollie released first
 			Enqueue(BTN_FLIP, slot, AfterPop(cfg));
+		}
+		m_phase = PH_IDLE;
+	}
+
+	void Recognizer::FinalizePattern(const Pattern& p, const PatternMatch& m, uint32_t now, const Settings& cfg, Output& out) {
+		out.gesture = (p.slot == DIR_NONE) ? GESTURE_POP : GESTURE_FLIP;
+		out.windup = m_wind;
+		out.start = m_start;
+		out.end = DIR_NONE;
+		out.slot = p.slot;
+		out.elapsed = now - m_popTime;
+		out.pattern = p.name;
+		out.speed = m.speed;
+		out.ticks = m.ticks;
+
+		if (p.slot != DIR_NONE) {
+			for (int i = 0; i < p.taps; i++) {
+				Enqueue(BTN_FLIP, p.slot, AfterPop(cfg));
+			}
 		}
 		m_phase = PH_IDLE;
 	}
@@ -427,6 +780,9 @@ namespace Flickit {
 		out.end = DIR_NONE;
 		out.slot = DIR_NONE;
 		out.elapsed = 0;
+		out.pattern = 0;
+		out.speed = 0.0f;
+		out.ticks = 0;
 
 		const uint32_t now = in.now;
 		const float dead = (float)cfg.deadzone * 0.01f;
@@ -442,6 +798,45 @@ namespace Flickit {
 		const bool hasAngle = mag > 0.001f;
 		const float angle = hasAngle ? AngleDeg(in.rx, in.ry) : 0.0f;
 		const int sector = hasAngle ? Sector(in.rx, in.ry) : DIR_NONE;
+
+		// Stick patterns run on a fixed 60 Hz clock, whatever the frame rate is: the stick position of
+		// this frame is fed once per tick that has passed.
+		const bool usePatterns = cfg.patterns && m_patterns != 0 && m_patterns->Count() > 0;
+		bool matched = false;
+		PatternMatch match;
+		match.index = 0;
+		match.speed = 0.0f;
+		match.ticks = 0;
+		match.error = 0.0f;
+		if (usePatterns) {
+			int ticks = 1;
+			if (m_tickInit) {
+				int32_t elapsed = Since(now, m_tickLast);
+				if (elapsed < 0 || elapsed > 200) {
+					elapsed = 200;
+				}
+				m_tickAccum += (int)elapsed * 3;
+				ticks = m_tickAccum / 50;
+				m_tickAccum -= ticks * 50;
+				if (ticks > 8) {
+					ticks = 8;
+				}
+			}
+			else {
+				m_tickInit = true;
+				m_tickAccum = 0;
+			}
+			m_tickLast = now;
+			// KickflipSide mirrors the stick, so every pattern is mirrored with it
+			const float px = cfg.kickflipSide ? -in.rx : in.rx;
+			for (int i = 0; i < ticks; i++) {
+				PatternMatch m;
+				if (m_matcher.Tick(*m_patterns, px, -in.ry, cfg.missTicks, cfg.nollie != 0, m)) {
+					matched = true;
+					match = m;
+				}
+			}
+		}
 
 		// A new wind-up needs the stick to have been through the center, or out to a side.
 		// That keeps the overshoot of a flick from being read as the next wind-up.
@@ -477,7 +872,31 @@ namespace Flickit {
 			}
 		}
 
-		if (m_phase == PH_TRACK) {
+		if (usePatterns) {
+			if (matched && (m_phase == PH_WINDUP || m_phase == PH_TRACK)) {
+				const Pattern& p = m_patterns->At(match.index);
+				if ((p.nollie != 0) == (m_wind == WIND_NOLLIE)) {
+					if (m_phase == PH_WINDUP) {
+						// The pattern ended inside the wind-up area: this is the pop
+						Pop(now, cfg);
+					}
+					FinalizePattern(p, match, now, cfg, out);
+				}
+			}
+			if (m_phase == PH_TRACK) {
+				if (hasAngle && mag >= engage && InWindupHalf(angle, m_wind, 0.0f)) {
+					// Pulled straight back into the wind-up: that pop had no flick
+					const int wind = m_wind;
+					Finalize(DIR_NONE, now, cfg, out);
+					BeginWindup(wind, sector, now, cfg);
+				}
+				else if (Since(now, m_popTime) >= cfg.flickWindow) {
+					// No pattern was completed in time: a plain ollie
+					Finalize(DIR_NONE, now, cfg, out);
+				}
+			}
+		}
+		else if (m_phase == PH_TRACK) {
 			const bool validEnd = hasAngle && !InWindupHalf(angle, m_wind, 0.0f);
 			const bool opposite = hasAngle && InWindupHalf(angle, 1 - m_wind, 0.0f);
 

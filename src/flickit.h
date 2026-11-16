@@ -15,6 +15,7 @@
 //   after a pop                  -> Grind is held for a while (no grind button)
 
 #include <stdint.h>
+#include <stddef.h>
 
 namespace Flickit {
 
@@ -71,6 +72,10 @@ namespace Flickit {
 		int pulse;            // how long direction + trick button stay down
 		int autoGrindDelay;   // Grind goes down this long after the pop
 		int autoGrindHold;    // and stays down this long
+
+		// Stick patterns (see PatternSet)
+		int patterns;         // 1 = decide tricks from the pattern file when one is loaded
+		int missTicks;        // 60 Hz ticks the stick may spend between two points of a pattern
 	};
 
 	void SetDefaults(Settings& s);
@@ -100,6 +105,94 @@ namespace Flickit {
 		int end;              // sector the flick ended in
 		int slot;             // direction of the trick slot that will be pressed
 		uint32_t elapsed;     // ms between the pop and the decision
+
+		// Set when a stick pattern decided the trick
+		const char* pattern;  // its name, 0 otherwise
+		float speed;          // 0..1: how fast the pattern was drawn
+		int ticks;            // 60 Hz ticks it took
+	};
+
+	// ------------------------------------------------------------------------------------------
+	// Stick patterns
+	//
+	// A pattern is a short list of stick positions that have to be passed in order, each with a
+	// tolerance radius. The text format is the one Skate's own pattern files use, so a player who
+	// owns that game can drop its skater.pat next to thugsdl.ini. No pattern data ships with this mod.
+	//
+	//   global_tolerance_dist 0.4      default tolerance for the patterns that follow
+	//   pattern Kickflip               starts a pattern; the name says which trick it is
+	//       tolerance_dist 0.4         tolerance of this pattern
+	//       coord 0.0 0.7              a point: x (right is positive), y (DOWN is positive), rim = 1.0
+	//       clock 2 1.0                a point by clock face: hour (12 = up, 3 = right, 0 = center), radius
+	//
+	// Other words followed by a number (min_time, global_tolerance_time, ...) are skipped.
+	// ------------------------------------------------------------------------------------------
+
+	enum { MAX_PATTERNS = 128, MAX_PATTERN_POINTS = 8, MAX_PATTERN_NAME = 32 };
+
+	struct Pattern {
+		char name[MAX_PATTERN_NAME];
+		float tolerance;
+		int count;
+		float x[MAX_PATTERN_POINTS];
+		float y[MAX_PATTERN_POINTS];   // down is positive, as in the files
+
+		// What the name asks for
+		int known;    // 0: a name this mod has no trick for (the pattern is not tracked)
+		int slot;     // direction that goes with Flip, DIR_NONE for a plain ollie
+		int taps;     // presses of Flip: 2 for the 360 versions, which THUG does with a second tap
+		int nollie;   // 1 for patterns that start with the stick up (Nollie and the N_ names)
+	};
+
+	class PatternSet {
+	public:
+		PatternSet();
+		void Clear();
+		// Reads pattern text. Returns the number of patterns now in the set.
+		int Parse(const char* text, size_t length);
+		int Count() const { return m_count; }
+		const Pattern& At(int i) const { return m_patterns[i]; }
+
+	private:
+		Pattern m_patterns[MAX_PATTERNS];
+		int m_count;
+	};
+
+	// Fills known / slot / taps / nollie from the pattern's name. Returns p.known.
+	int NamePattern(Pattern& p);
+
+	struct PatternMatch {
+		int index;     // which pattern of the set
+		float speed;   // 1 = drawn fast, 0 = drawn slowly
+		int ticks;
+		float error;   // sum of squared distances to the points that were hit
+	};
+
+	class PatternMatcher {
+	public:
+		PatternMatcher();
+		void Reset();
+		// One 60 Hz tick with the stick at (x, yDown). Returns true when a pattern was completed on
+		// this tick; if several were, the longest wins, then the most accurate and fastest.
+		bool Tick(const PatternSet& set, float x, float yDown, int missTicks, bool nollie, PatternMatch& out);
+
+	private:
+		struct State {
+			unsigned char active;
+			unsigned char next;     // index of the point expected next
+			unsigned char misses;   // ticks in a row away from both the last point and the next one
+			unsigned short ticks;
+			float error;
+		};
+		State m_state[MAX_PATTERNS];
+
+		// A completed pattern waits a tick or two when a longer one has only its last point to go,
+		// so a shuvit drawn along the rim is not cut short by the kickflip that ends in the same place.
+		bool m_pending;
+		PatternMatch m_pendingMatch;
+		float m_pendingRating;
+		int m_pendingPoints;
+		int m_grace;
 	};
 
 	class Recognizer {
@@ -110,6 +203,10 @@ namespace Flickit {
 
 		// True while something is still pending (a held wind-up, a queued press, a grind hold)
 		bool Busy() const;
+
+		// Decide tricks from stick patterns instead of the built-in directions. The set has to outlive
+		// the recognizer; pass 0 to go back to the built-in directions. Survives Reset().
+		void UsePatterns(const PatternSet* set);
 
 	private:
 		enum Phase { PH_IDLE, PH_WINDUP, PH_TRACK };
@@ -128,6 +225,7 @@ namespace Flickit {
 		void BeginWindup(int wind, int sector, uint32_t now, const Settings& cfg);
 		void Pop(uint32_t now, const Settings& cfg);
 		void Finalize(int end, uint32_t now, const Settings& cfg, Output& out);
+		void FinalizePattern(const Pattern& p, const PatternMatch& m, uint32_t now, const Settings& cfg, Output& out);
 		void Enqueue(int button, int dir, uint32_t notBefore);
 		uint32_t AfterPop(const Settings& cfg) const;
 		void RunTaps(uint32_t now, Output& out);
@@ -169,6 +267,13 @@ namespace Flickit {
 		bool m_lastGrind;
 		bool m_lastNollie;
 		bool m_lastGrab;
+
+		// Stick patterns
+		const PatternSet* m_patterns;
+		PatternMatcher m_matcher;
+		uint32_t m_tickLast;
+		int m_tickAccum;      // thirds of a millisecond since the last 60 Hz tick
+		bool m_tickInit;
 	};
 
 	// Helpers, exposed for the tests and for logging

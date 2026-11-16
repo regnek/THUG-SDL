@@ -34,6 +34,13 @@ If something is wrong
   optimizations, which is how the DLLs shipped with THUG-SDL appear to be built.
 - To go back to stock: delete thugsdl.dll and rename thugsdl.dll.bak back.
 
+Skate 3 stick patterns (optional)
+---------------------------------
+If you own Skate 3, copy its skater.pat into the game folder, next to
+thugsdl.ini. Flickit then reads the tricks from that file: each trick is a
+path of stick positions, as in Skate. Without the file nothing changes.
+The 360 tricks come out as the base trick tapped twice.
+
 Settings
 --------
 Flickit works without touching thugsdl.ini. To change something, paste
