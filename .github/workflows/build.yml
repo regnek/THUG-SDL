@@ -1,0 +1,51 @@
+# Builds thugsdl.dll with the same tools the README asks for (MSVC, Win32, vcpkg SDL2),
+# so nobody has to install Visual Studio to try a change. The DLL is attached to the run as an artifact.
+name: Build thugsdl.dll
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Flickit recognizer tests
+        run: |
+          g++ -std=c++11 -Wall -Wextra -I src tests/flickit_test.cpp src/flickit.cpp -o flickit_test
+          ./flickit_test
+
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install SDL2 (x86)
+        run: vcpkg install sdl2:x86-windows
+
+      - name: Configure (Win32, optimization off as the README requires)
+        run: >
+          cmake -S . -B build -A Win32
+          -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
+          -DVCPKG_TARGET_TRIPLET=x86-windows
+          "-DCMAKE_CXX_FLAGS_RELEASE=/MD /Od /DNDEBUG"
+          "-DCMAKE_C_FLAGS_RELEASE=/MD /Od /DNDEBUG"
+
+      - name: Build the DLL
+        run: cmake --build build --config Release --target THUG_SDL
+
+      - name: Collect
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force out | Out-Null
+          Get-ChildItem -Recurse build -Filter thugsdl.dll | Select-Object -First 1 | Copy-Item -Destination out
+          Copy-Item Game/thugsdl.ini out/thugsdl.default.ini
+          Get-ChildItem out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: thugsdl-flickit
+          path: out/
+          if-no-files-found: error
