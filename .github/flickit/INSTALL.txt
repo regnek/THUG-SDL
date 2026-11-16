@@ -1,0 +1,42 @@
+Flickit build of THUG-SDL
+=========================
+
+Skate-style right stick controls for Tony Hawk's Underground (PC).
+Source: the flickit branch of https://github.com/regnek/THUG-SDL
+
+Install
+-------
+1. Stock THUG-SDL has to be installed and starting already
+   (thugsdlpatcher.exe run once, THUG-SDL.exe launches, your controller works).
+2. In the game folder, rename the existing thugsdl.dll to thugsdl.dll.bak
+3. Copy thugsdl.dll from this zip into the game folder.
+4. Start THUG-SDL.exe as usual.
+
+In a level
+----------
+Right stick down           crouch
+Let go, or flick           ollie
+Flick up-right / up-left   kickflip / heelflip
+Drag to the right          pop shove-it
+Triggers                   grabs
+(nothing)                  grinds: land on a rail or ledge after a pop
+Bumpers                    spin + nollie / spin + revert, both = get off the board
+Right stick click          Flickit off / on (for walking and looking around)
+
+The face buttons still work. The full table is in the README, section FLICKIT.
+
+If something is wrong
+---------------------
+- The game crashes or misbehaves in a way stock THUG-SDL did not:
+  try alt-optimized/thugsdl.dll instead. It is the same code built with the
+  compiler's default optimizations, which is how the DLL shipped with THUG-SDL
+  appears to be built. thugsdl.dll at the top of this zip is built without
+  optimization, which is what THUG-SDL's README asks for.
+- To go back to stock: delete thugsdl.dll and rename thugsdl.dll.bak back.
+
+Settings
+--------
+Flickit works without touching thugsdl.ini. To change something, paste
+flickit-ini-section.txt at the end of thugsdl.ini and edit the values.
+F9 in game re-reads the section, no restart needed.
+To see a line for every flick Flickit recognizes, set Console=1 under [Logger].

@@ -1,5 +1,10 @@
-# Builds thugsdl.dll with the same tools the README asks for (MSVC, Win32, vcpkg SDL2),
-# so nobody has to install Visual Studio to try a change. The DLL is attached to the run as an artifact.
+# Builds thugsdl.dll with the tools the README asks for (MSVC, Win32, vcpkg SDL2),
+# so nobody has to install Visual Studio to try a change. The result is attached to the run as an artifact.
+#
+# Two builds of the same code are made:
+#   thugsdl.dll                 optimization off, which is what the README asks for
+#   alt-optimized/thugsdl.dll   CMake's default Release flags. Built that way, the unmodified source comes
+#                               out closest to the DLL shipped in Game/, so this is the fallback.
 name: Build thugsdl.dll
 
 on:
@@ -25,24 +30,39 @@ jobs:
       - name: Install SDL2 (x86)
         run: vcpkg install sdl2:x86-windows
 
-      - name: Configure (Win32, optimization off as the README requires)
+      - name: Configure, optimization off
         run: >
-          cmake -S . -B build -A Win32
+          cmake -S . -B build-O0 -A Win32
           -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
           -DVCPKG_TARGET_TRIPLET=x86-windows
           "-DCMAKE_CXX_FLAGS_RELEASE=/MD /Od /DNDEBUG"
           "-DCMAKE_C_FLAGS_RELEASE=/MD /Od /DNDEBUG"
 
-      - name: Build the DLL
-        run: cmake --build build --config Release --target THUG_SDL
+      - name: Build, optimization off
+        run: cmake --build build-O0 --config Release --target THUG_SDL
+
+      - name: Configure, default Release flags
+        run: >
+          cmake -S . -B build-O2 -A Win32
+          -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
+          -DVCPKG_TARGET_TRIPLET=x86-windows
+
+      - name: Build, default Release flags
+        run: cmake --build build-O2 --config Release --target THUG_SDL
 
       - name: Collect
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force out | Out-Null
-          Get-ChildItem -Recurse build -Filter thugsdl.dll | Select-Object -First 1 | Copy-Item -Destination out
-          Copy-Item Game/thugsdl.ini out/thugsdl.default.ini
-          Get-ChildItem out
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force out, out/alt-optimized | Out-Null
+          Copy-Item (Get-ChildItem -Recurse build-O0 -Filter thugsdl.dll | Select-Object -First 1).FullName out/thugsdl.dll
+          Copy-Item (Get-ChildItem -Recurse build-O2 -Filter thugsdl.dll | Select-Object -First 1).FullName out/alt-optimized/thugsdl.dll
+          Copy-Item .github/flickit/INSTALL.txt out/INSTALL.txt
+          $ini = Get-Content Game/thugsdl.ini
+          $start = [array]::IndexOf($ini, '[Flickit]')
+          if ($start -lt 0) { throw 'no [Flickit] section in Game/thugsdl.ini' }
+          $ini[$start..($ini.Count - 1)] | Set-Content out/flickit-ini-section.txt
+          Get-ChildItem -Recurse out | Format-Table Length, FullName
 
       - uses: actions/upload-artifact@v4
         with:
