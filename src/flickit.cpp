@@ -308,8 +308,11 @@ namespace Flickit {
 				}
 				if (m_count < MAX_PATTERNS) {
 					cur = &m_patterns[m_count++];
-					std::strncpy(cur->name, arg, MAX_PATTERN_NAME - 1);
-					cur->name[MAX_PATTERN_NAME - 1] = '\0';
+					size_t k = 0;
+					for (; k + 1 < (size_t)MAX_PATTERN_NAME && arg[k] != '\0'; k++) {
+						cur->name[k] = arg[k];
+					}
+					cur->name[k] = '\0';
 					cur->tolerance = globalTolerance;
 					cur->count = 0;
 					NamePattern(*cur);
