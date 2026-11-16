@@ -1,0 +1,36 @@
+# Temporary: builds the unmodified upstream source with a few compiler flag sets and prints the DLL's
+# section sizes, to find the set that reproduces the DLL shipped in Game/ (129,024 bytes).
+name: Flags check
+
+on:
+  push:
+    branches: [ci-flags-check]
+
+jobs:
+  sizes:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        flags:
+          - "/MD /Od /DNDEBUG"
+          - "/MD /Od /Ob1 /DNDEBUG"
+          - "/MD /Od /Ob2 /DNDEBUG"
+          - "/MD /O2 /Ob2 /DNDEBUG"
+    steps:
+      - uses: actions/checkout@v4
+      - run: vcpkg install sdl2:x86-windows
+      - name: Configure
+        run: >
+          cmake -S . -B build -A Win32
+          -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
+          -DVCPKG_TARGET_TRIPLET=x86-windows
+          "-DCMAKE_CXX_FLAGS_RELEASE=${{ matrix.flags }}"
+          "-DCMAKE_C_FLAGS_RELEASE=${{ matrix.flags }}"
+      - run: cmake --build build --config Release --target THUG_SDL
+      - name: Sizes
+        shell: pwsh
+        run: |
+          python -m pip install -q pefile
+          $dll = (Get-ChildItem -Recurse build -Filter thugsdl.dll | Select-Object -First 1).FullName
+          python -c "import pefile,sys,os; p=sys.argv[1]; pe=pefile.PE(p); print('FLAGS', sys.argv[2]); print('BUILT', os.path.getsize(p), ' linker %d.%d' % (pe.OPTIONAL_HEADER.MajorLinkerVersion, pe.OPTIONAL_HEADER.MinorLinkerVersion), ' '.join('%s=%d' % (s.Name.rstrip(b'\0').decode(), s.Misc_VirtualSize) for s in pe.sections)); q='Game/thugsdl.dll'; pe2=pefile.PE(q); print('SHIPPED', os.path.getsize(q), ' linker %d.%d' % (pe2.OPTIONAL_HEADER.MajorLinkerVersion, pe2.OPTIONAL_HEADER.MinorLinkerVersion), ' '.join('%s=%d' % (s.Name.rstrip(b'\0').decode(), s.Misc_VirtualSize) for s in pe2.sections))" "$dll" "${{ matrix.flags }}"
