@@ -8,6 +8,7 @@
 #include <config.h>
 #include "keycodes.h"
 #include "flickit.h"
+#include "flickit_game.h"
 #include <QB/LazyStruct.h>
 #include <QB/Qb.h>
 #include <Util/sb.h>
@@ -302,6 +303,19 @@ bool flickitOn[MAX_PLAYERS] = { true, true };            // switched in a level 
 bool flickitToggleDown[MAX_PLAYERS] = { false, false };
 Flickit::PatternSet flickitPatterns;                     // stick patterns from the pattern file, if there is one
 
+// What flickitPoll answers
+enum { FLICKIT_OFF = 0, FLICKIT_ON = 1, FLICKIT_PAUSED = 2 };
+
+// The game's side of the grinds (flickit_game.cpp). Only the first player's skater is looked at.
+bool flickitSeesSkater = false;                          // on this frame the skater's state was read
+bool flickitPaused = false;                              // the skater is off the board and Flickit stands down
+uint32_t flickitGrindSerial = 0;                         // for the log: the last grind the game reported
+int flickitGrindKind = Flickit::GRIND_UNKNOWN;
+bool flickitGrindReady = false;
+uint32_t flickitRailSince = 0;
+bool flickitOnRail = false;
+bool flickitNoReportLogged = false;
+
 // Reads the stick pattern file named in the ini (default: skater.pat) from the folder the ini is in.
 // Without the file, or with Patterns=0, Flickit decides tricks from its built-in directions.
 void loadFlickitPatterns(const char* configFile, int enabled) {
@@ -377,8 +391,28 @@ void loadFlickitSettings() {
 	s.patterns = (int)GetPrivateProfileInt(FLICKIT_SECTION, "Patterns", s.patterns, configFile);
 	s.missTicks = (int)GetPrivateProfileInt(FLICKIT_SECTION, "MissTicks", s.missTicks, configFile);
 
+	s.gameHooks = (int)GetPrivateProfileInt(FLICKIT_SECTION, "GameHooks", s.gameHooks, configFile);
+	s.grindCatch = (int)GetPrivateProfileInt(FLICKIT_SECTION, "GrindCatch", s.grindCatch, configFile);
+	s.grindPick = (int)GetPrivateProfileInt(FLICKIT_SECTION, "GrindPick", s.grindPick, configFile);
+	s.grindSwitch = (int)GetPrivateProfileInt(FLICKIT_SECTION, "GrindSwitch", s.grindSwitch, configFile);
+	s.grindBalance = (int)GetPrivateProfileInt(FLICKIT_SECTION, "GrindBalance", s.grindBalance, configFile);
+	s.grindMirror = (int)GetPrivateProfileInt(FLICKIT_SECTION, "GrindMirror", s.grindMirror, configFile);
+	s.pauseOffBoard = (int)GetPrivateProfileInt(FLICKIT_SECTION, "PauseOffBoard", s.pauseOffBoard, configFile);
+	s.tilt = (int)GetPrivateProfileInt(FLICKIT_SECTION, "Tilt", s.tilt, configFile);
+	s.tiltSettle = (int)GetPrivateProfileInt(FLICKIT_SECTION, "TiltSettle", s.tiltSettle, configFile);
+	s.switchHold = (int)GetPrivateProfileInt(FLICKIT_SECTION, "SwitchHold", s.switchHold, configFile);
+	s.railTap = (int)GetPrivateProfileInt(FLICKIT_SECTION, "RailTap", s.railTap, configFile);
+	s.flickSpeed = (int)GetPrivateProfileInt(FLICKIT_SECTION, "FlickSpeed", s.flickSpeed, configFile);
+
 	Flickit::Sanitize(s);
 	flickitSettings = s;
+
+	// The grinds need three changes in the game's rail code. They go in once and do nothing on
+	// frames where Flickit does not ask for them, so switching the settings off later is enough.
+	bool hooks = false;
+	if (s.enabled && s.gameHooks) {
+		hooks = FlickitGame::Install();
+	}
 
 	loadFlickitPatterns(configFile, s.enabled && s.patterns);
 
@@ -390,17 +424,82 @@ void loadFlickitSettings() {
 	Log::TypedLog(CHN_SDL, "Flickit %s: kickflip side %d, trigger grabs %d, auto grind %d, nollie %d, tricks from %s\n",
 		s.enabled ? "enabled" : "disabled", s.kickflipSide, s.triggerGrabs, s.autoGrind, s.nollie,
 		flickitPatterns.Count() > 0 ? "stick patterns" : "built-in directions");
+	if (s.enabled) {
+		if (hooks) {
+			Log::TypedLog(CHN_SDL, "Flickit grinds: rails catch by themselves %d, the stick picks the grind %d, switches on the rail %d, balance %d, mirrored %d\n",
+				s.grindCatch, s.grindPick, s.grindSwitch, s.grindBalance, s.grindMirror);
+		}
+		else {
+			Log::TypedLog(CHN_SDL, "Flickit grinds: %s, the Grind button is held after a pop instead\n",
+				s.gameHooks ? "the game hooks could not go in" : "game hooks are switched off");
+		}
+	}
+}
+
+static const char* flickitTiltText(const Flickit::Tilt& t, char* buf, size_t size) {
+	static const char* first[] = { "-", "up", "down", "side" };
+	if (!t.valid) {
+		sprintf_s(buf, size, "stick at rest");
+	}
+	else {
+		sprintf_s(buf, size, "stick first %s%s, now %s", first[t.first & 3],
+			t.first == Flickit::TILT_SIDE ? (t.firstLeft ? " (left)" : " (right)") : "", Flickit::DirName(t.cur));
+	}
+	return buf;
+}
+
+// What the game did with the last rail and what its grind script says, for the log
+static void flickitLogGame(const FlickitGame::Skater& sk, uint32_t now) {
+	FlickitGame::Pick pick;
+	if (FlickitGame::TakePick(pick)) {
+		char tilt[64];
+		if (pick.started == pick.grind) {
+			Log::TypedLog(CHN_SDL, "Flickit: rail on the %s, %s: %s%s\n", pick.railOnLeft ? "left" : "right",
+				flickitTiltText(pick.tilt, tilt, sizeof(tilt)), Flickit::GrindName(pick.grind), pick.byName ? " (by script name)" : "");
+		}
+		else {
+			Log::TypedLog(CHN_SDL, "Flickit: rail on the %s, %s: %s, which this game's scripts do not have, so %s\n", pick.railOnLeft ? "left" : "right",
+				flickitTiltText(pick.tilt, tilt, sizeof(tilt)), Flickit::GrindName(pick.grind), Flickit::GrindName(pick.started));
+		}
+	}
+
+	const bool onRail = (sk.state == Flickit::STATE_RAIL);
+	if (onRail && !flickitOnRail) {
+		flickitRailSince = now;
+	}
+	flickitOnRail = onRail;
+	if (!onRail) {
+		return;
+	}
+	if (sk.grindSerial != flickitGrindSerial || sk.grind != flickitGrindKind || sk.grindReady != flickitGrindReady) {
+		if (sk.grind != Flickit::GRIND_UNKNOWN && (sk.grind != flickitGrindKind || sk.grindSerial != flickitGrindSerial)) {
+			Log::TypedLog(CHN_SDL, "Flickit: the game's grind script reports a %s\n",
+				sk.grind == Flickit::GRIND_OTHER ? "grind the stick does not switch from" : Flickit::GrindName(sk.grind));
+		}
+		if (sk.grindReady && !flickitGrindReady) {
+			Log::TypedLog(CHN_SDL, "Flickit: the grind takes switches now\n");
+		}
+		flickitGrindSerial = sk.grindSerial;
+		flickitGrindKind = sk.grind;
+		flickitGrindReady = sk.grindReady;
+	}
+	if (sk.grind == Flickit::GRIND_UNKNOWN && !flickitNoReportLogged && (int32_t)(now - flickitRailSince) > 2000) {
+		// The Grind script calls IsPs2 15 frames in. If that never arrives, another script set is running.
+		flickitNoReportLogged = true;
+		Log::TypedLog(CHN_SDL, "Flickit: two seconds on a rail and no word from the game's grind script. Switching grinds with the stick needs it; everything else works without\n");
+	}
 }
 
 // Reads the camera stick and the triggers and asks the recognizer which buttons to hold on this frame.
-// Returns false when Flickit is not driving this controller right now.
-bool flickitPoll(device* dev, SDL_GameController* controller, Flickit::Output* out) {
+// Answers FLICKIT_ON when Flickit drives this controller on this frame, FLICKIT_PAUSED when it would but
+// the skater is off the board, FLICKIT_OFF otherwise.
+int flickitPoll(device* dev, SDL_GameController* controller, Flickit::Output* out) {
 	if (!flickitSettings.enabled || dev->port >= MAX_PLAYERS) {
-		return false;
+		return FLICKIT_OFF;
 	}
 	const int port = (int)dev->port;
 
-	// On / off switch, for walking, driving and anything else that wants the camera stick back
+	// On / off switch, for anything that wants the camera stick back
 	if (flickitSettings.toggleButton >= 0 && flickitSettings.toggleButton < SDL_CONTROLLER_BUTTON_MAX) {
 		const bool down = SDL_GameControllerGetButton(controller, (SDL_GameControllerButton)flickitSettings.toggleButton) != 0;
 		if (down && !flickitToggleDown[port]) {
@@ -412,7 +511,7 @@ bool flickitPoll(device* dev, SDL_GameController* controller, Flickit::Output* o
 		flickitToggleDown[port] = down;
 	}
 	if (!flickitOn[port]) {
-		return false;
+		return FLICKIT_OFF;
 	}
 
 	const bool leftStick = (padbinds.camera == CONTROLLER_STICK_LEFT);
@@ -424,24 +523,72 @@ bool flickitPoll(device* dev, SDL_GameController* controller, Flickit::Output* o
 	in.leftTrigger = getButton(controller, CONTROLLER_BUTTON_LEFTTRIGGER) != 0;
 	in.rightTrigger = getButton(controller, CONTROLLER_BUTTON_RIGHTTRIGGER) != 0;
 
+	// What the skater is doing, where the game can be asked (the first player's skater only).
+	// Without it the recognizer works from the controller alone, as it did before the grinds.
+	if (port == 0) {
+		FlickitGame::Skater skater;
+		flickitSeesSkater = flickitSettings.gameHooks && FlickitGame::ReadSkater(skater);
+		if (flickitSeesSkater) {
+			const bool paused = flickitSettings.pauseOffBoard && !skater.skating;
+			if (paused != flickitPaused) {
+				flickitPaused = paused;
+				Log::TypedLog(CHN_SDL, paused ? "Flickit: off the board, the stick and the triggers are the game's again\n" : "Flickit: back on the board\n");
+			}
+			if (paused) {
+				return FLICKIT_PAUSED;
+			}
+			in.state = skater.state;
+			in.railCatch = FlickitGame::Installed() && flickitSettings.grindCatch;
+			in.grind = skater.grind;
+			in.grindReady = skater.grindReady;
+			in.grindSerial = skater.grindSerial;
+			if (flickitSettings.debug) {
+				flickitLogGame(skater, in.now);
+			}
+		}
+		else {
+			flickitPaused = false;
+		}
+	}
+
 	flickitRecognizers[port].Update(in, flickitSettings, *out);
 
-	if (flickitSettings.debug && out->gesture != Flickit::GESTURE_NONE) {
+	if (flickitSettings.debug) {
+		const char* where = (out->state == Flickit::STATE_UNKNOWN) ? "" : (out->state == Flickit::STATE_RAIL) ? ", on a rail" : (out->state == Flickit::STATE_AIR) ? ", in the air" : "";
+		if (out->switchTo != Flickit::GRIND_UNKNOWN) {
+			Log::TypedLog(CHN_SDL, "Flickit: on the rail, switching to the %s\n", Flickit::GrindName(out->switchTo));
+		}
 		if (out->gesture == Flickit::GESTURE_GRAB) {
 			Log::TypedLog(CHN_SDL, "Flickit: grab, %s trigger\n", out->slot == Flickit::DIR_L ? "left" : "right");
 		}
-		else if (out->pattern) {
-			Log::TypedLog(CHN_SDL, "Flickit: pattern %s, speed %.2f, %d ticks: %s\n", out->pattern, out->speed, out->ticks,
-				out->gesture == Flickit::GESTURE_FLIP ? Flickit::SlotName(out->slot) : "ollie");
+		else if (out->gesture != Flickit::GESTURE_NONE && out->pattern) {
+			Log::TypedLog(CHN_SDL, "Flickit: pattern %s, speed %.2f, %d ticks: %s%s\n", out->pattern, out->speed, out->ticks,
+				out->gesture == Flickit::GESTURE_FLIP ? Flickit::SlotName(out->slot) : "ollie", where);
 		}
-		else {
-			Log::TypedLog(CHN_SDL, "Flickit: %s %s -> %s after %u ms: %s\n",
+		else if (out->gesture != Flickit::GESTURE_NONE) {
+			Log::TypedLog(CHN_SDL, "Flickit: %s %s -> %s after %u ms: %s%s\n",
 				out->windup == Flickit::WIND_NOLLIE ? "nollie" : "ollie",
 				Flickit::DirName(out->start), Flickit::DirName(out->end), (unsigned int)out->elapsed,
-				out->gesture == Flickit::GESTURE_FLIP ? Flickit::SlotName(out->slot) : "no flip");
+				out->gesture == Flickit::GESTURE_FLIP ? Flickit::SlotName(out->slot) : "no flip", where);
 		}
 	}
-	return true;
+	return FLICKIT_ON;
+}
+
+// Tells the game's rail code what Flickit wants on this frame. Runs after the real buttons are in the pad
+// data and before Flickit's own, so the Grind button seen here is the player's.
+void flickitGameFrame(device* dev) {
+	if (dev->port != 0 || !flickitSeesSkater || !FlickitGame::Installed()) {
+		return;
+	}
+	FlickitGame::Frame frame;
+	frame.catchRails = flickitSettings.grindCatch != 0;
+	frame.pickGrind = flickitSettings.grindPick != 0;
+	frame.noBalance = flickitSettings.grindBalance == 0;
+	frame.mirror = flickitSettings.grindMirror != 0;
+	frame.classicGrind = (dev->controlData[3] & (0x01 << 4)) != 0;
+	frame.tilt = flickitRecognizers[0].GetTilt();
+	FlickitGame::SetFrame(frame);
 }
 
 // Merges what the recognizer asked for into the pad data. Runs after the real buttons, d-pad and sticks.
@@ -565,6 +712,7 @@ bool shouldUseMenuControls() {
 void pollController(device* dev, SDL_GameController* controller) {
 
 	bool flickit = false;			// true on frames where Flickit drives this controller
+	int flickitMode = FLICKIT_OFF;
 	Flickit::Output flickitOut;
 
 	if (SDL_GameControllerGetAttached(controller)) {
@@ -730,7 +878,8 @@ void pollController(device* dev, SDL_GameController* controller) {
 					/*  Gameplay (in level) controls								  */
 					/******************************************************************/
 
-					flickit = flickitPoll(dev, controller, &flickitOut);
+					flickitMode = flickitPoll(dev, controller, &flickitOut);
+					flickit = (flickitMode == FLICKIT_ON);
 
 					// Buttons
 					if (getButton(controller, padbinds.menu)) {
@@ -824,6 +973,13 @@ void pollController(device* dev, SDL_GameController* controller) {
 						if (getButton(controller, padbinds.caveman2)) {
 							dev->controlData[20] |= 0x01 << 0;
 						}
+						// Off the board Flickit stands down and the triggers are the game's again, but
+						// what got the skater off the board gets him back on: both bumpers
+						if (flickitMode == FLICKIT_PAUSED && flickitSettings.triggerGrabs
+							&& SDL_GameControllerGetButton(controller, SDL_CONTROLLER_BUTTON_LEFTSHOULDER)
+							&& SDL_GameControllerGetButton(controller, SDL_CONTROLLER_BUTTON_RIGHTSHOULDER)) {
+							dev->controlData[20] |= 0x01 << 0;
+						}
 					}
 				}
 				// D-Pad
@@ -855,6 +1011,7 @@ void pollController(device* dev, SDL_GameController* controller) {
 
 				// With Flickit the camera stick is the board: it never reaches the game as camera input
 				if (flickit) {
+					flickitGameFrame(dev);
 					flickitApply(dev, flickitOut);
 				}
 			}
@@ -1412,6 +1569,9 @@ void __cdecl processController(device* dev) {
 	if (dev->port == 0) {
 		dev->isValid = 1;
 		dev->isPluggedIn = 1;
+
+		// The game's rail code does nothing for Flickit on this frame unless the controller poll below says so
+		FlickitGame::BeginFrame();
 
 		if (!*keyboard_on_screen) {
 			pollKeyboard(dev);

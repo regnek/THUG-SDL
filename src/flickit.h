@@ -13,6 +13,13 @@
 //   where the flick ends         -> direction + Flip is tapped (flip trick slot)
 //   triggers                     -> direction + Grab (left / right hand)
 //   after a pop                  -> Grind is held for a while (no grind button)
+//
+// When input.cpp can tell it what the skater is doing (flickit_game.cpp), grinds work the way
+// Skate does them, and the timed Grind hold is not used:
+//   in the air the stick leans the board, and the lean at touchdown is the grind (see Tilt)
+//   on a rail the stick at rest switches between 50-50, 5-0 and nosegrind
+//   on a rail only a flick pops; letting the stick go does not
+//   in the air a flick across the stick is a flip, rolling it to a side is not a shove-it
 
 #include <stdint.h>
 #include <stddef.h>
@@ -54,7 +61,7 @@ namespace Flickit {
 		int nollie;           // 1: stick up, then flick down = nollie
 		int nollieTaps;       // presses of the Nollie button needed to get from regular into nollie stance
 		int triggerGrabs;     // 1: left / right trigger = grab
-		int autoGrind;        // 1: hold Grind after every pop
+		int autoGrind;        // 1: hold Grind after every pop (where the game does not catch rails by itself)
 
 		// Stick thresholds, percent of full deflection
 		int deadzone;         // below this the stick counts as centered
@@ -76,10 +83,57 @@ namespace Flickit {
 		// Stick patterns (see PatternSet)
 		int patterns;         // 1 = decide tricks from the pattern file when one is loaded
 		int missTicks;        // 60 Hz ticks the stick may spend between two points of a pattern
+
+		// Grinding the Skate way. These need the game hooks (flickit_game.cpp); without them the
+		// timed Grind hold above is used.
+		int gameHooks;        // 1: the mod may read the skater's state and hook the game's rail code
+		int grindCatch;       // 1: rails catch without the Grind button
+		int grindPick;        // 1: the stick position at touchdown picks the grind
+		int grindSwitch;      // 1: on a rail, stick down / up / centre = 5-0 / nosegrind / 50-50
+		int grindBalance;     // 1: keep the game's balance on rails, 0: the board does not drift
+		int grindMirror;      // 1: swap "toward the rail" and "away from it" when picking the grind
+		int pauseOffBoard;    // 1: Flickit stands down while walking or driving
+		int tilt;             // percent of deflection that counts as tilting the board
+		int tiltSettle;       // ms after take-off before a stick that never re-centred counts as a tilt
+		int switchHold;       // ms the stick has to stay put on a rail before the grind switches
+		int railTap;          // ms Ollie is pressed for the pop out of a grind
+		int flickSpeed;       // on a rail and in the air, where a slow move of the stick is something else:
+		                      // how fast it has to travel to be a flick, percent of full deflection per 100 ms
 	};
 
 	void SetDefaults(Settings& s);
 	void Sanitize(Settings& s);
+
+	// What the skater is doing, when the mod can see it. STATE_UNKNOWN keeps the behaviour of the
+	// versions that only saw the controller.
+	enum SkaterState {
+		STATE_UNKNOWN = -1,
+		STATE_GROUND = 0,
+		STATE_AIR = 1,
+		STATE_WALL = 2,
+		STATE_LIP = 3,
+		STATE_RAIL = 4,
+		STATE_OTHER = 5
+	};
+
+	// Grinds the board tilt can ask for, and the ones the stick switches between on a rail
+	enum Grind {
+		GRIND_UNKNOWN = -1,
+		GRIND_FIFTY = 0,      // nothing asked for: 50-50, or a board / lipslide when the board lands across the rail
+		GRIND_FIVE_O,
+		GRIND_NOSEGRIND,
+		GRIND_CROOKED,
+		GRIND_OVERCROOK,
+		GRIND_FEEBLE,
+		GRIND_SMITH,
+		GRIND_SALAD,
+		GRIND_BOARDLIP,       // boardslide or lipslide, whichever fits the way the skater faces
+		GRIND_TAILSLIDE,
+		GRIND_NOSESLIDE,
+		GRIND_BLUNTSLIDE,
+		GRIND_NOSEBLUNT,
+		GRIND_OTHER           // reported by the game: a grind the stick does not switch away from
+	};
 
 	struct Input {
 		uint32_t now;         // milliseconds, any epoch
@@ -87,6 +141,16 @@ namespace Flickit {
 		float ry;             // right stick, -1..1, + = up
 		bool leftTrigger;
 		bool rightTrigger;
+
+		// From the game, when it can be seen. The defaults are "nothing known".
+		int state;            // SkaterState
+		bool railCatch;       // the game catches rails by itself: no Grind hold from here
+		int grind;            // Grind the skater is in (GRIND_FIFTY, GRIND_FIVE_O, GRIND_NOSEGRIND, GRIND_OTHER or GRIND_UNKNOWN)
+		bool grindReady;      // the game takes a switch to another grind now
+		uint32_t grindSerial; // changes whenever the game starts a grind
+
+		Input() : now(0), rx(0.0f), ry(0.0f), leftTrigger(false), rightTrigger(false),
+			state(STATE_UNKNOWN), railCatch(false), grind(GRIND_UNKNOWN), grindReady(false), grindSerial(0) {}
 	};
 
 	struct Output {
@@ -110,6 +174,80 @@ namespace Flickit {
 		const char* pattern;  // its name, 0 otherwise
 		float speed;          // 0..1: how fast the pattern was drawn
 		int ticks;            // 60 Hz ticks it took
+
+		int state;            // SkaterState the frame was made in
+		int switchTo;         // Grind a switch on the rail was started for on this frame, GRIND_UNKNOWN otherwise
+	};
+
+	// ------------------------------------------------------------------------------------------
+	// Board tilt
+	//
+	// In the air the stick does not press anything: it leans the board, and the lean the board has
+	// when it touches a rail is the grind. As in Skate, two things count: where the stick was pushed
+	// first (up = nose, down = tail, or to a side) and where it is at touchdown.
+	//
+	//   centre                      50-50
+	//   up / down                   nosegrind / 5-0
+	//   up + toward the rail        crooked          up + away          overcrook
+	//   down + away                 salad            (down + toward stays a 5-0)
+	//   to a side                   boardslide or lipslide
+	//   up, rolled toward           noseslide        up, rolled away    nosebluntslide
+	//   down, rolled toward         tailslide        down, rolled away  bluntslide
+	//   toward, rolled up           feeble           away, rolled up    smith
+	//   toward, rolled down         crooked          away, rolled down  overcrook   (Skate: willy / overwilly)
+	// ------------------------------------------------------------------------------------------
+
+	enum TiltClass { TILT_NONE = 0, TILT_UP = 1, TILT_DOWN = 2, TILT_SIDE = 3 };
+
+	struct Tilt {
+		bool valid;           // the stick is held away from the centre, and not as the tail end of a flick
+		int first;            // TiltClass of the first push
+		bool firstLeft;       // the first push went to the left
+		int cur;              // Dir the stick is in now
+	};
+
+	// The grind a tilt asks for. railOnLeft: the rail is to the left of the direction of travel.
+	int GrindFromTilt(const Tilt& t, bool railOnLeft);
+	const char* GrindName(int grind);
+	const char* StateName(int state);
+
+	// How to start a grind in THUG. The game picks its grinds from a table (GrindTrickList in
+	// grindlist.q): one row for each direction the player could hold with the Grind button, and in
+	// each row sixteen entries for the side the rail is on, whether the board lands along the rail,
+	// whether the skater rides backwards and his stance. A grind the tilt asks for is started by
+	// handing the game the row it is in. Three grinds are in no row and are started as scripts by name.
+	struct GrindPlan {
+		int row;              // row of GrindTrickList, -1: start the script named by prefix instead
+		int parallel;         // 1 / 0: tell the game the board lands along / across the rail, -1: as it is
+		const char* prefix;   // script name without its ending, for row == -1
+		int fallback;         // the Grind to start instead if the game has no such script
+	};
+	void PlanGrind(int grind, bool railOnLeft, GrindPlan& plan);
+	// The ending the game gives a grind script's name (Template1 in grindlist.q)
+	const char* GrindSuffix(bool railOnLeft, bool backwards, bool flipped);
+	// The game's checksum of a name: CRC-32 of the lower-cased text, not inverted at the end
+	uint32_t NameChecksum(const char* name);
+
+	class TiltTracker {
+	public:
+		TiltTracker();
+		void Reset();
+		// Once per frame, in every state. A tilt is reported only while airborne.
+		void Update(uint32_t now, float x, float y, bool airborne, const Settings& cfg);
+		// A flick is under way. markNow: where the stick is right now belongs to the flick, it is
+		// no tilt unless it is held. expectEnd: the stick is still on its way to the end of the flick.
+		void Flick(uint32_t now, bool markNow, bool expectEnd);
+		const Tilt& Get() const { return m_tilt; }
+
+	private:
+		Tilt m_tilt;
+		bool m_airborne;
+		bool m_deflected;
+		bool m_clean;         // pushed out from the centre in the air, not left over from a flick or from the ground
+		bool m_latched;       // the first push has been read
+		uint32_t m_since;
+		bool m_expectEnd;
+		uint32_t m_flickAt;
 	};
 
 	// ------------------------------------------------------------------------------------------
@@ -208,10 +346,18 @@ namespace Flickit {
 		// the recognizer; pass 0 to go back to the built-in directions. Survives Reset().
 		void UsePatterns(const PatternSet* set);
 
+		// How the board is leaning right now (airborne only), for the grind pick at touchdown
+		const Tilt& GetTilt() const { return m_tilt.Get(); }
+
 	private:
 		enum Phase { PH_IDLE, PH_WINDUP, PH_TRACK };
 		enum Button { BTN_FLIP, BTN_GRAB };
 		enum { MAX_QUEUE = 4 };
+		// What leaving the wind-up meant: on the ground Ollie was let go (a pop). On a rail and in
+		// the air nothing was pressed yet, and what follows decides.
+		enum Track { TRACK_POP, TRACK_RAIL, TRACK_AIR };
+		enum Zone { ZONE_NONE, ZONE_CENTER, ZONE_DOWN, ZONE_UP };
+		enum SwitchStep { SEQ_IDLE, SEQ_FIRST, SEQ_GAP, SEQ_SECOND };
 
 		struct Pulse {
 			int button;
@@ -222,14 +368,22 @@ namespace Flickit {
 			int frames;
 		};
 
-		void BeginWindup(int wind, int sector, uint32_t now, const Settings& cfg);
-		void Pop(uint32_t now, const Settings& cfg);
-		void Finalize(int end, uint32_t now, const Settings& cfg, Output& out);
-		void FinalizePattern(const Pattern& p, const PatternMatch& m, uint32_t now, const Settings& cfg, Output& out);
+		void BeginWindup(int wind, int sector, const Input& in, const Settings& cfg);
+		void StartNollieTaps(uint32_t now, const Settings& cfg);
+		void BeginTrack(uint32_t now, int track);
+		void LeaveWindup(const Input& in, const Settings& cfg, bool nearCentre);
+		void Popped(uint32_t now, const Settings& cfg);
+		void RailPop(const Input& in, const Settings& cfg);
+		void ArmGrindHold(const Input& in, const Settings& cfg);
+		void Finalize(int end, const Input& in, const Settings& cfg, Output& out);
+		void FinalizePattern(const Pattern& p, const PatternMatch& m, const Input& in, const Settings& cfg, Output& out);
 		void Enqueue(int button, int dir, uint32_t notBefore);
 		uint32_t AfterPop(const Settings& cfg) const;
 		void RunTaps(uint32_t now, Output& out);
 		void RunQueue(const Input& in, const Settings& cfg, Output& out);
+		void RunRailSwitch(const Input& in, const Settings& cfg, float mag, int sector, Output& out);
+		void NoteSpeed(const Input& in, const Settings& cfg);
+		bool WasFast(const Settings& cfg) const;
 
 		int m_phase;
 		int m_wind;
@@ -237,10 +391,32 @@ namespace Flickit {
 		int m_start;
 		int m_cur;
 		uint32_t m_curSince;
-		uint32_t m_popTime;
+		uint32_t m_popTime;       // when Ollie was let go
+		uint32_t m_trackStart;    // when the stick left the wind-up
 		bool m_hasPopped;
 		int m_cand;
 		uint32_t m_candSince;
+
+		// Wind-ups in the air and on a rail do not hold Ollie
+		bool m_holdOllie;
+		int m_track;
+		// The pop out of a grind: a short press of Ollie
+		bool m_railTap;
+		uint32_t m_railTapStart;
+		int m_railTapFrames;
+
+		int m_lastState;
+		uint32_t m_airSince;
+
+		// The last moments of the stick, to tell a flick from a slow move
+		enum { HISTORY = 64 };
+		uint32_t m_histTime[HISTORY];
+		float m_histX[HISTORY];
+		float m_histY[HISTORY];
+		int m_histCount;
+		int m_histNext;
+		bool m_hasFast;
+		uint32_t m_lastFast;      // the last frame the stick was moving at flick speed
 
 		int m_tapsLeft;
 		bool m_tapDown;
@@ -274,6 +450,22 @@ namespace Flickit {
 		uint32_t m_tickLast;
 		int m_tickAccum;      // thirds of a millisecond since the last 60 Hz tick
 		bool m_tickInit;
+
+		// Board tilt in the air
+		TiltTracker m_tilt;
+
+		// Switching between 50-50, 5-0 and nosegrind on a rail
+		int m_zone;
+		uint32_t m_zoneSince;
+		bool m_railStick;         // the stick has had a say in this grind
+		int m_seqStep;
+		int m_seqTarget;
+		uint32_t m_seqStepStart;
+		int m_seqFrames;
+		bool m_switchWait;        // a switch was sent: wait for the game to start the new grind
+		uint32_t m_switchSerial;
+		uint32_t m_switchSent;
+		int m_switchWaitFrames;
 	};
 
 	// Helpers, exposed for the tests and for logging

@@ -1,4 +1,5 @@
 #include "script.h"
+#include "flickit_game.h"
 
 /*
 ADDING SCRIPTS FROM FILES
@@ -150,8 +151,13 @@ RemoveScripts_NativeCall* RemoveScripts_Native = (RemoveScripts_NativeCall*)(0x0
 bool IsPS2_Patched(void* pParams, DummyScript* pScript) {
 
 	if (pScript) {
-		if (pScript->mScriptNameChecksum == 0x255ED86F /*grind*/ || 
-			pScript->mScriptNameChecksum == 0x6AEC78DA /*check_for_neversoft_skaters*/ ||
+		if (pScript->mScriptNameChecksum == 0x255ED86F /*grind*/) {
+			// The Grind script asks this twice in the life of a grind. Flickit takes its cue from the
+			// second time: from then on the grind can be switched to another one (see flickit_game.cpp).
+			FlickitGame::OnGrindScript(pScript);
+			return true;
+		}
+		if (pScript->mScriptNameChecksum == 0x6AEC78DA /*check_for_neversoft_skaters*/ ||
 			(mSettings.isPs2Controls && pScript->mScriptNameChecksum == 0x9DB065AD /*parked_set_helper_text_mode*/))
 			return true;
 	}

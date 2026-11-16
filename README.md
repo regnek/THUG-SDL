@@ -111,11 +111,40 @@ Flickit puts the board on the right stick, the way the Skate games do. It sits i
 | Down-right, flick up | Hardflip (UpLeft + Flip) |
 | Down-left, flick up | Inward Heelflip (UpRight + Flip) |
 | Left trigger / right trigger | Grab with that hand (Left + Grab / Right + Grab), held as long as the trigger is |
-| Nothing | Grind: after every pop the Grind button is held for a moment, so landing on a rail or ledge grinds it |
+| Nothing | Grind: rails and ledges catch the board by themselves, and the right stick says which grind it is (see Grinds below) |
 | Left bumper / right bumper | Spin left + nollie / spin right + revert and switch, both together: caveman |
-| Right stick click | Flickit on / off, for walking, driving or looking around |
+| Right stick click | Flickit on / off, for looking around. On foot and in a car it stands down by itself |
 
 The tricks named above are the default trick slots. Flickit presses the slot, so whatever is assigned to it in the Edit Tricks menu is what comes out. Manuals are unchanged (up, down on the movement stick).
+
+### Grinds
+There is no grind button to hold: a rail or ledge under the board catches it. Which grind it is depends on how the board leans when it touches down, and in the air the board is leaned with the right stick, the way Skate does it. Two things count: where the stick was pushed first, and where it is at touchdown. "Toward" is the side the rail is on.
+
+| Right stick in the air | Grind |
+| --- | --- |
+| At rest | 50-50, or a boardslide / lipslide if the board lands across the rail |
+| Up / down | Nosegrind / 5-0 |
+| Up and toward the rail / up and away from it | Crooked / Overcrook |
+| Down and away from the rail | Salad (down and toward stays a 5-0) |
+| To a side | Boardslide or lipslide, whichever fits the way the skater faces |
+| Up, then rolled toward the rail / away from it | Noseslide / Nosebluntslide |
+| Down, then rolled toward the rail / away from it | Tailslide / Bluntslide |
+| Toward the rail, then rolled up / away, then rolled up | Feeble / Smith |
+| Toward the rail, then rolled down / away, then rolled down | Crooked / Overcrook (Skate has the willy and the overwilly here, which THUG does not know) |
+
+On the rail:
+- Stick down is the 5-0, up the nosegrind, let go the 50-50. The game takes such a switch once a grind has settled, about three quarters of a second in. Only these three switch; any other grind stays what it is.
+- A flick pops off the rail, with the flip the flick asks for. Letting the stick go does not pop. A flick is a fast move: taking the stick from one end to the other slowly switches the grind instead.
+- The right bumper drops off the rail (THUG SDL's drop-down key).
+- The board does not drift off balance. `GrindBalance=1` gives the balance meter its job back.
+
+In the air a flick across the stick is still a flip trick. Rolling the stick round to a side leans the board; it is a shove-it only when the roll starts on the ground or on a rail.
+
+The Grind button itself works as it always did. While it is held the game picks the grind from the direction buttons, and lip tricks and wallrides stay on it. Coming out of a ramp nothing is caught without it, so the coping is left alone.
+
+Off the board Flickit stands down: the right stick is the camera again and the triggers are the game's. Both bumpers get the skater back on, as they got him off.
+
+For all this the mod looks at the skater's state and changes three places in the game's rail code: the test for the Grind button before a rail is caught, the pick of the grind, and the balance of a grind. The code at every address it uses is compared with what is expected there first. If anything differs nothing is touched and grinds work as in earlier versions, with the Grind button held for a moment after each pop. `GameHooks=0` does the same on purpose. All of it applies to the first player's skater.
 
 The settings live in the `[Flickit]` section of `thugsdl.ini`. Thresholds are percent of full stick deflection, times are milliseconds. Press F9 in game to re-read the section without restarting.
 
@@ -124,7 +153,7 @@ The settings live in the `[Flickit]` section of `thugsdl.ini`. Thresholds are pe
 | Enabled | 1 | Master switch |
 | KickflipSide | 0 | 0: kickflip is the flick to the upper right. 1: mirror every flick left / right |
 | TriggerGrabs | 1 | Triggers grab, bumpers take over nollie / revert / caveman. 0 leaves triggers and bumpers as bound |
-| AutoGrind | 1 | Hold Grind after every pop |
+| AutoGrind | 1 | Hold Grind after every pop. Only where rails do not catch by themselves (`GameHooks=0` or `GrindCatch=0`) |
 | AutoGrindDelay, AutoGrindHold | 200, 1500 | When the hold starts after the pop and how long it lasts |
 | Nollie, NollieTaps | 0, 2 | Experimental: stick up, flick down = nollie. NollieTaps is how many Nollie presses reach nollie stance |
 | ToggleButton | 8 | SDL button for on / off (8 = right stick click, 99 = none) |
@@ -140,6 +169,18 @@ The settings live in the `[Flickit]` section of `thugsdl.ini`. Thresholds are pe
 | Patterns | 1 | Decide tricks from a stick pattern file when one is found (see below). 0: always use the built-in directions |
 | PatternFile | skater.pat | Name of the pattern file, looked for in the folder `thugsdl.ini` is in |
 | MissTicks | 10 | How many 60 Hz ticks the stick may spend between two points of a pattern before the pattern is dropped |
+| GameHooks | 1 | The mod may read the skater's state and change the game's rail code (see Grinds). 0: none of the settings below do anything |
+| GrindCatch | 1 | Rails catch without the Grind button |
+| GrindPick | 1 | The lean of the board picks the grind. 0: the game's direction buttons do |
+| GrindSwitch | 1 | On a rail, stick down / up / let go switches between 5-0, nosegrind and 50-50 |
+| GrindBalance | 0 | 0: the board does not drift on a rail. 1: the game's balance |
+| GrindMirror | 0 | 1: swap "toward the rail" and "away from it", in case the grinds come out mirrored |
+| PauseOffBoard | 1 | Flickit stands down on foot and in a car |
+| Tilt | 50 | How far the stick has to be pushed to lean the board, and to ask for a switch on a rail |
+| TiltSettle | 150 | A stick that is still where a flick ended leans the board only after this long |
+| SwitchHold | 250 | How long the stick has to rest on a rail before the grind switches |
+| RailTap | 50 | How long Ollie is pressed for the pop off a rail. Longer pops higher, up to about 200 |
+| FlickSpeed | 100 | On a rail and in the air, how fast the stick has to travel to be a flick: percent of full deflection per 100 ms. 0: any speed |
 
 ### Stick patterns
 Out of the box Flickit sorts a flick by where it starts and ends, in eight directions (the table above). If a pattern file is present, it uses that instead: each trick is then a short list of stick positions that have to be passed in order, each with a tolerance radius. This is how the Skate games define their gestures, and the file format is theirs, so if you own Skate 3 you can copy its `skater.pat` next to `thugsdl.ini` and flick the tricks the way that game expects them. No pattern file comes with THUG SDL; without one nothing changes.
@@ -155,15 +196,16 @@ pattern Kickflip                 the name says which trick it is
 - A pattern starts when the stick is within tolerance of its first point and is complete when the last point is reached. Time spent resting on the first point does not count.
 - If several patterns are complete at once the one with the most points wins, then the most accurate and fastest. A complete pattern waits up to two ticks for a longer one that has only its last point to go.
 - Names: `Ollie`, `Kickflip`, `Heelflip`, `PopShuvit`, `FSPopShuvit`, `VarialKickflip`, `VarialHeelflip`, `Hardflip`, `InwardHeelflip` press the slots of the table above. `360PopShuvit`, `FS360PopShuvit`, `360Flip`, `Laserflip`, `360Hardflip` and `360InwardHeelflip` press the slot of their base trick twice, which is how THUG turns a Varial Kickflip into a 360 Flip. `Nollie` and names starting with `N_` are followed only with `Nollie=1`. Other names are ignored.
-- The crouch and the pop work as before: the stick in the lower half crouches, leaving it pops, and a pop without a completed pattern is a plain ollie.
+- The crouch and the pop work as before: the stick in the lower half crouches, leaving it pops, and a pop without a completed pattern is a plain ollie. On a rail and in the air nothing is held, so there only a completed pattern counts, and on a rail the patterns that start at the top count too.
 - With `Debug=1` the log shows the pattern that was recognized and how fast it was drawn (speed 1 = fast, 0 = slow; measured, not used yet).
 
 The recognizer has offline tests that need neither the game nor Windows:
 ```
 g++ -std=c++11 -I src tests/flickit_test.cpp src/flickit.cpp -o flickit_test && ./flickit_test
 g++ -std=c++11 -I src tests/flickit_pattern_test.cpp src/flickit.cpp -o flickit_pattern_test && ./flickit_pattern_test
+g++ -std=c++11 -I src tests/flickit_grind_test.cpp src/flickit.cpp -o flickit_grind_test && ./flickit_grind_test
 ```
-The second one also takes a pattern file: `./flickit_pattern_test skater.pat` draws every pattern in it and reports what was recognized.
+The second one also takes a pattern file: `./flickit_pattern_test skater.pat` draws every pattern in it and reports what was recognized. The third one is run from the top of the repository: it checks the grinds the mod asks the game for against the game's own grind table in `scripts/qb/source/scripts/game/skater/grindlist.q`.
 
 ## TROUBLESHOOTING
 

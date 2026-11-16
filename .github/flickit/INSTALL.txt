@@ -19,11 +19,36 @@ Let go, or flick           ollie
 Flick up-right / up-left   kickflip / heelflip
 Drag to the right          pop shove-it
 Triggers                   grabs
-(nothing)                  grinds: land on a rail or ledge after a pop
 Bumpers                    spin + nollie / spin + revert, both = get off the board
-Right stick click          Flickit off / on (for walking and looking around)
+Right stick click          Flickit off / on (for looking around)
 
 The face buttons still work. The full table is in the README, section FLICKIT.
+
+Grinds
+------
+Rails and ledges catch the board without a button. In the air the right stick
+leans the board, and the lean at touchdown is the grind ("toward" = the side
+the rail is on):
+
+  stick at rest          50-50
+  up / down              nosegrind / 5-0
+  up + toward            crooked            up + away          overcrook
+  down + away            salad
+  to a side              boardslide or lipslide
+  up, rolled toward      noseslide          up, rolled away    nosebluntslide
+  down, rolled toward    tailslide          down, rolled away  bluntslide
+  toward, rolled up      feeble             away, rolled up    smith
+
+On the rail: stick down = 5-0, up = nosegrind, let go = 50-50 (the game takes
+the switch about three quarters of a second into a grind). A flick pops off;
+letting go does not. Right bumper = drop off the rail. No balancing.
+
+On foot and in a car Flickit switches itself off. Both bumpers get the skater
+back on the board.
+
+A first check: with a rail on the skater's left, hold the stick up-left as the
+board touches down. That should be a crooked grind. If it comes out as an
+overcrook the sides are mirrored: set GrindMirror=1 (see Settings).
 
 If something is wrong
 ---------------------
@@ -32,6 +57,10 @@ If something is wrong
   compiler optimization off, which is what THUG-SDL's README asks for.
   thugsdl.dll at the top of this zip is built with the compiler's default
   optimizations, which is how the DLLs shipped with THUG-SDL appear to be built.
+- Grinds misbehave: put GameHooks=0 under [Flickit] in thugsdl.ini and press
+  F9 in game. The mod then leaves the game's rail code alone and grinds work
+  as in the build before this one (Grind held for a moment after each pop).
+  GrindCatch, GrindPick, GrindSwitch and GrindBalance switch the parts one by one.
 - To go back to stock: delete thugsdl.dll and rename thugsdl.dll.bak back.
 
 Skate 3 stick patterns (optional)
@@ -47,3 +76,5 @@ Flickit works without touching thugsdl.ini. To change something, paste
 flickit-ini-section.txt at the end of thugsdl.ini and edit the values.
 F9 in game re-reads the section, no restart needed.
 To see a line for every flick Flickit recognizes, set Console=1 under [Logger].
+For grinds the log also says which side the rail was on, where the stick was
+and which grind that made, and what the game's grind script reports.

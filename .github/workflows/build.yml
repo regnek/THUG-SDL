@@ -24,6 +24,8 @@ jobs:
           ./flickit_test
           g++ -std=c++11 -Wall -Wextra -I src tests/flickit_pattern_test.cpp src/flickit.cpp -o flickit_pattern_test
           ./flickit_pattern_test
+          g++ -std=c++11 -Wall -Wextra -I src tests/flickit_grind_test.cpp src/flickit.cpp -o flickit_grind_test
+          ./flickit_grind_test scripts/qb/source/scripts/game/skater
 
   build:
     runs-on: windows-latest

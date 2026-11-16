@@ -13,6 +13,25 @@ namespace Flickit {
 	// Minimum press and gap of one Nollie button tap
 	static const int kTapMs = 30;
 
+	// A clean push of the stick in the air is read this long after it left the centre, when it has
+	// arrived where it was going
+	static const int kFirstPushMs = 40;
+
+	// A crouch that is carried off the ground lets go of Ollie after this long in the air. The game
+	// still jumps for a third of a second after the ground is gone (Skater_Late_Jump_Slop), so the
+	// button is released only once that has passed and the release does nothing.
+	static const int kAirReleaseMs = 450;
+
+	// Switching grinds on a rail: press and gap of the two buttons, and how long the game gets to
+	// start the new grind before the switch may be sent again
+	static const int kSwitchTapMs = 30;
+	static const int kSwitchGapMs = 15;
+	static const int kSwitchWaitMs = 600;
+	static const int kSwitchWaitFrames = 24;
+
+	// The speed of the stick is its travel over about this long
+	static const int kSpeedWindowMs = 60;
+
 	static inline int32_t Since(uint32_t now, uint32_t then) {
 		return (int32_t)(now - then);
 	}
@@ -50,6 +69,19 @@ namespace Flickit {
 
 		s.patterns = 1;
 		s.missTicks = 10;
+
+		s.gameHooks = 1;
+		s.grindCatch = 1;
+		s.grindPick = 1;
+		s.grindSwitch = 1;
+		s.grindBalance = 0;
+		s.grindMirror = 0;
+		s.pauseOffBoard = 1;
+		s.tilt = 50;
+		s.tiltSettle = 150;
+		s.switchHold = 250;
+		s.railTap = 50;
+		s.flickSpeed = 100;
 	}
 
 	void Sanitize(Settings& s) {
@@ -78,6 +110,19 @@ namespace Flickit {
 
 		s.patterns = s.patterns ? 1 : 0;
 		s.missTicks = Clamp(s.missTicks, 1, 60);
+
+		s.gameHooks = s.gameHooks ? 1 : 0;
+		s.grindCatch = s.grindCatch ? 1 : 0;
+		s.grindPick = s.grindPick ? 1 : 0;
+		s.grindSwitch = s.grindSwitch ? 1 : 0;
+		s.grindBalance = s.grindBalance ? 1 : 0;
+		s.grindMirror = s.grindMirror ? 1 : 0;
+		s.pauseOffBoard = s.pauseOffBoard ? 1 : 0;
+		s.tilt = Clamp(s.tilt, s.deadzone + 5, 95);
+		s.tiltSettle = Clamp(s.tiltSettle, 0, 1000);
+		s.switchHold = Clamp(s.switchHold, 50, 2000);
+		s.railTap = Clamp(s.railTap, 10, 300);
+		s.flickSpeed = Clamp(s.flickSpeed, 0, 1000);
 	}
 
 	float AngleDeg(float x, float y) {
@@ -522,6 +567,302 @@ namespace Flickit {
 		return true;
 	}
 
+	// ------------------------------------------------------------------------------------------
+	// Board tilt
+	// ------------------------------------------------------------------------------------------
+
+	static int TiltClassOf(int dir) {
+		switch (dir) {
+		case DIR_U:
+		case DIR_UL:
+		case DIR_UR:
+			return TILT_UP;
+		case DIR_D:
+		case DIR_DL:
+		case DIR_DR:
+			return TILT_DOWN;
+		case DIR_L:
+		case DIR_R:
+			return TILT_SIDE;
+		default:
+			return TILT_NONE;
+		}
+	}
+
+	int GrindFromTilt(const Tilt& t, bool railOnLeft) {
+		if (!t.valid || t.cur == DIR_NONE || t.first == TILT_NONE) {
+			return GRIND_FIFTY;
+		}
+		const bool left = (t.cur == DIR_L || t.cur == DIR_UL || t.cur == DIR_DL);
+		const bool up = (t.cur == DIR_U);
+		const bool down = (t.cur == DIR_D);
+		const bool upDiag = (t.cur == DIR_UL || t.cur == DIR_UR);
+		const bool downDiag = (t.cur == DIR_DL || t.cur == DIR_DR);
+		const bool side = (t.cur == DIR_L || t.cur == DIR_R);
+		// Only read where the stick is off the vertical
+		const bool toward = (left == railOnLeft);
+		const bool firstToward = (t.firstLeft == railOnLeft);
+
+		switch (t.first) {
+		case TILT_UP:
+			if (up) {
+				return GRIND_NOSEGRIND;
+			}
+			if (upDiag) {
+				return toward ? GRIND_CROOKED : GRIND_OVERCROOK;
+			}
+			if (side || downDiag) {
+				return toward ? GRIND_NOSESLIDE : GRIND_NOSEBLUNT;
+			}
+			return GRIND_FIVE_O;      // rolled all the way round
+		case TILT_DOWN:
+			if (down) {
+				return GRIND_FIVE_O;
+			}
+			if (downDiag) {
+				return toward ? GRIND_FIVE_O : GRIND_SALAD;
+			}
+			if (side || upDiag) {
+				return toward ? GRIND_TAILSLIDE : GRIND_BLUNTSLIDE;
+			}
+			return GRIND_NOSEGRIND;
+		default:
+			if (side) {
+				return GRIND_BOARDLIP;
+			}
+			if (up || upDiag) {
+				return firstToward ? GRIND_FEEBLE : GRIND_SMITH;
+			}
+			// Skate has the willy and the overwilly here, which THUG does not know
+			return firstToward ? GRIND_CROOKED : GRIND_OVERCROOK;
+		}
+	}
+
+	const char* GrindName(int grind) {
+		switch (grind) {
+		case GRIND_FIFTY: return "50-50";
+		case GRIND_FIVE_O: return "5-0";
+		case GRIND_NOSEGRIND: return "nosegrind";
+		case GRIND_CROOKED: return "crooked";
+		case GRIND_OVERCROOK: return "overcrook";
+		case GRIND_FEEBLE: return "feeble";
+		case GRIND_SMITH: return "smith";
+		case GRIND_SALAD: return "salad";
+		case GRIND_BOARDLIP: return "boardslide / lipslide";
+		case GRIND_TAILSLIDE: return "tailslide";
+		case GRIND_NOSESLIDE: return "noseslide";
+		case GRIND_BLUNTSLIDE: return "bluntslide";
+		case GRIND_NOSEBLUNT: return "nosebluntslide";
+		case GRIND_OTHER: return "other";
+		default: return "unknown";
+		}
+	}
+
+	const char* StateName(int state) {
+		switch (state) {
+		case STATE_GROUND: return "ground";
+		case STATE_AIR: return "air";
+		case STATE_WALL: return "wall";
+		case STATE_LIP: return "lip";
+		case STATE_RAIL: return "rail";
+		case STATE_OTHER: return "other";
+		default: return "unknown";
+		}
+	}
+
+	void PlanGrind(int grind, bool railOnLeft, GrindPlan& plan) {
+		plan.row = 0;
+		plan.parallel = -1;
+		plan.prefix = 0;
+		plan.fallback = GRIND_FIFTY;
+
+		switch (grind) {
+		case GRIND_NOSEGRIND:
+			plan.row = 1;             // Up
+			break;
+		case GRIND_FIVE_O:
+			plan.row = 2;             // Down
+			break;
+		// Left and Right are noseslide and tailslide, but only for a board that lands along the rail
+		case GRIND_TAILSLIDE:
+			plan.row = railOnLeft ? 4 : 3;
+			plan.parallel = 1;
+			break;
+		case GRIND_NOSESLIDE:
+			plan.row = railOnLeft ? 3 : 4;
+			plan.parallel = 1;
+			break;
+		// Up + Left / Up + Right: crooked toward the rail, overcrook away from it
+		case GRIND_CROOKED:
+			plan.row = railOnLeft ? 5 : 6;
+			break;
+		case GRIND_OVERCROOK:
+			plan.row = railOnLeft ? 6 : 5;
+			break;
+		// Down + Left / Down + Right: feeble toward the rail, smith away from it
+		case GRIND_FEEBLE:
+			plan.row = railOnLeft ? 7 : 8;
+			break;
+		case GRIND_SMITH:
+			plan.row = railOnLeft ? 8 : 7;
+			break;
+		// No direction, and a board that lands across the rail: boardslide or lipslide
+		case GRIND_BOARDLIP:
+			plan.row = 0;
+			plan.parallel = 0;
+			break;
+		case GRIND_BLUNTSLIDE:
+			plan.row = -1;
+			plan.prefix = "Trick_Bluntslide";
+			plan.fallback = GRIND_TAILSLIDE;
+			break;
+		case GRIND_NOSEBLUNT:
+			plan.row = -1;
+			plan.prefix = "Trick_Nosebluntslide";
+			plan.fallback = GRIND_NOSESLIDE;
+			break;
+		case GRIND_SALAD:
+			plan.row = -1;
+			plan.prefix = "Trick_Salad";
+			plan.fallback = GRIND_FIVE_O;
+			break;
+		default:
+			// GRIND_FIFTY: no direction, and the landing as the game found it
+			break;
+		}
+	}
+
+	const char* GrindSuffix(bool railOnLeft, bool backwards, bool flipped) {
+		const bool frontside = (railOnLeft != flipped);
+		if (backwards) {
+			return frontside ? "_FS_180" : "_BS_180";
+		}
+		return frontside ? "_FS" : "_BS";
+	}
+
+	uint32_t NameChecksum(const char* name) {
+		uint32_t crc = 0xFFFFFFFFu;
+		for (const unsigned char* p = (const unsigned char*)name; *p; p++) {
+			unsigned char c = *p;
+			if (c >= 'A' && c <= 'Z') {
+				c = (unsigned char)(c - 'A' + 'a');
+			}
+			crc ^= c;
+			for (int bit = 0; bit < 8; bit++) {
+				crc = (crc >> 1) ^ (0xEDB88320u & (0u - (crc & 1u)));
+			}
+		}
+		return crc;
+	}
+
+	TiltTracker::TiltTracker() {
+		m_expectEnd = false;
+		m_flickAt = 0;
+		Reset();
+	}
+
+	void TiltTracker::Reset() {
+		m_expectEnd = false;
+		m_airborne = false;
+		m_deflected = false;
+		m_clean = false;
+		m_latched = false;
+		m_since = 0;
+		m_tilt.valid = false;
+		m_tilt.first = TILT_NONE;
+		m_tilt.firstLeft = false;
+		m_tilt.cur = DIR_NONE;
+	}
+
+	void TiltTracker::Flick(uint32_t now, bool markNow, bool expectEnd) {
+		if (markNow && m_deflected) {
+			m_clean = false;
+			m_latched = false;
+			m_since = now;
+			m_tilt.valid = false;
+			m_tilt.first = TILT_NONE;
+		}
+		m_expectEnd = expectEnd;
+		m_flickAt = now;
+	}
+
+	void TiltTracker::Update(uint32_t now, float x, float y, bool airborne, const Settings& cfg) {
+		const bool tookOff = airborne && !m_airborne;
+		m_airborne = airborne;
+
+		const float high = (float)cfg.tilt * 0.01f;
+		float low = high - 0.15f;
+		const float dead = (float)cfg.deadzone * 0.01f;
+		if (low < dead) {
+			low = dead;
+		}
+		const float mag = std::sqrt(x * x + y * y);
+
+		// The stick is followed in every state, so that a push can be told from what is left of a
+		// flick or of a crouch
+		if (!m_deflected) {
+			if (mag >= high) {
+				m_deflected = true;
+				m_latched = false;
+				m_since = now;
+				// The first push after a flick left the wind-up is where that flick ends
+				const bool flickEnd = m_expectEnd && Since(now, m_flickAt) < cfg.flickWindow + 100;
+				m_expectEnd = false;
+				m_clean = airborne && !flickEnd;
+			}
+		}
+		else if (mag < low) {
+			m_deflected = false;
+		}
+
+		if (m_deflected && tookOff) {
+			// Held since before the board left the ground or the rail
+			m_clean = false;
+			m_latched = false;
+			m_since = now;
+		}
+
+		if (!m_deflected || !airborne) {
+			m_tilt.valid = false;
+			m_tilt.first = TILT_NONE;
+			m_tilt.cur = DIR_NONE;
+			return;
+		}
+
+		const int sector = Sector(x, y);
+		const int32_t held = Since(now, m_since);
+		m_tilt.cur = sector;
+
+		if (m_clean) {
+			// A push is read a moment after the stick left the centre, when it has arrived
+			if (!m_latched) {
+				m_tilt.first = TiltClassOf(sector);
+				m_tilt.firstLeft = x < 0.0f;
+				if (held >= kFirstPushMs) {
+					m_latched = true;
+				}
+			}
+			m_tilt.valid = true;
+		}
+		else if (held >= cfg.tiltSettle) {
+			// Anything else has to be held to count, and counts as pushed where it is held
+			if (!m_latched) {
+				m_tilt.first = TiltClassOf(sector);
+				m_tilt.firstLeft = x < 0.0f;
+				m_latched = true;
+			}
+			m_tilt.valid = true;
+		}
+		else {
+			m_tilt.valid = false;
+			m_tilt.first = TILT_NONE;
+		}
+	}
+
+	// ------------------------------------------------------------------------------------------
+	// Recognizer
+	// ------------------------------------------------------------------------------------------
+
 	Recognizer::Recognizer() {
 		m_patterns = 0;
 		Reset();
@@ -541,9 +882,24 @@ namespace Flickit {
 		m_cur = DIR_NONE;
 		m_curSince = 0;
 		m_popTime = 0;
+		m_trackStart = 0;
 		m_hasPopped = false;
 		m_cand = DIR_NONE;
 		m_candSince = 0;
+
+		m_holdOllie = true;
+		m_track = TRACK_POP;
+		m_railTap = false;
+		m_railTapStart = 0;
+		m_railTapFrames = 0;
+
+		m_lastState = STATE_UNKNOWN;
+		m_airSince = 0;
+
+		m_histCount = 0;
+		m_histNext = 0;
+		m_hasFast = false;
+		m_lastFast = 0;
 
 		m_tapsLeft = 0;
 		m_tapDown = false;
@@ -571,23 +927,28 @@ namespace Flickit {
 		m_tickLast = 0;
 		m_tickAccum = 0;
 		m_tickInit = false;
+
+		m_tilt.Reset();
+
+		m_zone = ZONE_NONE;
+		m_zoneSince = 0;
+		m_railStick = false;
+		m_seqStep = SEQ_IDLE;
+		m_seqTarget = GRIND_UNKNOWN;
+		m_seqStepStart = 0;
+		m_seqFrames = 0;
+		m_switchWait = false;
+		m_switchSerial = 0;
+		m_switchSent = 0;
+		m_switchWaitFrames = 0;
 	}
 
 	bool Recognizer::Busy() const {
-		return m_phase != PH_IDLE || m_queued > 0 || m_grabHeld || m_grindPending || m_tapsLeft > 0;
+		return m_phase != PH_IDLE || m_queued > 0 || m_grabHeld || m_grindPending || m_tapsLeft > 0 || m_railTap || m_seqStep != SEQ_IDLE;
 	}
 
-	void Recognizer::BeginWindup(int wind, int sector, uint32_t now, const Settings& cfg) {
-		m_phase = PH_WINDUP;
-		m_wind = wind;
-		m_start = sector;
-		m_cur = sector;
-		m_curSince = now;
-
-		// Crouching again ends the grind hold of the previous pop
-		m_grindPending = false;
-
-		if (wind == WIND_NOLLIE) {
+	void Recognizer::StartNollieTaps(uint32_t now, const Settings& cfg) {
+		if (m_wind == WIND_NOLLIE && cfg.nollie) {
 			m_tapsLeft = cfg.nollieTaps;
 			m_tapDown = true;
 			m_tapStageStart = now;
@@ -598,21 +959,52 @@ namespace Flickit {
 		}
 	}
 
-	void Recognizer::Pop(uint32_t now, const Settings& cfg) {
+	void Recognizer::BeginWindup(int wind, int sector, const Input& in, const Settings& cfg) {
+		m_phase = PH_WINDUP;
+		m_wind = wind;
+		m_start = sector;
+		m_cur = sector;
+		m_curSince = in.now;
+
+		// On the ground this is the crouch: Ollie goes down. In the air and on a rail the stick
+		// moves the board and the button stays up.
+		m_holdOllie = !(in.state == STATE_AIR || in.state == STATE_RAIL);
+		m_tapsLeft = 0;
+
+		if (m_holdOllie) {
+			// Crouching again ends the grind hold of the previous pop
+			m_grindPending = false;
+			StartNollieTaps(in.now, cfg);
+		}
+	}
+
+	void Recognizer::BeginTrack(uint32_t now, int track) {
 		m_phase = PH_TRACK;
-		m_popTime = now;
-		m_hasPopped = true;
+		m_track = track;
+		m_trackStart = now;
 		m_cand = DIR_NONE;
 		m_candSince = now;
 		m_armed = false;
 		m_tapsLeft = 0;
 		m_tapDown = false;
+	}
 
-		if (cfg.autoGrind) {
+	void Recognizer::ArmGrindHold(const Input& in, const Settings& cfg) {
+		// Only where the game still wants the Grind button to catch a rail
+		if (cfg.autoGrind && !in.railCatch) {
+			// A hold that is down already (a flick in the air) stays down and lasts longer
+			const bool down = m_grindPending && Since(in.now, m_grindFrom) >= 0;
 			m_grindPending = true;
-			m_grindFrom = now + (uint32_t)cfg.autoGrindDelay;
-			m_grindUntil = m_grindFrom + (uint32_t)cfg.autoGrindHold;
+			if (!down) {
+				m_grindFrom = in.now + (uint32_t)cfg.autoGrindDelay;
+			}
+			m_grindUntil = in.now + (uint32_t)cfg.autoGrindDelay + (uint32_t)cfg.autoGrindHold;
 		}
+	}
+
+	void Recognizer::Popped(uint32_t now, const Settings& cfg) {
+		m_popTime = now;
+		m_hasPopped = true;
 
 		// The game has to see Ollie released before any new direction or button goes down.
 		// Presses that are already running carry on, presses still waiting are pushed back.
@@ -624,11 +1016,123 @@ namespace Flickit {
 		}
 	}
 
+	// The stick has left the wind-up. nearCentre: it is on its way through the middle, as opposed
+	// to having been rolled out to a side.
+	void Recognizer::LeaveWindup(const Input& in, const Settings& cfg, bool nearCentre) {
+		if (m_holdOllie) {
+			// The crouch ends: Ollie is let go, and that is the pop
+			BeginTrack(in.now, TRACK_POP);
+			ArmGrindHold(in, cfg);
+			Popped(in.now, cfg);
+			m_tilt.Flick(in.now, true, nearCentre);
+		}
+		else if (in.state == STATE_RAIL) {
+			// On a rail letting go is not a pop. Wait and see whether this is a flick.
+			BeginTrack(in.now, TRACK_RAIL);
+			m_tilt.Flick(in.now, false, nearCentre);
+		}
+		else {
+			// In the air nothing was held. A flick across the stick will be a flip; rolling the
+			// stick round to a side goes on tilting the board.
+			BeginTrack(in.now, TRACK_AIR);
+			m_tilt.Flick(in.now, false, nearCentre);
+		}
+	}
+
+	// Called once per frame: remembers where the stick was and whether it is moving at flick speed
+	void Recognizer::NoteSpeed(const Input& in, const Settings& cfg) {
+		// The sample about kSpeedWindowMs back, or the previous one if frames are longer than that
+		int best = -1;
+		for (int k = 1; k <= m_histCount; k++) {
+			const int i = (m_histNext - k + HISTORY) % HISTORY;
+			const int32_t age = Since(in.now, m_histTime[i]);
+			if (age > kSpeedWindowMs && best >= 0) {
+				break;
+			}
+			best = i;
+			if (age > kSpeedWindowMs) {
+				break;
+			}
+		}
+		if (best >= 0) {
+			const int32_t dt = Since(in.now, m_histTime[best]);
+			if (dt > 0 && dt <= 250) {
+				const float dx = in.rx - m_histX[best];
+				const float dy = in.ry - m_histY[best];
+				// percent of full deflection per 100 ms
+				const float speed = std::sqrt(dx * dx + dy * dy) * 10000.0f / (float)dt;
+				if (speed >= (float)cfg.flickSpeed) {
+					m_hasFast = true;
+					m_lastFast = in.now;
+				}
+			}
+		}
+		m_histTime[m_histNext] = in.now;
+		m_histX[m_histNext] = in.rx;
+		m_histY[m_histNext] = in.ry;
+		m_histNext = (m_histNext + 1) % HISTORY;
+		if (m_histCount < HISTORY) {
+			m_histCount++;
+		}
+	}
+
+	// Did the stick move at flick speed on its way out of the wind-up?
+	bool Recognizer::WasFast(const Settings& cfg) const {
+		if (cfg.flickSpeed <= 0) {
+			return true;
+		}
+		return m_hasFast && Since(m_lastFast, m_trackStart) >= -kSpeedWindowMs;
+	}
+
+	// A flick on a rail: Ollie is pressed for a moment, and letting it go is the pop
+	void Recognizer::RailPop(const Input& in, const Settings& cfg) {
+		if (!m_railTap) {
+			m_railTap = true;
+			m_railTapStart = in.now;
+			m_railTapFrames = 0;
+		}
+
+		// Presses left over from before, that have not put their button down yet, are dropped: from
+		// here on there is this pop and the trick that goes with it
+		int kept = 0;
+		for (int i = 0; i < m_queued; i++) {
+			if (m_queue[i].stage == 2) {
+				m_queue[kept++] = m_queue[i];
+			}
+		}
+		m_queued = kept;
+
+		// Nothing else is sent to the rail from here on
+		m_seqStep = SEQ_IDLE;
+		m_switchWait = true;
+		m_switchSerial = in.grindSerial;
+		m_switchSent = in.now;
+		m_switchWaitFrames = 0;
+
+		ArmGrindHold(in, cfg);
+		m_tilt.Flick(in.now, true, false);
+	}
+
 	uint32_t Recognizer::AfterPop(const Settings& cfg) const {
 		return m_popTime + (uint32_t)(cfg.afterPop > 0 ? cfg.afterPop : 1);
 	}
 
-	void Recognizer::Finalize(int end, uint32_t now, const Settings& cfg, Output& out) {
+	void Recognizer::Finalize(int end, const Input& in, const Settings& cfg, Output& out) {
+		if (m_track != TRACK_POP) {
+			// Nothing has been pressed so far. On a rail any flick pops, and the stick going back to
+			// the centre does not. In the air only a flick into the far half is a flip.
+			bool isFlick = (end != DIR_NONE) && WasFast(cfg);
+			if (isFlick && m_track == TRACK_AIR) {
+				isFlick = TiltClassOf(end) == (m_wind == WIND_OLLIE ? TILT_UP : TILT_DOWN);
+			}
+			if (!isFlick) {
+				m_tilt.Flick(in.now, false, false);
+				m_track = TRACK_POP;
+				m_phase = PH_IDLE;
+				return;
+			}
+		}
+
 		const int slot = MapFlip(m_wind, m_start, end, cfg.kickflipSide);
 
 		out.gesture = (slot == DIR_NONE) ? GESTURE_POP : GESTURE_FLIP;
@@ -636,31 +1140,54 @@ namespace Flickit {
 		out.start = m_start;
 		out.end = end;
 		out.slot = slot;
-		out.elapsed = now - m_popTime;
+		out.elapsed = in.now - m_trackStart;
 
+		if (m_track == TRACK_RAIL) {
+			RailPop(in, cfg);
+		}
+		else {
+			if (m_track == TRACK_AIR) {
+				ArmGrindHold(in, cfg);
+			}
+			// The flick is over: where the stick is now is its end, not a tilt
+			m_tilt.Flick(in.now, true, false);
+		}
 		if (slot != DIR_NONE) {
-			// Never on the frame of the pop itself: the game has to see Ollie released first
+			// Never on the frame of the pop itself: the game has to see Ollie released first.
+			// After a pop on a rail the press waits for the Ollie tap to end (see RunQueue).
 			Enqueue(BTN_FLIP, slot, AfterPop(cfg));
 		}
+		m_track = TRACK_POP;
 		m_phase = PH_IDLE;
 	}
 
-	void Recognizer::FinalizePattern(const Pattern& p, const PatternMatch& m, uint32_t now, const Settings& cfg, Output& out) {
+	void Recognizer::FinalizePattern(const Pattern& p, const PatternMatch& m, const Input& in, const Settings& cfg, Output& out) {
 		out.gesture = (p.slot == DIR_NONE) ? GESTURE_POP : GESTURE_FLIP;
 		out.windup = m_wind;
 		out.start = m_start;
 		out.end = DIR_NONE;
 		out.slot = p.slot;
-		out.elapsed = now - m_popTime;
+		out.elapsed = in.now - m_trackStart;
 		out.pattern = p.name;
 		out.speed = m.speed;
 		out.ticks = m.ticks;
 
+		if (m_track == TRACK_RAIL) {
+			// A completed pattern is a flick
+			RailPop(in, cfg);
+		}
+		else {
+			if (m_track == TRACK_AIR) {
+				ArmGrindHold(in, cfg);
+			}
+			m_tilt.Flick(in.now, true, false);
+		}
 		if (p.slot != DIR_NONE) {
 			for (int i = 0; i < p.taps; i++) {
 				Enqueue(BTN_FLIP, p.slot, AfterPop(cfg));
 			}
 		}
+		m_track = TRACK_POP;
 		m_phase = PH_IDLE;
 	}
 
@@ -709,7 +1236,8 @@ namespace Flickit {
 			// Advance. Every stage is shown to the game for at least one frame (direction)
 			// or two frames (direction + button), whatever the frame rate is.
 			if (p.stage == 0) {
-				if (Since(now, p.notBefore) >= 0) {
+				// While Ollie is down for the pop out of a grind nothing else starts
+				if (!m_railTap && Since(now, p.notBefore) >= 0) {
 					p.stage = 1;
 					p.stageStart = now;
 					p.frames = 0;
@@ -769,6 +1297,124 @@ namespace Flickit {
 		}
 	}
 
+	// On a rail the stick at rest says which of the three plain grinds it wants: lower half 5-0,
+	// upper half nosegrind, centre 50-50. THUG switches between grinds on two button presses in a
+	// row (Flip then Grab for the 5-0, Grind then Grab for the nosegrind, Grind twice for the
+	// 50-50), and takes them only once a grind has settled, which is what in.grindReady reports.
+	void Recognizer::RunRailSwitch(const Input& in, const Settings& cfg, float mag, int sector, Output& out) {
+		const uint32_t now = in.now;
+		const float dead = (float)cfg.deadzone * 0.01f;
+		const float tilt = (float)cfg.tilt * 0.01f;
+
+		int zone = ZONE_NONE;
+		if (mag < dead) {
+			zone = ZONE_CENTER;
+		}
+		else if (mag >= tilt) {
+			const int cls = TiltClassOf(sector);
+			if (cls == TILT_DOWN) {
+				zone = ZONE_DOWN;
+			}
+			else if (cls == TILT_UP) {
+				zone = ZONE_UP;
+			}
+		}
+		if (zone != m_zone) {
+			m_zone = zone;
+			m_zoneSince = now;
+		}
+		const bool rested = zone != ZONE_NONE && Since(now, m_zoneSince) >= cfg.switchHold;
+		if (rested && zone != ZONE_CENTER) {
+			m_railStick = true;
+		}
+
+		if (!cfg.grindSwitch || m_railTap) {
+			m_seqStep = SEQ_IDLE;
+			return;
+		}
+
+		if (m_seqStep == SEQ_IDLE) {
+			if (m_switchWait) {
+				// Sent already. The game reports the new grind a moment later; if it never does, the
+				// presses were lost and may go out again.
+				m_switchWaitFrames++;
+				if (in.grindSerial != m_switchSerial) {
+					m_switchWait = false;
+				}
+				else if (Since(now, m_switchSent) >= kSwitchWaitMs && m_switchWaitFrames >= kSwitchWaitFrames) {
+					m_switchWait = false;
+				}
+				if (m_switchWait) {
+					return;
+				}
+			}
+			if (!in.grindReady || !rested || m_phase == PH_TRACK) {
+				return;
+			}
+			if (in.grind != GRIND_FIFTY && in.grind != GRIND_FIVE_O && in.grind != GRIND_NOSEGRIND) {
+				return;
+			}
+			int want = GRIND_UNKNOWN;
+			if (zone == ZONE_DOWN) {
+				want = GRIND_FIVE_O;
+			}
+			else if (zone == ZONE_UP) {
+				want = GRIND_NOSEGRIND;
+			}
+			else if (m_railStick) {
+				// Back to the centre. A grind the stick never touched is left alone.
+				want = GRIND_FIFTY;
+			}
+			if (want == GRIND_UNKNOWN || want == in.grind) {
+				return;
+			}
+			m_seqTarget = want;
+			m_seqStep = SEQ_FIRST;
+			m_seqStepStart = now;
+			m_seqFrames = 0;
+			out.switchTo = want;
+		}
+		else {
+			const int need = (m_seqStep == SEQ_GAP) ? kSwitchGapMs : kSwitchTapMs;
+			if (m_seqFrames >= 2 && Since(now, m_seqStepStart) >= need) {
+				if (m_seqStep == SEQ_SECOND) {
+					m_seqStep = SEQ_IDLE;
+					m_switchWait = true;
+					m_switchSerial = in.grindSerial;
+					m_switchSent = now;
+					m_switchWaitFrames = 0;
+				}
+				else {
+					m_seqStep++;
+					m_seqStepStart = now;
+					m_seqFrames = 0;
+				}
+			}
+		}
+
+		if (m_seqStep == SEQ_FIRST) {
+			if (m_seqTarget == GRIND_FIVE_O) {
+				out.flip = true;
+			}
+			else {
+				out.grind = true;
+			}
+			m_seqFrames++;
+		}
+		else if (m_seqStep == SEQ_SECOND) {
+			if (m_seqTarget == GRIND_FIFTY) {
+				out.grind = true;
+			}
+			else {
+				out.grab = true;
+			}
+			m_seqFrames++;
+		}
+		else if (m_seqStep == SEQ_GAP) {
+			m_seqFrames++;
+		}
+	}
+
 	void Recognizer::Update(const Input& in, const Settings& cfg, Output& out) {
 		out.ollie = false;
 		out.flip = false;
@@ -786,6 +1432,8 @@ namespace Flickit {
 		out.pattern = 0;
 		out.speed = 0.0f;
 		out.ticks = 0;
+		out.state = in.state;
+		out.switchTo = GRIND_UNKNOWN;
 
 		const uint32_t now = in.now;
 		const float dead = (float)cfg.deadzone * 0.01f;
@@ -794,6 +1442,9 @@ namespace Flickit {
 		const float flick = (float)cfg.flick * 0.01f;
 		const float snap = (float)cfg.snap * 0.01f;
 
+		const bool onRail = (in.state == STATE_RAIL);
+		const bool inAir = (in.state == STATE_AIR);
+
 		float mag = std::sqrt(in.rx * in.rx + in.ry * in.ry);
 		if (mag > 1.0f) {
 			mag = 1.0f;
@@ -801,6 +1452,48 @@ namespace Flickit {
 		const bool hasAngle = mag > 0.001f;
 		const float angle = hasAngle ? AngleDeg(in.rx, in.ry) : 0.0f;
 		const int sector = hasAngle ? Sector(in.rx, in.ry) : DIR_NONE;
+
+		// How the board leaned on the last frame: if this frame is the first one on a rail, that is
+		// what it touched down with
+		const bool tiltWasValid = m_tilt.Get().valid;
+		m_tilt.Update(now, in.rx, in.ry, inAir, cfg);
+		NoteSpeed(in, cfg);
+
+		if (inAir && m_lastState != STATE_AIR) {
+			m_airSince = now;
+		}
+		if (onRail && m_lastState != STATE_RAIL) {
+			// Whatever the stick does as the board touches down is deliberate: it may be the start
+			// of a wind-up without having passed the centre first. Nothing is pressed for it.
+			m_armed = true;
+			m_railStick = tiltWasValid;
+			m_zone = ZONE_NONE;
+			m_zoneSince = now;
+			m_seqStep = SEQ_IDLE;
+			m_switchWait = false;
+			// The grab ends where the grind begins, and one that was about to start does not
+			m_grabHeld = false;
+			int kept = 0;
+			for (int i = 0; i < m_queued; i++) {
+				if (m_queue[i].button != BTN_GRAB || m_queue[i].stage == 2) {
+					m_queue[kept++] = m_queue[i];
+				}
+			}
+			m_queued = kept;
+		}
+		if (!onRail) {
+			m_seqStep = SEQ_IDLE;
+			m_switchWait = false;
+		}
+
+		// The Ollie press of a pop out of a grind ends here. Trick presses that waited for it may
+		// start once the game has seen the button up.
+		bool tapEnded = false;
+		if (m_railTap && m_railTapFrames >= 2 && Since(now, m_railTapStart) >= cfg.railTap) {
+			m_railTap = false;
+			tapEnded = true;
+			Popped(now, cfg);
+		}
 
 		// Stick patterns run on a fixed 60 Hz clock, whatever the frame rate is: the stick position of
 		// this frame is fed once per tick that has passed.
@@ -832,9 +1525,11 @@ namespace Flickit {
 			m_tickLast = now;
 			// KickflipSide mirrors the stick, so every pattern is mirrored with it
 			const float px = cfg.kickflipSide ? -in.rx : in.rx;
+			// On a rail a flick pops in either direction, so the patterns that start at the top count there
+			const bool nolliePatterns = cfg.nollie != 0 || onRail;
 			for (int i = 0; i < ticks; i++) {
 				PatternMatch m;
-				if (m_matcher.Tick(*m_patterns, px, -in.ry, cfg.missTicks, cfg.nollie != 0, m)) {
+				if (m_matcher.Tick(*m_patterns, px, -in.ry, cfg.missTicks, nolliePatterns, m)) {
 					matched = true;
 					match = m;
 				}
@@ -852,17 +1547,42 @@ namespace Flickit {
 
 		if (m_phase == PH_IDLE && m_armed && mag >= engage) {
 			if (InWindupHalf(angle, WIND_OLLIE, 0.0f)) {
-				BeginWindup(WIND_OLLIE, sector, now, cfg);
+				BeginWindup(WIND_OLLIE, sector, in, cfg);
 			}
-			else if (cfg.nollie && InWindupHalf(angle, WIND_NOLLIE, 0.0f)) {
-				BeginWindup(WIND_NOLLIE, sector, now, cfg);
+			else if ((cfg.nollie || onRail) && InWindupHalf(angle, WIND_NOLLIE, 0.0f)) {
+				BeginWindup(WIND_NOLLIE, sector, in, cfg);
+			}
+		}
+
+		if (m_phase == PH_WINDUP && m_wind == WIND_NOLLIE && !cfg.nollie && !onRail) {
+			// With Nollie off, stick up is a wind-up on a rail only
+			m_phase = PH_IDLE;
+			m_armed = false;
+		}
+
+		if (m_phase == PH_WINDUP) {
+			if (!m_holdOllie) {
+				if (!inAir && !onRail) {
+					// Begun in the air or on a rail, and now the board is on the ground: this is a crouch
+					m_holdOllie = true;
+					m_grindPending = false;
+					StartNollieTaps(now, cfg);
+				}
+			}
+			else if (inAir && Since(now, m_airSince) >= kAirReleaseMs) {
+				// A crouch carried off the ground. Past the time in which the game would still jump,
+				// the button is let go without anything happening, so that landing on a rail with
+				// the stick held is not a crouch that pops when the stick is released.
+				m_holdOllie = false;
+				m_tapsLeft = 0;
+				m_tapDown = false;
 			}
 		}
 
 		if (m_phase == PH_WINDUP) {
 			const bool inHalf = hasAngle && InWindupHalf(angle, m_wind, kHalfMargin);
 			if (mag < release || !inHalf) {
-				Pop(now, cfg);
+				LeaveWindup(in, cfg, mag < release);
 			}
 			else if (InWindupHalf(angle, m_wind, 0.0f)) {
 				if (sector != m_cur) {
@@ -878,24 +1598,31 @@ namespace Flickit {
 		if (usePatterns) {
 			if (matched && (m_phase == PH_WINDUP || m_phase == PH_TRACK)) {
 				const Pattern& p = m_patterns->At(match.index);
-				if ((p.nollie != 0) == (m_wind == WIND_NOLLIE)) {
+				// In the air, with nothing held, only a pattern that ends across the stick is a flip.
+				// One that ends at a side or back where it began was the board being tilted.
+				const bool inAirGesture = (m_phase == PH_WINDUP) ? (!m_holdOllie && !onRail) : (m_track == TRACK_AIR);
+				const bool across = hasAngle && InWindupHalf(angle, 1 - m_wind, 0.0f);
+				if ((p.nollie != 0) == (m_wind == WIND_NOLLIE) && (!inAirGesture || across)) {
 					if (m_phase == PH_WINDUP) {
 						// The pattern ended inside the wind-up area: this is the pop
-						Pop(now, cfg);
+						LeaveWindup(in, cfg, false);
 					}
-					FinalizePattern(p, match, now, cfg, out);
+					// Where nothing was held, a pattern drawn slowly is not a flick
+					if (m_track == TRACK_POP || WasFast(cfg)) {
+						FinalizePattern(p, match, in, cfg, out);
+					}
 				}
 			}
 			if (m_phase == PH_TRACK) {
 				if (hasAngle && mag >= engage && InWindupHalf(angle, m_wind, 0.0f)) {
 					// Pulled straight back into the wind-up: that pop had no flick
 					const int wind = m_wind;
-					Finalize(DIR_NONE, now, cfg, out);
-					BeginWindup(wind, sector, now, cfg);
+					Finalize(DIR_NONE, in, cfg, out);
+					BeginWindup(wind, sector, in, cfg);
 				}
-				else if (Since(now, m_popTime) >= cfg.flickWindow) {
+				else if (Since(now, m_trackStart) >= cfg.flickWindow) {
 					// No pattern was completed in time: a plain ollie
-					Finalize(DIR_NONE, now, cfg, out);
+					Finalize(DIR_NONE, in, cfg, out);
 				}
 			}
 		}
@@ -910,36 +1637,37 @@ namespace Flickit {
 				}
 				if (opposite && mag >= snap) {
 					// A clear flick into the far half: nothing further can change the answer
-					Finalize(m_cand, now, cfg, out);
+					Finalize(m_cand, in, cfg, out);
 				}
 				else if (Since(now, m_candSince) >= cfg.settle) {
 					// A drag that came to rest
-					Finalize(m_cand, now, cfg, out);
+					Finalize(m_cand, in, cfg, out);
 				}
 			}
 			else if (m_cand != DIR_NONE && mag < release) {
 				// The stick sprang back
-				Finalize(m_cand, now, cfg, out);
+				Finalize(m_cand, in, cfg, out);
 			}
 			else if (hasAngle && mag >= engage && InWindupHalf(angle, m_wind, 0.0f)) {
 				// Pulled straight back into the wind-up: that pop had no flick
 				const int wind = m_wind;
-				Finalize(DIR_NONE, now, cfg, out);
-				BeginWindup(wind, sector, now, cfg);
+				Finalize(DIR_NONE, in, cfg, out);
+				BeginWindup(wind, sector, in, cfg);
 			}
 
-			if (m_phase == PH_TRACK && Since(now, m_popTime) >= cfg.flickWindow) {
-				Finalize(m_cand, now, cfg, out);
+			if (m_phase == PH_TRACK && Since(now, m_trackStart) >= cfg.flickWindow) {
+				Finalize(m_cand, in, cfg, out);
 			}
 		}
 
-		out.ollie = (m_phase == PH_WINDUP);
+		// The frame a pop out of a grind lets go of Ollie, the button is up whatever else is going on
+		out.ollie = !tapEnded && ((m_phase == PH_WINDUP && m_holdOllie) || m_railTap);
 
-		if (m_phase == PH_WINDUP) {
+		if (m_phase == PH_WINDUP && m_holdOllie) {
 			RunTaps(now, out);
 		}
 
-		if (cfg.triggerGrabs) {
+		if (cfg.triggerGrabs && !onRail) {
 			uint32_t grabStart = now;
 			if (m_hasPopped && Since(AfterPop(cfg), now) > 0) {
 				grabStart = AfterPop(cfg);
@@ -965,13 +1693,15 @@ namespace Flickit {
 		else {
 			m_grabHeld = false;
 		}
-		m_prevLeftTrigger = in.leftTrigger;
-		m_prevRightTrigger = in.rightTrigger;
+		// No grabs on a rail: there Grab is one of the buttons that switch grinds. A trigger that is
+		// still held when the board leaves the rail grabs then.
+		m_prevLeftTrigger = in.leftTrigger && !onRail;
+		m_prevRightTrigger = in.rightTrigger && !onRail;
 
 		RunQueue(in, cfg, out);
 
 		if (m_grindPending) {
-			if (Since(now, m_grindUntil) >= 0) {
+			if (in.railCatch || onRail || Since(now, m_grindUntil) >= 0) {
 				m_grindPending = false;
 			}
 			else if (Since(now, m_grindFrom) >= 0) {
@@ -985,7 +1715,9 @@ namespace Flickit {
 		// crouch or the grind hold that falls into that gap waits the one or two frames until
 		// the press is in.
 		if (m_entering) {
-			out.ollie = m_lastOllie;
+			if (!tapEnded) {
+				out.ollie = m_lastOllie;
+			}
 			out.grind = m_lastGrind;
 			out.nollie = m_lastNollie;
 			if (m_enteringButton == BTN_FLIP) {
@@ -996,5 +1728,15 @@ namespace Flickit {
 		m_lastGrind = out.grind;
 		m_lastNollie = out.nollie;
 		m_lastGrab = out.grab;
+
+		// The presses that switch grinds come on top and are not part of the above
+		if (onRail) {
+			RunRailSwitch(in, cfg, mag, sector, out);
+		}
+
+		if (m_railTap && out.ollie) {
+			m_railTapFrames++;
+		}
+		m_lastState = in.state;
 	}
 }
