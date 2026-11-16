@@ -7,6 +7,7 @@
 #include <patch.h>
 #include <config.h>
 #include "keycodes.h"
+#include "flickit.h"
 #include <QB/LazyStruct.h>
 #include <QB/Qb.h>
 #include <Util/sb.h>
@@ -288,6 +289,168 @@ uint8_t getButton(SDL_GameController* controller, controllerButton button) {
 	}
 }
 
+/******************************************************************/
+/*                                                                */
+/*  Flickit: Skate-style right stick controls (see flickit.h)     */
+/******************************************************************/
+
+#define FLICKIT_SECTION "Flickit"
+
+Flickit::Settings flickitSettings;
+Flickit::Recognizer flickitRecognizers[MAX_PLAYERS];
+bool flickitOn[MAX_PLAYERS] = { true, true };            // switched in a level with the toggle button
+bool flickitToggleDown[MAX_PLAYERS] = { false, false };
+
+void loadFlickitSettings() {
+	char configFile[MAX_PATH];
+	getConfigFilePath(configFile);
+
+	Flickit::Settings s;
+	Flickit::SetDefaults(s);
+
+	s.enabled = (int)GetPrivateProfileInt(FLICKIT_SECTION, "Enabled", s.enabled, configFile);
+	s.toggleButton = (int)GetPrivateProfileInt(FLICKIT_SECTION, "ToggleButton", s.toggleButton, configFile);
+	s.reloadKey = (int)GetPrivateProfileInt(FLICKIT_SECTION, "ReloadKey", s.reloadKey, configFile);
+	s.debug = (int)GetPrivateProfileInt(FLICKIT_SECTION, "Debug", s.debug, configFile);
+
+	s.kickflipSide = (int)GetPrivateProfileInt(FLICKIT_SECTION, "KickflipSide", s.kickflipSide, configFile);
+	s.nollie = (int)GetPrivateProfileInt(FLICKIT_SECTION, "Nollie", s.nollie, configFile);
+	s.nollieTaps = (int)GetPrivateProfileInt(FLICKIT_SECTION, "NollieTaps", s.nollieTaps, configFile);
+	s.triggerGrabs = (int)GetPrivateProfileInt(FLICKIT_SECTION, "TriggerGrabs", s.triggerGrabs, configFile);
+	s.autoGrind = (int)GetPrivateProfileInt(FLICKIT_SECTION, "AutoGrind", s.autoGrind, configFile);
+
+	s.deadzone = (int)GetPrivateProfileInt(FLICKIT_SECTION, "Deadzone", s.deadzone, configFile);
+	s.engage = (int)GetPrivateProfileInt(FLICKIT_SECTION, "Engage", s.engage, configFile);
+	s.release = (int)GetPrivateProfileInt(FLICKIT_SECTION, "Release", s.release, configFile);
+	s.flick = (int)GetPrivateProfileInt(FLICKIT_SECTION, "Flick", s.flick, configFile);
+	s.snap = (int)GetPrivateProfileInt(FLICKIT_SECTION, "Snap", s.snap, configFile);
+
+	s.flickWindow = (int)GetPrivateProfileInt(FLICKIT_SECTION, "FlickWindow", s.flickWindow, configFile);
+	s.settle = (int)GetPrivateProfileInt(FLICKIT_SECTION, "Settle", s.settle, configFile);
+	s.dwell = (int)GetPrivateProfileInt(FLICKIT_SECTION, "Dwell", s.dwell, configFile);
+	s.afterPop = (int)GetPrivateProfileInt(FLICKIT_SECTION, "AfterPop", s.afterPop, configFile);
+	s.dirLead = (int)GetPrivateProfileInt(FLICKIT_SECTION, "DirLead", s.dirLead, configFile);
+	s.pulse = (int)GetPrivateProfileInt(FLICKIT_SECTION, "Pulse", s.pulse, configFile);
+	s.autoGrindDelay = (int)GetPrivateProfileInt(FLICKIT_SECTION, "AutoGrindDelay", s.autoGrindDelay, configFile);
+	s.autoGrindHold = (int)GetPrivateProfileInt(FLICKIT_SECTION, "AutoGrindHold", s.autoGrindHold, configFile);
+
+	Flickit::Sanitize(s);
+	flickitSettings = s;
+
+	for (int i = 0; i < MAX_PLAYERS; i++) {
+		flickitRecognizers[i].Reset();
+	}
+
+	Log::TypedLog(CHN_SDL, "Flickit %s: kickflip side %d, trigger grabs %d, auto grind %d, nollie %d\n",
+		s.enabled ? "enabled" : "disabled", s.kickflipSide, s.triggerGrabs, s.autoGrind, s.nollie);
+}
+
+// Reads the camera stick and the triggers and asks the recognizer which buttons to hold on this frame.
+// Returns false when Flickit is not driving this controller right now.
+bool flickitPoll(device* dev, SDL_GameController* controller, Flickit::Output* out) {
+	if (!flickitSettings.enabled || dev->port >= MAX_PLAYERS) {
+		return false;
+	}
+	const int port = (int)dev->port;
+
+	// On / off switch, for walking, driving and anything else that wants the camera stick back
+	if (flickitSettings.toggleButton >= 0 && flickitSettings.toggleButton < SDL_CONTROLLER_BUTTON_MAX) {
+		const bool down = SDL_GameControllerGetButton(controller, (SDL_GameControllerButton)flickitSettings.toggleButton) != 0;
+		if (down && !flickitToggleDown[port]) {
+			flickitOn[port] = !flickitOn[port];
+			flickitRecognizers[port].Reset();
+			SDL_GameControllerRumble(controller, 0x3000, 0x3000, flickitOn[port] ? 200 : 60);
+			Log::TypedLog(CHN_SDL, "Flickit %s for player %d\n", flickitOn[port] ? "on" : "off", port + 1);
+		}
+		flickitToggleDown[port] = down;
+	}
+	if (!flickitOn[port]) {
+		return false;
+	}
+
+	const bool leftStick = (padbinds.camera == CONTROLLER_STICK_LEFT);
+
+	Flickit::Input in;
+	in.now = SDL_GetTicks();
+	in.rx = (float)SDL_GameControllerGetAxis(controller, leftStick ? SDL_CONTROLLER_AXIS_LEFTX : SDL_CONTROLLER_AXIS_RIGHTX) / 32767.0f;
+	in.ry = -(float)SDL_GameControllerGetAxis(controller, leftStick ? SDL_CONTROLLER_AXIS_LEFTY : SDL_CONTROLLER_AXIS_RIGHTY) / 32767.0f;	// SDL: down is positive
+	in.leftTrigger = getButton(controller, CONTROLLER_BUTTON_LEFTTRIGGER) != 0;
+	in.rightTrigger = getButton(controller, CONTROLLER_BUTTON_RIGHTTRIGGER) != 0;
+
+	flickitRecognizers[port].Update(in, flickitSettings, *out);
+
+	if (flickitSettings.debug && out->gesture != Flickit::GESTURE_NONE) {
+		if (out->gesture == Flickit::GESTURE_GRAB) {
+			Log::TypedLog(CHN_SDL, "Flickit: grab, %s trigger\n", out->slot == Flickit::DIR_L ? "left" : "right");
+		}
+		else {
+			Log::TypedLog(CHN_SDL, "Flickit: %s %s -> %s after %u ms: %s\n",
+				out->windup == Flickit::WIND_NOLLIE ? "nollie" : "ollie",
+				Flickit::DirName(out->start), Flickit::DirName(out->end), (unsigned int)out->elapsed,
+				out->gesture == Flickit::GESTURE_FLIP ? Flickit::SlotName(out->slot) : "no flip");
+		}
+	}
+	return true;
+}
+
+// Merges what the recognizer asked for into the pad data. Runs after the real buttons, d-pad and sticks.
+void flickitApply(device* dev, const Flickit::Output& o) {
+	if (o.grind) {
+		dev->controlData[3] |= 0x01 << 4;
+		dev->controlData[12] = 0xff;
+	}
+	if (o.grab) {
+		dev->controlData[3] |= 0x01 << 5;
+		dev->controlData[13] = 0xff;
+	}
+	if (o.ollie) {
+		dev->controlData[3] |= 0x01 << 6;
+		dev->controlData[14] = 0xff;
+	}
+	if (o.flip) {
+		dev->controlData[3] |= 0x01 << 7;
+		dev->controlData[15] = 0xff;
+	}
+	if (o.nollie) {
+		dev->controlData[3] |= 0x01 << 0;
+		dev->controlData[18] = 0xff;
+	}
+
+	if (o.ownsDirection) {
+		// For the few frames of a trick press the game must see exactly one direction:
+		// drop whatever the d-pad, the keyboard and the movement stick are doing.
+		dev->controlData[2] &= 0x0F;
+		dev->controlData[8] = 0;
+		dev->controlData[9] = 0;
+		dev->controlData[10] = 0;
+		dev->controlData[11] = 0;
+		dev->controlData[6] = 0x80;
+		dev->controlData[7] = 0x80;
+
+		const bool up = (o.dir == Flickit::DIR_U || o.dir == Flickit::DIR_UL || o.dir == Flickit::DIR_UR);
+		const bool down = (o.dir == Flickit::DIR_D || o.dir == Flickit::DIR_DL || o.dir == Flickit::DIR_DR);
+		const bool left = (o.dir == Flickit::DIR_L || o.dir == Flickit::DIR_UL || o.dir == Flickit::DIR_DL);
+		const bool right = (o.dir == Flickit::DIR_R || o.dir == Flickit::DIR_UR || o.dir == Flickit::DIR_DR);
+
+		if (up) {
+			dev->controlData[2] |= 0x01 << 4;
+			dev->controlData[10] = 0xFF;
+		}
+		if (right) {
+			dev->controlData[2] |= 0x01 << 5;
+			dev->controlData[8] = 0xFF;
+		}
+		if (down) {
+			dev->controlData[2] |= 0x01 << 6;
+			dev->controlData[11] = 0xFF;
+		}
+		if (left) {
+			dev->controlData[2] |= 0x01 << 7;
+			dev->controlData[9] = 0xFF;
+		}
+	}
+}
+
 void getStick(SDL_GameController* controller, controllerStick stick, uint8_t* xOut, uint8_t* yOut) {
 	uint8_t result_x, result_y;
 
@@ -349,6 +512,9 @@ bool shouldUseMenuControls() {
 /******************************************************************/
 
 void pollController(device* dev, SDL_GameController* controller) {
+
+	bool flickit = false;			// true on frames where Flickit drives this controller
+	Flickit::Output flickitOut;
 
 	if (SDL_GameControllerGetAttached(controller)) {
 		dev->isValid = 1;
@@ -513,6 +679,8 @@ void pollController(device* dev, SDL_GameController* controller) {
 					/*  Gameplay (in level) controls								  */
 					/******************************************************************/
 
+					flickit = flickitPoll(dev, controller, &flickitOut);
+
 					// Buttons
 					if (getButton(controller, padbinds.menu)) {
 						dev->controlData[2] |= 0x01 << 3;
@@ -520,7 +688,8 @@ void pollController(device* dev, SDL_GameController* controller) {
 					if (getButton(controller, padbinds.cameraToggle)) {
 						dev->controlData[2] |= 0x01 << 0;
 					}
-					if (getButton(controller, padbinds.cameraSwivelLock)) {
+					// The Flickit on/off button is not passed on as swivel lock
+					if (getButton(controller, padbinds.cameraSwivelLock) && !(flickitSettings.enabled && (int)padbinds.cameraSwivelLock == flickitSettings.toggleButton)) {
 						dev->controlData[2] |= 0x01 << 2;
 					}
 					if (getButton(controller, padbinds.grind)) {
@@ -540,7 +709,29 @@ void pollController(device* dev, SDL_GameController* controller) {
 						dev->controlData[15] = 0xff;
 					}
 					// Shoulders
-					if (inputsettings.isPs2Controls) {
+					if (flickit && flickitSettings.triggerGrabs) {
+						// The triggers belong to the grabs. The bumpers take over what the triggers did,
+						// doubled up the way the original Xbox pad had it:
+						// left = spin left + nollie, right = spin right + revert / switch, both = caveman
+						const bool leftBumper = SDL_GameControllerGetButton(controller, SDL_CONTROLLER_BUTTON_LEFTSHOULDER) != 0;
+						const bool rightBumper = SDL_GameControllerGetButton(controller, SDL_CONTROLLER_BUTTON_RIGHTSHOULDER) != 0;
+						if (leftBumper) {
+							dev->controlData[3] |= 0x01 << 2;
+							dev->controlData[16] = 0xff;
+							dev->controlData[3] |= 0x01 << 0;
+							dev->controlData[18] = 0xff;
+						}
+						if (rightBumper) {
+							dev->controlData[3] |= 0x01 << 3;
+							dev->controlData[17] = 0xff;
+							dev->controlData[3] |= 0x01 << 1;
+							dev->controlData[19] = 0xff;
+						}
+						if (leftBumper && rightBumper) {
+							dev->controlData[20] |= 0x01 << 0;
+						}
+					}
+					else if (inputsettings.isPs2Controls) {
 						if (getButton(controller, padbinds.leftSpin)) {
 							dev->controlData[3] |= 0x01 << 2;
 							dev->controlData[16] = 0xff;
@@ -606,8 +797,15 @@ void pollController(device* dev, SDL_GameController* controller) {
 					//dev->controlData[6] = 0;
 				}
 				// Sticks
-				getStick(controller, padbinds.camera, &(dev->controlData[4]), &(dev->controlData[5]));
+				if (!flickit) {
+					getStick(controller, padbinds.camera, &(dev->controlData[4]), &(dev->controlData[5]));
+				}
 				getStick(controller, padbinds.movement, &(dev->controlData[6]), &(dev->controlData[7]));
+
+				// With Flickit the camera stick is the board: it never reaches the game as camera input
+				if (flickit) {
+					flickitApply(dev, flickitOut);
+				}
 			}
 		}
 		else if (!ParkEd) { // Only needed to be able to skip intro movies manually. The ParkEd instance isn't initialized yet when movies are displayed
@@ -615,6 +813,11 @@ void pollController(device* dev, SDL_GameController* controller) {
 				dev->controlData[2] |= 0x01 << 3;
 			}
 		}
+	}
+
+	// Menus, the park editor and pauses drop any half finished gesture
+	if (!flickit && dev->port < MAX_PLAYERS) {
+		flickitRecognizers[dev->port].Reset();
 	}
 }
 
@@ -1036,6 +1239,10 @@ void handleInputEvent(SDL_Event* e) {
 		Log::TypedLog(CHN_SDL, "Joystick added: %s\n", SDL_JoystickNameForIndex(e->jdevice.which));
 		return;
 	case SDL_KEYDOWN:
+		// Re-read the [Flickit] section of the ini while the game is running
+		if (flickitSettings.reloadKey > 0 && (int)e->key.keysym.scancode == flickitSettings.reloadKey && !e->key.repeat) {
+			loadFlickitSettings();
+		}
 		setUsingKeyboard(1);
 		do_key_input((SDL_KeyCode)e->key.keysym.sym);
 		return;
@@ -1221,6 +1428,7 @@ void __stdcall initManager() {
 	loadSettings(&inputsettings);
 	loadKeyBinds(&keybinds);
 	loadControllerBinds(&padbinds);
+	loadFlickitSettings();
 
 	initSDLControllers();
 

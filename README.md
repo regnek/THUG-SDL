@@ -69,6 +69,7 @@ Run `thugsdlpatcher.exe` in the Game directory where THUG.exe should already be.
 - Input setting for wallplants
 - Option to invert the x and/or y camera axis
 - Option to disable the x and/or y camera axis
+- Flickit: Skate-style right stick controls: [Section Flickit](#flickit)
 
 ### Multiplayer
 - Openspy support
@@ -93,6 +94,54 @@ Activate "Additional Mods" in the launcher's General Page and set your folder pa
 An example environment to easily develop script mods can be found [here](https://github.com/atljp/thps-modding-resources/tree/main/Scripts/THUG/THUG-SDL_DEV_ENV).<br>
 <br>**THUG-SDL uses its own script mods by default (thugsdl.pre). Select "Disable Script Mods" in the launcher or your changes could get overwritten!**<br><br>
 
+
+## FLICKIT
+Flickit puts the board on the right stick, the way the Skate games do. It sits in the input layer only: the stick is translated into the game's own Ollie / Flip / Grab / Grind buttons, so every trick, score and goal works as before. The face buttons keep working next to it.
+
+| Input | What happens |
+| --- | --- |
+| Right stick down | Crouch (Ollie is held) |
+| Let the stick go, or flick it away | Ollie |
+| Down, flick up-right | Kickflip (Left + Flip) |
+| Down, flick up-left | Heelflip (Right + Flip) |
+| Down, drag to the right | Pop Shove-It (Down + Flip) |
+| Down, drag to the left | The trick on Up + Flip (Impossible by default, put FS Shove-It there for the Skate layout) |
+| Down-left, flick up-right | Varial Kickflip (DownLeft + Flip) |
+| Down-right, flick up-left | Varial Heelflip (DownRight + Flip) |
+| Down-right, flick up | Hardflip (UpLeft + Flip) |
+| Down-left, flick up | Inward Heelflip (UpRight + Flip) |
+| Left trigger / right trigger | Grab with that hand (Left + Grab / Right + Grab), held as long as the trigger is |
+| Nothing | Grind: after every pop the Grind button is held for a moment, so landing on a rail or ledge grinds it |
+| Left bumper / right bumper | Spin left + nollie / spin right + revert and switch, both together: caveman |
+| Right stick click | Flickit on / off, for walking, driving or looking around |
+
+The tricks named above are the default trick slots. Flickit presses the slot, so whatever is assigned to it in the Edit Tricks menu is what comes out. Manuals are unchanged (up, down on the movement stick).
+
+The settings live in the `[Flickit]` section of `thugsdl.ini`. Thresholds are percent of full stick deflection, times are milliseconds. Press F9 in game to re-read the section without restarting.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| Enabled | 1 | Master switch |
+| KickflipSide | 0 | 0: kickflip is the flick to the upper right. 1: mirror every flick left / right |
+| TriggerGrabs | 1 | Triggers grab, bumpers take over nollie / revert / caveman. 0 leaves triggers and bumpers as bound |
+| AutoGrind | 1 | Hold Grind after every pop |
+| AutoGrindDelay, AutoGrindHold | 200, 1500 | When the hold starts after the pop and how long it lasts |
+| Nollie, NollieTaps | 0, 2 | Experimental: stick up, flick down = nollie. NollieTaps is how many Nollie presses reach nollie stance |
+| ToggleButton | 8 | SDL button for on / off (8 = right stick click, 99 = none) |
+| ReloadKey | 66 | SDL scancode that re-reads this section (66 = F9, 0 = none) |
+| Debug | 1 | Log every recognized flick (needs the console or the log file switched on) |
+| Deadzone | 25 | Below this the stick counts as centered |
+| Engage, Release | 60, 45 | A crouch starts above Engage and pops below Release |
+| Flick, Snap | 50, 75 | How far the flick has to reach, and how far for it to be accepted at once |
+| FlickWindow | 200 | How long after the pop the flick may arrive |
+| Settle | 50 | How long a drag to the side has to rest to count |
+| Dwell | 60 | How long the stick has to rest in down-left / down-right to make it the start |
+| AfterPop, DirLead, Pulse | 10, 15, 30 | Timing of the synthetic direction + button press |
+
+The recognizer has offline tests that need neither the game nor Windows:
+```
+g++ -std=c++11 -I src tests/flickit_test.cpp src/flickit.cpp -o flickit_test && ./flickit_test
+```
 
 ## TROUBLESHOOTING
 
