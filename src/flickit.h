@@ -104,6 +104,8 @@ namespace Flickit {
 		int grindExit;        // 1: the board steps off a rail when it has run out of speed
 		int grindBoost;       // 1: keep the game's speed boost for landing on a rail while the drag is on
 		int grindReach;       // percent of Skate's reach for a rail that catches by itself, 0: THUG's own
+		int airGravity;       // gravity in the air, in percent of Skate's, 0: THUG's own
+		int jumpPop;          // the speed of a jump, in percent of Skate's, 0: THUG's own
 	};
 
 	void SetDefaults(Settings& s);
@@ -431,6 +433,45 @@ namespace Flickit {
 	const unsigned char* FindRail(const RailNodes& nodes, const float* a, const float* b,
 		const unsigned char* ignore, float minCos, int percent, RailTest test, RailPass& pass);
 	extern const float kNoRail;
+
+	// ------------------------------------------------------------------------------------------
+	// Jumps
+	//
+	// THUG: a jump adds 350 units/s upward for a tap of the Ollie button and up to 414 to 450 (by
+	// the skater's ollie stat) when the button was held for 0.2 s. Gravity in the air is 1350
+	// units/s2. On flat ground that is 45 to 75 units up, 0.6 to 1 times the skater's height, in
+	// 0.52 to 0.67 s. For his size he jumps two and a half times as high as Skate's rider and is
+	// back down sooner: gravity is about three times real.
+	//
+	// Skate: real gravity, 9.8 m/s2. The pop is the speed that lifts the rider 0.38 m (a quick
+	// pop) to 0.76 m (a full one): 2.7 to 3.9 m/s, 0.56 to 0.79 s in the air.
+	//
+	// At the scale the drag and the reach use (kUnitsPerMetre) Skate's gravity is 784 units/s2,
+	// 58 percent of THUG's, and its full pop is 309 units/s, 69 percent of THUG's best. With both,
+	// every jump is four fifths as high as it was and lasts a fifth longer. What leaves a ramp
+	// flies 1.7 times as high and as long, because the speed off a ramp is not the pop's.
+	// ------------------------------------------------------------------------------------------
+
+	extern const float kThugAirGravity;   // units/s2
+	extern const float kThugPopTap;       // units/s: the Ollie button tapped
+	extern const float kThugPopWorst;     // held for 0.2 s, with the worst ollie stat
+	extern const float kThugPopBest;      // and with the best
+	extern const int kJumpMostPercent;    // the most Settings::airGravity and jumpPop can be
+
+	// What THUG's gravity in the air is multiplied by. percent: Settings::airGravity, of Skate's
+	// gravity; 0 and less: 1, THUG's own.
+	float AirGravityFactor(int percent);
+	// What the speed of a jump is multiplied by. percent: Settings::jumpPop, of Skate's full pop
+	// against THUG's best; 0 and less: 1.
+	float JumpPopFactor(int percent);
+
+	// A jump off flat ground with one of THUG's pops (kThugPopTap ...): how high it goes, in
+	// units, and how long it lasts, in seconds
+	struct FlatJump {
+		float height;
+		float seconds;
+	};
+	FlatJump JumpOnFlat(float thugPop, int gravityPercent, int popPercent);
 
 	// ------------------------------------------------------------------------------------------
 	// Stick patterns

@@ -12,6 +12,11 @@
 //   - the board does not drift on a rail (optional)
 //   - the board loses speed on a rail, and the speed the game adds when it lands on one is left out
 //
+// For jumps the way Skate has them two more things change, outside the rail code:
+//
+//   - the gravity in the air
+//   - the speed of a jump
+//
 // Everything in here is written against the one PC executable of THUG (THUG.exe / THUG-SDL.exe, the
 // same code). Before anything is read or changed the code at every address used is compared with
 // what is expected there. If one byte differs nothing is touched and Flickit works as it did
@@ -25,8 +30,8 @@ namespace FlickitGame {
 	// Compares the game's code with what this file was written against. The result is remembered.
 	bool Available();
 
-	// Puts the five changes into the game's rail code. They do nothing until SetFrame switches
-	// them on, frame by frame. Returns false and changes nothing if Available() is false.
+	// Puts the changes into the game's code. They do nothing until SetFrame switches them on,
+	// frame by frame. Returns false and changes nothing if Available() is false.
 	bool Install();
 	bool Installed();
 
@@ -68,6 +73,8 @@ namespace FlickitGame {
 		bool stepOff;           // a board that is out of speed on a rail steps off
 		bool boost;             // with the drag on, the game still adds speed when the board lands on a rail
 		int reach;              // percent of Skate's reach for rails that catch by themselves, 0: the game's own
+		int gravity;            // gravity in the air in percent of Skate's, 0: the game's own
+		int pop;                // the speed of a jump in percent of Skate's, 0: the game's own
 	};
 
 	// Once per frame, before player one's controller is read: nothing is on for this frame

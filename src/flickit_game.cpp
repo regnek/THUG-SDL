@@ -70,6 +70,20 @@ namespace FlickitGame {
 	typedef bool(__cdecl* RailValid_t)(GameVector from, GameVector to);
 	static const RailValid_t RailValid = (RailValid_t)0x00512760;
 
+	// CSkaterCorePhysicsComponent::get_air_gravity: Physics_Air_Gravity over the hang stat (and
+	// times Moon_gravity with that cheat on). Less than 0.
+	typedef float(__thiscall* AirGravity_t)(void* core);
+	static const AirGravity_t AirGravity = (AirGravity_t)0x0055E670;
+
+	// CSkaterCorePhysicsComponent::do_jump, what the script command Jump does: works out the speed
+	// of the jump from the stats and from how long the Ollie button was held, and adds it
+	typedef void(__thiscall* DoJump_t)(void* core, void* params);
+	static const DoJump_t DoJump = (DoJump_t)0x00560410;
+
+	// Script::CStruct::GetFloat: true and the number if the structure has one of that name
+	typedef bool(__thiscall* StructGetFloat_t)(void* structure, uint32_t name, float* out, int assert);
+	static const StructGetFloat_t StructGetFloat = (StructGetFloat_t)0x00410E20;
+
 	enum {
 		// any component
 		COMPONENT_OBJECT = 0x0C,        // the object it belongs to
@@ -149,6 +163,19 @@ namespace FlickitGame {
 	static uint8_t* const kSearchMovingCall1 = (uint8_t*)0x0056CD56;
 	static uint8_t* const kSearchCall2 = (uint8_t*)0x0056FB28;
 	static uint8_t* const kSearchMovingCall2 = (uint8_t*)0x0056FC26;
+	// call get_air_gravity: every place the game asks for the gravity in the air. The first is in
+	// the function that works out how long a flight to a given height takes, the next two in the
+	// function at 0x00561B80, which uses that, and the last at the top of the physics of the air
+	// (0x0056BAD0), where the gravity goes into the skater's speed frame by frame.
+	static uint8_t* const kGravityCall1 = (uint8_t*)0x0055E731;
+	static uint8_t* const kGravityCall2 = (uint8_t*)0x0056246B;
+	static uint8_t* const kGravityCall3 = (uint8_t*)0x0056272E;
+	static uint8_t* const kGravityCall4 = (uint8_t*)0x0056BAE6;
+	// call do_jump, in the function that carries out the script commands of the physics component
+	static uint8_t* const kJumpCall = (uint8_t*)0x00567FEF;
+	// call CStruct::GetFloat in do_jump: a script may hand the speed of the jump over as "speed".
+	// The speed worked out so far is where the answer goes; after this call it is final.
+	static uint8_t* const kJumpSpeedCall = (uint8_t*)0x005606EA;
 
 	/******************************************************************/
 	/*                                                                */
@@ -174,6 +201,12 @@ namespace FlickitGame {
 		{ 0x0056CD54, 7, { 0x8B, 0xCB, 0xE8, 0xD5, 0x78, 0xFA, 0xFF }, "rail search on a moving object" },
 		{ 0x0056FB26, 7, { 0x8B, 0xCF, 0xE8, 0x03, 0x4B, 0xFA, 0xFF }, "rail search in the update" },
 		{ 0x0056FC24, 7, { 0x8B, 0xCD, 0xE8, 0x05, 0x4A, 0xFA, 0xFF }, "rail search on a moving object in the update" },
+		{ 0x0055E730, 6, { 0x51, 0xE8, 0x3A, 0xFF, 0xFF, 0xFF }, "air gravity for the length of a flight" },
+		{ 0x00562469, 7, { 0x8B, 0xCE, 0xE8, 0x00, 0xC2, 0xFF, 0xFF }, "air gravity for a flight" },
+		{ 0x0056272E, 5, { 0xE8, 0x3D, 0xBF, 0xFF, 0xFF }, "air gravity for a flight, again" },
+		{ 0x0056BAE6, 5, { 0xE8, 0x85, 0x2B, 0xFF, 0xFF }, "air gravity in the physics of the air" },
+		{ 0x00567FEE, 6, { 0x52, 0xE8, 0x1C, 0x84, 0xFF, 0xFF }, "jump" },
+		{ 0x005606E6, 9, { 0xD9, 0x5C, 0x24, 0x1C, 0xE8, 0x31, 0x07, 0xEB, 0xFF }, "jump speed" },
 		// the functions that get called
 		{ 0x004F94F0, 12, { 0x53, 0x56, 0x57, 0x8B, 0xF9, 0x33, 0xF6, 0xE8, 0x84, 0xC0, 0xF3, 0xFF }, "GetLocalSkater" },
 		{ 0x0041BDC0, 12, { 0x8B, 0x81, 0xF0, 0x00, 0x00, 0x00, 0x85, 0xC0, 0x74, 0x12, 0x8B, 0x4C }, "GetComponent" },
@@ -188,6 +221,15 @@ namespace FlickitGame {
 		{ 0x00514630, 12, { 0x81, 0xEC, 0x60, 0x01, 0x00, 0x00, 0x53, 0x55, 0x56, 0x8B, 0xF1, 0x57 }, "CRailManager::StickToRail" },
 		{ 0x00514CB6, 3, { 0xC2, 0x1C, 0x00 }, "StickToRail return" },
 		{ 0x00512760, 12, { 0x6A, 0xFF, 0x68, 0xAB, 0xB3, 0x62, 0x00, 0x64, 0xA1, 0x00, 0x00, 0x00 }, "rail test" },
+		{ 0x0055E670, 12, { 0x8B, 0x81, 0xD0, 0x04, 0x00, 0x00, 0x83, 0xEC, 0x08, 0x80, 0x78, 0x30 }, "get_air_gravity" },
+		{ 0x0055E724, 7, { 0xD9, 0x04, 0x24, 0x83, 0xC4, 0x08, 0xC3 }, "get_air_gravity return" },
+		{ 0x00560410, 12, { 0x83, 0xEC, 0x14, 0x53, 0x55, 0x56, 0x57, 0x8B, 0xF1, 0x8B, 0x4C, 0x24 }, "do_jump" },
+		{ 0x005608B4, 6, { 0x83, 0xC4, 0x14, 0xC2, 0x04, 0x00 }, "do_jump return" },
+		{ 0x00410E20, 12, { 0x56, 0x57, 0x8B, 0x7C, 0x24, 0x0C, 0x8D, 0x44, 0x24, 0x0C, 0x50, 0x6A }, "CStruct::GetFloat" },
+		// do_jump: the name it asks GetFloat for, where the speed is taken up again after the
+		// call, and where it goes into the skater's speed
+		{ 0x005606C5, 5, { 0x68, 0x09, 0x01, 0xD9, 0xF0 }, "jump speed name" },
+		{ 0x005607D4, 16, { 0xD9, 0x80, 0xA4, 0x00, 0x00, 0x00, 0xD8, 0x44, 0x24, 0x10, 0xD9, 0x98, 0xA4, 0x00, 0x00, 0x00 }, "jump speed added" },
 		// the game's own walk through the rail nodes, where it uses what the search here reads: the
 		// list and its length, a node's size, flags, box, position, next and previous node
 		{ 0x00514786, 10, { 0x8B, 0x76, 0x40, 0x03, 0x74, 0x24, 0x24, 0x8B, 0x46, 0x48 }, "rail nodes" },
@@ -585,6 +627,44 @@ namespace FlickitGame {
 
 	/******************************************************************/
 	/*                                                                */
+	/*  Jumps: Skate's gravity in the air, Skate's pop                */
+	/******************************************************************/
+
+	// Stands where the game calls get_air_gravity. Same convention: this in ecx, no arguments, the
+	// answer on the floating point stack.
+	static float __fastcall AirGravityHook(uint8_t* core) {
+		float gravity = AirGravity(core);
+		if (s_active && s_frame.gravity > 0 && IsLocal(core)) {
+			gravity *= Flickit::AirGravityFactor(s_frame.gravity);
+		}
+		return gravity;
+	}
+
+	// The skater whose jump the game is working out right now, if it is Flickit's and the pop is
+	// not the game's own
+	static const uint8_t* s_jumping = 0;
+
+	// Stands where the game calls do_jump. Same convention: this in ecx, one argument, which the
+	// callee takes off the stack.
+	static void __fastcall JumpHook(uint8_t* core, void* /*edx*/, void* params) {
+		s_jumping = (s_active && s_frame.pop > 0 && IsLocal(core)) ? core : 0;
+		DoJump(core, params);
+		s_jumping = 0;
+	}
+
+	// Stands where do_jump asks the script for a speed of its own. By then the speed from the
+	// stats is in "speed" already, and what is there after this call is what the jump gets. Same
+	// convention as CStruct::GetFloat: this in ecx, three arguments, the callee takes them off.
+	static bool __fastcall JumpSpeedHook(void* params, void* /*edx*/, uint32_t name, float* speed, int assert) {
+		const bool given = StructGetFloat(params, name, speed, assert);
+		if (s_jumping && speed) {
+			*speed *= Flickit::JumpPopFactor(s_frame.pop);
+		}
+		return given;
+	}
+
+	/******************************************************************/
+	/*                                                                */
 	/*  The board touches a rail                                      */
 	/******************************************************************/
 
@@ -856,9 +936,16 @@ namespace FlickitGame {
 		patchCall(kSearchCall2, (void*)&RailSearchHook);
 		patchCall(kSearchMovingCall1, (void*)&RailSearchHook);
 		patchCall(kSearchMovingCall2, (void*)&RailSearchHook);
+		patchCall(kGravityCall1, (void*)&AirGravityHook);
+		patchCall(kGravityCall2, (void*)&AirGravityHook);
+		patchCall(kGravityCall3, (void*)&AirGravityHook);
+		patchCall(kGravityCall4, (void*)&AirGravityHook);
+		patchCall(kJumpCall, (void*)&JumpHook);
+		patchCall(kJumpSpeedCall, (void*)&JumpSpeedHook);
 
 		s_installed = true;
 		Log::TypedLog(CHN_SDL, "Flickit: grind hooks are in (rail catch, rail search, grind pick, rail balance, rail boost)\n");
+		Log::TypedLog(CHN_SDL, "Flickit: jump hooks are in (gravity in the air, jump, jump speed)\n");
 		return true;
 	}
 }

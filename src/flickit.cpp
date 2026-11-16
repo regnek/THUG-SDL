@@ -38,6 +38,9 @@ namespace Flickit {
 	static const int kOffWaitMs = 500;
 	static const int kOffWaitFrames = 20;
 
+	// Gravity and pop: the least a setting other than 0 can be, in percent of Skate's
+	static const int kJumpLeastPercent = 25;
+
 	static inline int32_t Since(uint32_t now, uint32_t then) {
 		return (int32_t)(now - then);
 	}
@@ -92,6 +95,8 @@ namespace Flickit {
 		s.grindExit = 1;
 		s.grindBoost = 0;
 		s.grindReach = 100;
+		s.airGravity = 100;
+		s.jumpPop = 100;
 	}
 
 	void Sanitize(Settings& s) {
@@ -137,6 +142,8 @@ namespace Flickit {
 		s.grindExit = s.grindExit ? 1 : 0;
 		s.grindBoost = s.grindBoost ? 1 : 0;
 		s.grindReach = Clamp(s.grindReach, 0, kReachMostPercent);
+		s.airGravity = s.airGravity <= 0 ? 0 : Clamp(s.airGravity, kJumpLeastPercent, kJumpMostPercent);
+		s.jumpPop = s.jumpPop <= 0 ? 0 : Clamp(s.jumpPop, kJumpLeastPercent, kJumpMostPercent);
 	}
 
 	float AngleDeg(float x, float y) {
@@ -1235,6 +1242,51 @@ namespace Flickit {
 			pass.away = false;
 		}
 		return best;
+	}
+
+	// ------------------------------------------------------------------------------------------
+	// Jumps
+	// ------------------------------------------------------------------------------------------
+
+	// THUG (physics.q): Physics_Air_Gravity, Physics_Jump_Speed_min_Stat, Physics_Jump_Speed_Stat
+	const float kThugAirGravity = 1350.0f;
+	const float kThugPopTap = 350.0f;
+	const float kThugPopWorst = 414.0f;
+	const float kThugPopBest = 450.0f;
+	const int kJumpMostPercent = 400;
+
+	// Skate: gravity in m/s2, and how far a full pop lifts the rider, in metres
+	static const float kSkateGravity = 9.8f;
+	static const float kSkateFullPop = 0.76f;
+
+	float AirGravityFactor(int percent) {
+		if (percent <= 0) {
+			return 1.0f;
+		}
+		return (float)percent * 0.01f * kSkateGravity * kUnitsPerMetre / kThugAirGravity;
+	}
+
+	float JumpPopFactor(int percent) {
+		if (percent <= 0) {
+			return 1.0f;
+		}
+		// The speed that lifts Skate's rider by a full pop, for the best pop THUG has
+		const float speed = std::sqrt(2.0f * kSkateGravity * kSkateFullPop) * kUnitsPerMetre;
+		return (float)percent * 0.01f * speed / kThugPopBest;
+	}
+
+	FlatJump JumpOnFlat(float thugPop, int gravityPercent, int popPercent) {
+		FlatJump out;
+		out.height = 0.0f;
+		out.seconds = 0.0f;
+		if (!(thugPop > 0.0f)) {
+			return out;
+		}
+		const float speed = thugPop * JumpPopFactor(popPercent);
+		const float gravity = kThugAirGravity * AirGravityFactor(gravityPercent);
+		out.height = speed * speed / (2.0f * gravity);
+		out.seconds = 2.0f * speed / gravity;
+		return out;
 	}
 
 	TiltTracker::TiltTracker() {

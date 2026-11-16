@@ -1,4 +1,4 @@
-"""Look at the five hooks of src/flickit_game.cpp in a built thugsdl.dll.
+"""Look at the hooks of src/flickit_game.cpp in a built thugsdl.dll.
 
 usage: check_hooks.py <built thugsdl.dll> [<built thugsdl.dll> ...]
 
@@ -17,6 +17,12 @@ they have to keep to what the game's code expects there, whatever the compiler m
                 (or a jump into the game's function, which does the popping)
   rail balance  takes the place of a call to a function without arguments: every return is a plain ret
                 (this one also carries the drag on a rail)
+  air gravity   takes the place of four calls to a function without arguments that answers on the
+                floating point stack: every return is a plain ret
+  jump          takes the place of the call to do_jump, which pops one argument: every return is
+                ret 4 (or a jump into the game's function)
+  jump speed    takes the place of a call to CStruct::GetFloat, which pops three arguments: every
+                return is ret 0Ch (or a jump into the game's function)
   rail boost    a bare function in the place of a call to GetPhysicsFloat: passes esi to a function
                 that answers with the address to go on at, and jumps there with the stack as it found
                 it. That address is the game's GetPhysicsFloat or a function of the DLL that returns
@@ -40,6 +46,9 @@ GET_LOCAL_SKATER = 0x004F94F0
 GET_PHYSICS_FLOAT = 0x00516110
 RAIL_SEARCH = 0x00514630
 RAIL_VALID = 0x00512760
+AIR_GRAVITY = 0x0055E670
+DO_JUMP = 0x00560410
+STRUCT_GET_FLOAT = 0x00410E20
 
 # push ecx / push edx / push esi / call ... / add esp, 4 / pop edx / pop ecx / ret
 RAIL_CATCH_PATTERN = bytes.fromhex("515256e8") + b"...." + bytes.fromhex("83c4045a59c3")
@@ -52,6 +61,9 @@ NAMES = {
     GET_PHYSICS_FLOAT: "GetPhysicsFloat",
     RAIL_SEARCH: "the game's search for a rail",
     RAIL_VALID: "the game's test of a piece of rail",
+    AIR_GRAVITY: "get_air_gravity",
+    DO_JUMP: "do_jump",
+    STRUCT_GET_FLOAT: "CStruct::GetFloat",
     0x0076A788: "the skate module pointer",
     0x0041BDC0: "GetComponent",
     0x0040FBC0: "CScript::SetScript",
@@ -209,6 +221,28 @@ def stack_at_calls(insns):
     return calls, rets
 
 
+def answers_on_x87(insns):
+    """Every plain return comes with a number on the floating point stack: going back from the ret,
+    the first thing that touches that stack is a load, or it is the call that left its answer there."""
+    for i, ins in enumerate(insns):
+        if ins.mnemonic not in ("ret", "retn"):
+            continue
+        for back in reversed(insns[:i]):
+            m = back.mnemonic
+            if m == "call":
+                # the stack check at the end of a function leaves the floating point stack alone
+                if back.operands and back.operands[0].type == capstone.x86.X86_OP_IMM:
+                    continue
+                break
+            if m.startswith("f"):
+                if m in ("fld", "fld1", "fldz", "fild"):
+                    break
+                return False
+        else:
+            return False
+    return True
+
+
 def matches(dll, va, pattern, wild):
     """The bytes at va are the pattern; wild = (start, end) of the part that may be anything."""
     head = dll.bytes(va, len(pattern))
@@ -273,6 +307,7 @@ def check(path):
     print("  %d functions have their address taken" % len(pointers))
 
     catch, pick, balance, boost, search, valid = [], [], [], [], [], []
+    gravity, jump, jump_speed = [], [], []
     for p in sorted(set(dll.entry(p) for p in pointers)):
         if matches(dll, p, RAIL_CATCH_PATTERN, (4, 8)):
             catch.append(p)
@@ -290,6 +325,12 @@ def check(path):
             search.append((p, insns))
         elif RAIL_VALID in refs:
             valid.append((p, insns))
+        elif AIR_GRAVITY in refs:
+            gravity.append((p, insns))
+        elif DO_JUMP in refs:
+            jump.append((p, insns))
+        elif STRUCT_GET_FLOAT in refs:
+            jump_speed.append((p, insns))
 
     # --- rail catch
     if len(catch) != 1:
@@ -339,6 +380,20 @@ def check(path):
         # all but the saved frame pointer, if there is one, is gone again at the end
         if any(d != 0 for d in depths):
             problems.append("the rail test returns with %s bytes still on the stack" % depths)
+
+    # --- air gravity, jump, jump speed: each stands in for a call, and has to leave the stack as the
+    #     function it stands in for does
+    for found, what, pops in ((gravity, "air gravity hook", 0), (jump, "jump hook", 4), (jump_speed, "jump speed hook", 0xC)):
+        if len(found) != 1:
+            problems.append("the %s was found %d times" % (what, len(found)))
+        for p, insns in found:
+            show(dll, "%s at %08X" % (what, p), insns)
+            rets = returns(insns)
+            tail = insns and insns[-1].mnemonic == "jmp"
+            if any(r != pops for r in rets) or (not rets and not tail):
+                problems.append("the %s returns with %s: every return has to pop %d bytes" % (what, [hex(r) for r in rets], pops))
+            if found is gravity and not answers_on_x87(insns):
+                problems.append("the air gravity hook has a return without its answer on the floating point stack")
 
     # --- grind pick
     if len(pick) != 1:

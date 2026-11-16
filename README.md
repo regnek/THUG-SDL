@@ -175,7 +175,20 @@ In THUG a grind lasts as long as the rail does. With Flickit the board loses spe
 
 The numbers are Skate 3's, put into THUG's units at 80 units of speed for one metre per second. That makes a grind last as long as it would in Skate when both skaters come in at their own rolling speed. THUG's skater is about twice as fast as Skate's, so measured in rail the grinds go about twice as far; `GrindDrag=200` gives roughly Skate's distances instead.
 
-For all this the mod looks at the skater's state and changes five places in the game's rail code: the test for the Grind button before a rail is caught, the search for a rail that follows it, the pick of the grind, the balance of a grind (the drag is applied in the same place, once per frame of the game's rail physics), and the speed the game adds when the board lands on a rail. The code at every address it uses is compared with what is expected there first. If anything differs nothing is touched and grinds work as in earlier versions, with the Grind button held for a moment after each pop. `GameHooks=0` does the same on purpose. All of it applies to the first player's skater.
+### Jumps
+THUG's skater jumps high and comes down fast. A tap of Ollie throws him up at 350 units a second, a held one at 414 to 450 depending on his ollie stat, and gravity in the air is 1350 units/s². Off flat ground that is 45 to 75 units, which is 0.6 to 1 times his own height, in 0.52 to 0.67 seconds. Skate's rider rises 0.38 to 0.76 m, a fifth to two fifths of his height, and takes 0.56 to 0.79 seconds over it, under real gravity. For his size THUG's skater jumps two and a half times as high and still lands sooner, because his gravity is about three times real.
+
+With Flickit both numbers are Skate's, at the scale the rails use (80 units to the metre):
+
+- `AirGravity=100`: gravity in the air is Skate's, 784 units/s², which is 58 percent of THUG's.
+- `JumpPop=100`: every jump leaves the ground at 69 percent of THUG's speed. THUG's best ollie then rises as far as Skate's full pop, 61 units, and lasts as long, 0.79 seconds. A tap rises 37 units in 0.61 seconds.
+
+Together they make every jump four fifths as high as it was and a fifth longer: an ollie, a boneless, a pop out of a grind. What leaves a ramp is another matter. The speed up a quarter pipe is not the pop's, so with Skate's gravity an air goes 1.7 times as high and lasts 1.7 times as long. That is what real gravity does at THUG's speeds, and it is the first thing to turn back if it is too much: `AirGravity=0` is THUG's own gravity. Skate's pop alone would then leave a jump under half as high as THUG's, so turn the pop up with it: `JumpPop=131` keeps the jumps four fifths as high as THUG's and makes them a tenth shorter.
+
+Both are percent of Skate's, so 50 is half of Skate's gravity or pop and 200 double. 0 leaves the game's own number alone. THUG's levels were built for THUG's jump: where a ledge or a gap is out of reach now, a boneless still clears more than THUG's plain ollie did.
+
+### What the mod changes in the game
+For the grinds the mod looks at the skater's state and changes five places in the game's rail code: the test for the Grind button before a rail is caught, the search for a rail that follows it, the pick of the grind, the balance of a grind (the drag is applied in the same place, once per frame of the game's rail physics), and the speed the game adds when the board lands on a rail. For the jumps it stands in for the game's own answer to "what is the gravity in the air", and scales the speed of a jump at the point where the game has worked it out. The code at every address it uses is compared with what is expected there first. If anything differs nothing is touched and grinds work as in earlier versions, with the Grind button held for a moment after each pop. `GameHooks=0` does the same on purpose. All of it applies to the first player's skater, while he is on his board and Flickit is on.
 
 The settings live in the `[Flickit]` section of `thugsdl.ini`. Thresholds are percent of full stick deflection, times are milliseconds. Press F9 in game to re-read the section without restarting.
 
@@ -200,7 +213,7 @@ The settings live in the `[Flickit]` section of `thugsdl.ini`. Thresholds are pe
 | Patterns | 1 | Decide tricks from a stick pattern file when one is found (see below). 0: always use the built-in directions |
 | PatternFile | skater.pat | Name of the pattern file, looked for in the folder `thugsdl.ini` is in |
 | MissTicks | 10 | How many 60 Hz ticks the stick may spend between two points of a pattern before the pattern is dropped |
-| GameHooks | 1 | The mod may read the skater's state and change the game's rail code (see Grinds). 0: none of the settings below do anything |
+| GameHooks | 1 | The mod may read the skater's state and change the game's code (see What the mod changes in the game). 0: none of the settings below do anything |
 | GrindCatch | 1 | Rails catch without the Grind button |
 | GrindPick | 1 | The lean of the board picks the grind. 0: the game's direction buttons do |
 | GrindSwitch | 1 | On a rail, stick down / up / let go switches between 5-0, nosegrind and 50-50 |
@@ -216,6 +229,8 @@ The settings live in the `[Flickit]` section of `thugsdl.ini`. Thresholds are pe
 | GrindDrag | 100 | How much speed the board loses on a rail, in percent of Skate's drag (see Speed on a rail). 0: none, as in THUG. Up to 1000 |
 | GrindExit | 1 | A board that has run out of speed on a rail steps off by itself. 0: it stays on |
 | GrindBoost | 0 | 1: keep the speed THUG adds when the board lands on a rail. Without the drag (`GrindDrag=0`) it is always kept |
+| AirGravity | 100 | Gravity in the air, in percent of Skate's (see Jumps). 0: the game's own, which is 172. 25 to 400 |
+| JumpPop | 100 | The speed of every jump, in percent of Skate's pop (see Jumps). 0: the game's own, which is 146. 25 to 400 |
 
 ### Stick patterns
 Out of the box Flickit sorts a flick by where it starts and ends, in eight directions (the table above). If a pattern file is present, it uses that instead: each trick is then a short list of stick positions that have to be passed in order, each with a tolerance radius. This is how the Skate games define their gestures, and the file format is theirs, so if you own Skate 3 you can copy its `skater.pat` next to `thugsdl.ini` and flick the tricks the way that game expects them. No pattern file comes with THUG SDL; without one nothing changes.
@@ -239,8 +254,9 @@ The recognizer has offline tests that need neither the game nor Windows:
 g++ -std=c++11 -I src tests/flickit_test.cpp src/flickit.cpp -o flickit_test && ./flickit_test
 g++ -std=c++11 -I src tests/flickit_pattern_test.cpp src/flickit.cpp -o flickit_pattern_test && ./flickit_pattern_test
 g++ -std=c++11 -I src tests/flickit_grind_test.cpp src/flickit.cpp -o flickit_grind_test && ./flickit_grind_test
+g++ -std=c++11 -I src tests/flickit_physics_test.cpp src/flickit.cpp -o flickit_physics_test && ./flickit_physics_test
 ```
-The second one also takes a pattern file: `./flickit_pattern_test skater.pat` draws every pattern in it and reports what was recognized. The third one is run from the top of the repository: it checks the grinds the mod asks the game for against the game's own grind table in `scripts/qb/source/scripts/game/skater/grindlist.q`, the drag on a rail against the times and distances a grind lasts in Skate, the reach of a rail against the distance to it worked out the slow way and against THUG's own reach, and the search for a rail against trying every piece of rail one by one.
+The second one also takes a pattern file: `./flickit_pattern_test skater.pat` draws every pattern in it and reports what was recognized. The third one is run from the top of the repository: it checks the grinds the mod asks the game for against the game's own grind table in `scripts/qb/source/scripts/game/skater/grindlist.q`, the drag on a rail against the times and distances a grind lasts in Skate, the reach of a rail against the distance to it worked out the slow way and against THUG's own reach, and the search for a rail against trying every piece of rail one by one. The fourth is run from there too: it checks THUG's jump numbers in the code against the game's own `physics.q`, and what gravity and pop come to against Skate's jump.
 
 ## TROUBLESHOOTING
 

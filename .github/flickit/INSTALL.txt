@@ -43,9 +43,28 @@ On the rail: stick down = 5-0, up = nosegrind, let go = 50-50 (the game takes
 the switch about three quarters of a second into a grind). A flick pops off;
 letting go does not. Right bumper = drop off the rail. No balancing.
 
+Jumps
+-----
+New in this build: Skate's gravity in the air and Skate's pop.
+
+  - THUG's ollie goes 45 to 75 units up (most of the skater's height) and is
+    over in 0.52 to 0.67 seconds: gravity is about three times real. Skate's
+    goes a fifth to two fifths of the rider's height and takes 0.56 to 0.79.
+  - Now gravity in the air is Skate's (58 percent of THUG's) and every jump
+    leaves the ground at 69 percent of THUG's speed. An ollie goes 37 to 61
+    units up and lasts 0.61 to 0.79 seconds: four fifths as high as before,
+    a fifth longer. The same goes for a boneless and a pop out of a grind.
+  - Off a ramp the gravity alone counts: airs go 1.7 times as high and last
+    1.7 times as long. If that is too much, turn the gravity back first.
+
+  AirGravity=100  percent of Skate's gravity. 0 = THUG's own (it is 172)
+  JumpPop=100     percent of Skate's pop. 0 = THUG's own (it is 146)
+                  With AirGravity=0, JumpPop=131 keeps the jumps four fifths
+                  as high as THUG's.
+
 How far a rail reaches
 ----------------------
-New in this build: a rail no longer pulls the board in from a metre away.
+A rail no longer pulls the board in from a metre away.
 
   - THUG takes any rail within 40 units of the skater's path (a metre at his
     size; 20 units when he crosses the rail), also from above and below, and
@@ -105,8 +124,8 @@ If something is wrong
   F9 in game. The mod then leaves the game's rail code alone and grinds work
   as in the build before this one (Grind held for a moment after each pop).
   GrindCatch, GrindPick, GrindSwitch and GrindBalance switch the parts one by one,
-  GrindDrag=0 with GrindExit=0 gives THUG's endless grinds back, and
-  GrindReach=0 its own reach for rails.
+  GrindDrag=0 with GrindExit=0 gives THUG's endless grinds back,
+  GrindReach=0 its own reach for rails, AirGravity=0 and JumpPop=0 its jumps.
 - To go back to stock: delete thugsdl.dll and rename thugsdl.dll.bak back.
 
 Skate 3 stick patterns (optional)

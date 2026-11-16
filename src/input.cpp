@@ -415,11 +415,13 @@ void loadFlickitSettings() {
 	s.grindExit = (int)GetPrivateProfileInt(FLICKIT_SECTION, "GrindExit", s.grindExit, configFile);
 	s.grindBoost = (int)GetPrivateProfileInt(FLICKIT_SECTION, "GrindBoost", s.grindBoost, configFile);
 	s.grindReach = (int)GetPrivateProfileInt(FLICKIT_SECTION, "GrindReach", s.grindReach, configFile);
+	s.airGravity = (int)GetPrivateProfileInt(FLICKIT_SECTION, "AirGravity", s.airGravity, configFile);
+	s.jumpPop = (int)GetPrivateProfileInt(FLICKIT_SECTION, "JumpPop", s.jumpPop, configFile);
 
 	Flickit::Sanitize(s);
 	flickitSettings = s;
 
-	// The grinds need four changes in the game's rail code. They go in once and do nothing on
+	// The grinds and the jumps need changes in the game's code. They go in once and do nothing on
 	// frames where Flickit does not ask for them, so switching the settings off later is enough.
 	bool hooks = false;
 	if (s.enabled && s.gameHooks) {
@@ -454,6 +456,15 @@ void loadFlickitSettings() {
 			}
 			else if (s.grindCatch) {
 				Log::TypedLog(CHN_SDL, "Flickit rails: a rail catches the board at the game's own reach, 20 to 40 units all around\n");
+			}
+			{
+				// What an ollie off flat ground comes to: the Ollie button tapped, and held with the best ollie stat
+				const Flickit::FlatJump tap = Flickit::JumpOnFlat(Flickit::kThugPopTap, s.airGravity, s.jumpPop);
+				const Flickit::FlatJump held = Flickit::JumpOnFlat(Flickit::kThugPopBest, s.airGravity, s.jumpPop);
+				Log::TypedLog(CHN_SDL, "Flickit jumps: gravity in the air %.0f units/s2 (%s), pop %.0f%% of the game's (%s): an ollie rises %.0f to %.0f units in %.2f to %.2f s (the game's own: 45 to 75 units in 0.52 to 0.67 s)\n",
+					Flickit::kThugAirGravity * Flickit::AirGravityFactor(s.airGravity), s.airGravity > 0 ? "Skate's is 784" : "the game's own",
+					100.0f * Flickit::JumpPopFactor(s.jumpPop), s.jumpPop > 0 ? "Skate's is 69" : "the game's own",
+					tap.height, held.height, tap.seconds, held.seconds);
 			}
 		}
 		else {
@@ -690,6 +701,8 @@ void flickitGameFrame(device* dev) {
 	frame.stepOff = flickitSettings.grindExit != 0;
 	frame.boost = flickitSettings.grindBoost != 0;
 	frame.reach = flickitSettings.grindReach;
+	frame.gravity = flickitSettings.airGravity;
+	frame.pop = flickitSettings.jumpPop;
 	FlickitGame::SetFrame(frame);
 }
 
