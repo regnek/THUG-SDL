@@ -28,10 +28,10 @@ The face buttons still work. The full table is in the README, section FLICKIT.
 If something is wrong
 ---------------------
 - The game crashes or misbehaves in a way stock THUG-SDL did not:
-  try alt-optimized/thugsdl.dll instead. It is the same code built with the
-  compiler's default optimizations, which is how the DLL shipped with THUG-SDL
-  appears to be built. thugsdl.dll at the top of this zip is built without
-  optimization, which is what THUG-SDL's README asks for.
+  try alt-unoptimized/thugsdl.dll instead. It is the same code built with
+  compiler optimization off, which is what THUG-SDL's README asks for.
+  thugsdl.dll at the top of this zip is built with the compiler's default
+  optimizations, which is how the DLLs shipped with THUG-SDL appear to be built.
 - To go back to stock: delete thugsdl.dll and rename thugsdl.dll.bak back.
 
 Settings

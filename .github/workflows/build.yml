@@ -2,9 +2,10 @@
 # so nobody has to install Visual Studio to try a change. The result is attached to the run as an artifact.
 #
 # Two builds of the same code are made:
-#   thugsdl.dll                 optimization off, which is what the README asks for
-#   alt-optimized/thugsdl.dll   CMake's default Release flags. Built that way, the unmodified source comes
-#                               out closest to the DLL shipped in Game/, so this is the fallback.
+#   thugsdl.dll                   CMake's default Release flags (optimized). Built this way, the unmodified
+#                                 source comes out closest in size and code to the DLL shipped in Game/.
+#   alt-unoptimized/thugsdl.dll   optimization off, which is what the README's build section asks for.
+#                                 The fallback in case the optimizer breaks something.
 name: Build thugsdl.dll
 
 on:
@@ -30,39 +31,46 @@ jobs:
       - name: Install SDL2 (x86)
         run: vcpkg install sdl2:x86-windows
 
+      - name: Configure, default Release flags
+        run: >
+          cmake -S . -B build-default -A Win32
+          -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
+          -DVCPKG_TARGET_TRIPLET=x86-windows
+
+      - name: Build, default Release flags
+        run: cmake --build build-default --config Release --target THUG_SDL
+
       - name: Configure, optimization off
         run: >
-          cmake -S . -B build-O0 -A Win32
+          cmake -S . -B build-unoptimized -A Win32
           -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
           -DVCPKG_TARGET_TRIPLET=x86-windows
           "-DCMAKE_CXX_FLAGS_RELEASE=/MD /Od /DNDEBUG"
           "-DCMAKE_C_FLAGS_RELEASE=/MD /Od /DNDEBUG"
 
       - name: Build, optimization off
-        run: cmake --build build-O0 --config Release --target THUG_SDL
-
-      - name: Configure, default Release flags
-        run: >
-          cmake -S . -B build-O2 -A Win32
-          -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
-          -DVCPKG_TARGET_TRIPLET=x86-windows
-
-      - name: Build, default Release flags
-        run: cmake --build build-O2 --config Release --target THUG_SDL
+        run: cmake --build build-unoptimized --config Release --target THUG_SDL
 
       - name: Collect
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          New-Item -ItemType Directory -Force out, out/alt-optimized | Out-Null
-          Copy-Item (Get-ChildItem -Recurse build-O0 -Filter thugsdl.dll | Select-Object -First 1).FullName out/thugsdl.dll
-          Copy-Item (Get-ChildItem -Recurse build-O2 -Filter thugsdl.dll | Select-Object -First 1).FullName out/alt-optimized/thugsdl.dll
+          New-Item -ItemType Directory -Force out, out/alt-unoptimized | Out-Null
+          Copy-Item (Get-ChildItem -Recurse build-default -Filter thugsdl.dll | Select-Object -First 1).FullName out/thugsdl.dll
+          Copy-Item (Get-ChildItem -Recurse build-unoptimized -Filter thugsdl.dll | Select-Object -First 1).FullName out/alt-unoptimized/thugsdl.dll
           Copy-Item .github/flickit/INSTALL.txt out/INSTALL.txt
           $ini = Get-Content Game/thugsdl.ini
           $start = [array]::IndexOf($ini, '[Flickit]')
           if ($start -lt 0) { throw 'no [Flickit] section in Game/thugsdl.ini' }
           $ini[$start..($ini.Count - 1)] | Set-Content out/flickit-ini-section.txt
           Get-ChildItem -Recurse out | Format-Table Length, FullName
+
+      - name: Check the built DLLs against the one shipped in Game/
+        shell: pwsh
+        run: |
+          python -m pip install --quiet --disable-pip-version-check pefile
+          python .github/flickit/check_dll.py Game/thugsdl.dll out/thugsdl.dll out/alt-unoptimized/thugsdl.dll
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - uses: actions/upload-artifact@v4
         with:
