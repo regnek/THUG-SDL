@@ -103,6 +103,7 @@ namespace Flickit {
 		int grindDrag;        // percent of Skate's drag on a rail, 0: none, as THUG has it
 		int grindExit;        // 1: the board steps off a rail when it has run out of speed
 		int grindBoost;       // 1: keep the game's speed boost for landing on a rail while the drag is on
+		int grindReach;       // percent of Skate's reach for a rail that catches by itself, 0: THUG's own
 	};
 
 	void SetDefaults(Settings& s);
@@ -344,6 +345,92 @@ namespace Flickit {
 		float m_speed;
 		bool m_wantsOff;
 	};
+
+	// ------------------------------------------------------------------------------------------
+	// How far a rail reaches for the board
+	//
+	// THUG takes a rail when the path of the skater's one point comes within 40 units of it while
+	// he travels along it (20 when he crosses it), measured in any direction, from above, below or
+	// beside, and it puts the board on the rail in that same frame. That is a metre for a skater
+	// 77 units tall. With a Grind button to time that is a leap of faith the player asks for. With
+	// rails that catch by themselves it is a magnet.
+	//
+	// Skate has no such thing. In the air its board follows the animation, and a helper looks eight
+	// ticks ahead along the board's flight for a part of the board (a truck, the nose or tail, the
+	// middle) that is about to pass a rail at less than 0.17 to 0.24 m. Then it slides the board
+	// toward the rail by at most 3 cm a tick and 20 cm in all. So the board has to be coming down
+	// on the rail already, and the help is a hand's width.
+	//
+	// THUG's skater has no nose and no trucks, only that one point in the middle of his board. So
+	// the test here is the one Skate has for the middle of the board, which holds whichever way
+	// the board is turned, at the scale the drag uses (kUnitsPerMetre: both skaters get the same
+	// time to hit a rail):
+	//
+	//   - level, around the rail: 0.243 m, about 19 units
+	//   - how far the board may still be above the rail: 0.2 m, 16 units (all the helper ever
+	//     moves a board), and below it: half that
+	//   - beyond the end of a rail: 0.2 m, 16 units
+	//   - a rail the board has passed and is moving away from is let go at 8 units
+	//
+	// The three distances are the half axes of one rounded shape, not of a box: a board that is
+	// both beside a rail and above it has to be nearer on both counts. With that no point of the
+	// shape is as far as 20 units from the rail, so at 100 percent the reach of a rail lies wholly
+	// inside the reach THUG gives that rail, whichever way the board comes.
+	//
+	// All of it is measured from the path the board took in this frame, so a board that falls
+	// through the height of a rail between two frames is not missed. Among several rails the one
+	// that lies best under the board is taken, not the one that runs most nearly the way the board
+	// is going, which is what THUG prefers.
+	// ------------------------------------------------------------------------------------------
+
+	extern const int kReachMostPercent;   // the most Settings::grindReach can be
+	extern const float kReachLevel;    // units, at 100 percent
+	extern const float kReachDown;     // the rail is this far under the board
+	extern const float kReachUp;       // the rail is this far over it
+	extern const float kReachEnd;
+	extern const float kReachBehind;
+
+	// How the board passes one piece of rail in one frame
+	struct RailPass {
+		float miss;       // 1 and less: within reach. The smaller, the better the rail lies under the board
+		float side;       // units: how far beside the rail the board is, level and across the rail
+		float lift;       // units: more than 0: the rail is above the board, less: below it
+		float past;       // units: how far the board is beyond an end of the rail
+		bool away;        // the board has passed the rail and is leaving it: out of reach, however near
+		float point[3];   // where on the rail the board would go
+	};
+
+	// a, b: where the board was a frame ago and where it is now (x, y, z; y is up). from, to: the
+	// two ends of the piece of rail; to == 0: a rail that is one point. percent:
+	// Settings::grindReach, more than 0.
+	RailPass PassRail(const float* a, const float* b, const float* from, const float* to, int percent);
+
+	// The game's rail nodes, as far as the search needs them: one after the other in memory,
+	// "stride" bytes apart, with these things at these offsets.
+	struct RailNodes {
+		const unsigned char* first;
+		int count;
+		int stride;
+		int boxMin, boxMax;        // three floats each: the box around the piece of rail that starts here
+		int position;              // three floats
+		int next, previous;        // pointers to nodes; a node without a next one ends a rail
+		int flags;                 // 32 bits
+		unsigned int needs;        // flags a node must have to be looked at
+		unsigned int skips;        // flags that rule it out
+	};
+	// The game's own extra test of a piece of rail (it has one while a park from the editor runs)
+	typedef bool (*RailTest)(const float* from, const float* to);
+
+	// Looks for the piece of rail that lies best under the board. Returns its first node and
+	// fills "pass", or returns 0 when no rail is within reach; then "pass" has the rail that came
+	// closest (its miss is above 1), or a miss of kNoRail when there was none anywhere near.
+	// ignore: a node not to take. minCos: 1, or the least cosine between the level directions of
+	// travel and rail (the game asks for that in parks from the editor). Like the game's own
+	// search it finds nothing for a board that has not moved, and passes over pieces of rail
+	// that have no length.
+	const unsigned char* FindRail(const RailNodes& nodes, const float* a, const float* b,
+		const unsigned char* ignore, float minCos, int percent, RailTest test, RailPass& pass);
+	extern const float kNoRail;
 
 	// ------------------------------------------------------------------------------------------
 	// Stick patterns

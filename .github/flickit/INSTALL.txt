@@ -43,10 +43,33 @@ On the rail: stick down = 5-0, up = nosegrind, let go = 50-50 (the game takes
 the switch about three quarters of a second into a grind). A flick pops off;
 letting go does not. Right bumper = drop off the rail. No balancing.
 
+How far a rail reaches
+----------------------
+New in this build: a rail no longer pulls the board in from a metre away.
+
+  - THUG takes any rail within 40 units of the skater's path (a metre at his
+    size; 20 units when he crosses the rail), also from above and below, and
+    snaps the board onto it at once. Skate only nudges a board that is about
+    to pass a rail at under 24 cm.
+  - Now a rail takes the board from 19 units to either side, and the board
+    may be 16 units above it or 8 below. Both at once has to be nearer still.
+    You have to come down on the rail.
+  - A rail you have crossed or flown past does not pull you back.
+  - At a ledge corner the edge under the board wins, not the edge that runs
+    the way you travel.
+  - Hold the Grind button for the game's own reach on that jump.
+
+  GrindReach=100  percent of Skate's reach. 50 = as short a pull on screen as
+                  in Skate (harder to hit), 200 = about THUG's own, 0 = off
+
+With the console on, every rail says how far it reached for the board, and a
+jump that lands next to a rail says by how much it missed and which
+GrindReach would have caught it.
+
 Speed on a rail
 ---------------
-New in this build: the board loses speed on a rail, as in Skate, and steps off
-by itself when it has none left.
+The board loses speed on a rail, as in Skate, and steps off by itself when it
+has none left.
 
   - Metal rails slide best, ledges drag about twice as hard, rough stone and
     brick more. Least in a 50-50, 5-0 or nosegrind, most in a smith, feeble
@@ -82,7 +105,8 @@ If something is wrong
   F9 in game. The mod then leaves the game's rail code alone and grinds work
   as in the build before this one (Grind held for a moment after each pop).
   GrindCatch, GrindPick, GrindSwitch and GrindBalance switch the parts one by one,
-  and GrindDrag=0 with GrindExit=0 gives THUG's endless grinds back.
+  GrindDrag=0 with GrindExit=0 gives THUG's endless grinds back, and
+  GrindReach=0 its own reach for rails.
 - To go back to stock: delete thugsdl.dll and rename thugsdl.dll.bak back.
 
 Skate 3 stick patterns (optional)

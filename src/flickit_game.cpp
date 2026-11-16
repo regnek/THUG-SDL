@@ -57,6 +57,19 @@ namespace FlickitGame {
 	typedef float(__cdecl* GetPhysicsFloat_t)(uint32_t name, int flag);
 	static const GetPhysicsFloat_t GetPhysicsFloat = (GetPhysicsFloat_t)0x00516110;
 
+	// CRailManager::StickToRail: looks for a rail near the way the skater moved in this frame, from
+	// "from" to "to". Fills in the point on the rail and the node its piece starts at.
+	typedef bool(__thiscall* RailSearch_t)(void* manager, const float* from, const float* to, float* point, void** node, const void* ignore, float minCos, int side);
+	static const RailSearch_t RailSearch = (RailSearch_t)0x00514630;
+
+	// The game's own extra test of a piece of rail. It says yes at once unless a park from the
+	// editor is running. Two vectors, handed over whole.
+	struct GameVector {
+		float x, y, z, w;
+	};
+	typedef bool(__cdecl* RailValid_t)(GameVector from, GameVector to);
+	static const RailValid_t RailValid = (RailValid_t)0x00512760;
+
 	enum {
 		// any component
 		COMPONENT_OBJECT = 0x0C,        // the object it belongs to
@@ -80,8 +93,21 @@ namespace FlickitGame {
 		// CSkaterBalanceTrickComponent
 		BALANCE_TYPE = 0x18,            // checksum of what is being balanced: grind, slide, lip, manual...
 
+		// CRailManager
+		MANAGER_NODES = 0x40,           // its rail nodes, one after the other
+		MANAGER_COUNT = 0x4C,           // how many
+
 		// a rail node
+		RAIL_NODE_SIZE = 0x50,
+		RAIL_BOX_MIN = 0x00,            // the box around the piece of rail that starts at this node
+		RAIL_BOX_MAX = 0x10,
+		RAIL_POSITION = 0x20,           // four floats
+		RAIL_NEXT = 0x40,               // the node the piece ends at, 0 at the end of a rail
+		RAIL_PREVIOUS = 0x44,
+		RAIL_FLAGS = 0x48,
 		RAIL_TERRAIN = 0x4E,            // one byte: what the rail is made of, for the sound and the sparks
+		RAIL_FLAG_ACTIVE = 1 << 2,      // the level has it switched on
+		RAIL_FLAG_CLIMB_ONLY = 1 << 4,  // for climbing, not for the board
 
 		// CInputComponent
 		INPUT_GRIND_PRESSED = 0x1A0,    // the Grind button (Triangle) is down
@@ -117,6 +143,12 @@ namespace FlickitGame {
 	static uint8_t* const kPickCall = (uint8_t*)0x0056AFDC;     // call do_grind_trick          at the end of stick_to_rail
 	static uint8_t* const kBalanceCall = (uint8_t*)0x0056D065;  // call the balance update      in the rail physics
 	static uint8_t* const kBoostCall = (uint8_t*)0x0056A9D9;    // call GetPhysicsFloat         for Rail_Speed_Boost, in stick_to_rail
+	// call CRailManager::StickToRail: after each of the two catch tests, first for the rails of the
+	// level, then for those of each thing that moves
+	static uint8_t* const kSearchCall1 = (uint8_t*)0x0056CC54;
+	static uint8_t* const kSearchMovingCall1 = (uint8_t*)0x0056CD56;
+	static uint8_t* const kSearchCall2 = (uint8_t*)0x0056FB28;
+	static uint8_t* const kSearchMovingCall2 = (uint8_t*)0x0056FC26;
 
 	/******************************************************************/
 	/*                                                                */
@@ -138,6 +170,10 @@ namespace FlickitGame {
 		{ 0x0056D062, 8, { 0x8D, 0x48, 0x7C, 0xE8, 0x56, 0xE9, 0xF9, 0xFF }, "rail balance" },
 		{ 0x0056A9A7, 5, { 0x68, 0x95, 0xB3, 0x7B, 0x45 }, "rail boost name" },
 		{ 0x0056A9D9, 5, { 0xE8, 0x32, 0xB7, 0xFA, 0xFF }, "rail boost" },
+		{ 0x0056CC52, 7, { 0x8B, 0xCF, 0xE8, 0xD7, 0x79, 0xFA, 0xFF }, "rail search" },
+		{ 0x0056CD54, 7, { 0x8B, 0xCB, 0xE8, 0xD5, 0x78, 0xFA, 0xFF }, "rail search on a moving object" },
+		{ 0x0056FB26, 7, { 0x8B, 0xCF, 0xE8, 0x03, 0x4B, 0xFA, 0xFF }, "rail search in the update" },
+		{ 0x0056FC24, 7, { 0x8B, 0xCD, 0xE8, 0x05, 0x4A, 0xFA, 0xFF }, "rail search on a moving object in the update" },
 		// the functions that get called
 		{ 0x004F94F0, 12, { 0x53, 0x56, 0x57, 0x8B, 0xF9, 0x33, 0xF6, 0xE8, 0x84, 0xC0, 0xF3, 0xFF }, "GetLocalSkater" },
 		{ 0x0041BDC0, 12, { 0x8B, 0x81, 0xF0, 0x00, 0x00, 0x00, 0x85, 0xC0, 0x74, 0x12, 0x8B, 0x4C }, "GetComponent" },
@@ -149,6 +185,19 @@ namespace FlickitGame {
 		{ 0x004133A0, 12, { 0x8B, 0x4C, 0x24, 0x04, 0x8B, 0xC1, 0x25, 0xFF, 0x0F, 0x00, 0x00, 0x56 }, "LookUpSymbol" },
 		{ 0x004110B0, 12, { 0x51, 0x53, 0x56, 0x8B, 0x31, 0x32, 0xDB, 0x85, 0xF6, 0x89, 0x4C, 0x24 }, "CStruct::GetChecksum" },
 		{ 0x00516110, 14, { 0x51, 0x56, 0x6A, 0x00, 0x68, 0xDD, 0x89, 0xBC, 0x8C, 0xE8, 0xE2, 0xD4, 0xEF, 0xFF }, "GetPhysicsFloat" },
+		{ 0x00514630, 12, { 0x81, 0xEC, 0x60, 0x01, 0x00, 0x00, 0x53, 0x55, 0x56, 0x8B, 0xF1, 0x57 }, "CRailManager::StickToRail" },
+		{ 0x00514CB6, 3, { 0xC2, 0x1C, 0x00 }, "StickToRail return" },
+		{ 0x00512760, 12, { 0x6A, 0xFF, 0x68, 0xAB, 0xB3, 0x62, 0x00, 0x64, 0xA1, 0x00, 0x00, 0x00 }, "rail test" },
+		// the game's own walk through the rail nodes, where it uses what the search here reads: the
+		// list and its length, a node's size, flags, box, position, next and previous node
+		{ 0x00514786, 10, { 0x8B, 0x76, 0x40, 0x03, 0x74, 0x24, 0x24, 0x8B, 0x46, 0x48 }, "rail nodes" },
+		{ 0x0051478D, 11, { 0x8B, 0x46, 0x48, 0x8B, 0xC8, 0xC1, 0xE9, 0x04, 0xF6, 0xC1, 0x01 }, "rail node flags" },
+		{ 0x005147AB, 15, { 0xC1, 0xE8, 0x02, 0xA8, 0x01, 0x0F, 0x84, 0x94, 0x04, 0x00, 0x00, 0x83, 0x7E, 0x40, 0x00 }, "rail node active, next" },
+		{ 0x005147C0, 3, { 0xD9, 0x46, 0x10 }, "rail box max" },
+		{ 0x005147D2, 2, { 0xD9, 0x06 }, "rail box min" },
+		{ 0x00514833, 16, { 0xD9, 0x46, 0x20, 0x8B, 0x46, 0x40, 0xD9, 0x9C, 0x24, 0xA8, 0x00, 0x00, 0x00, 0xD9, 0x46, 0x24 }, "rail node position" },
+		{ 0x00514AF1, 4, { 0x83, 0x7E, 0x44, 0x00 }, "rail node previous" },
+		{ 0x00514C5E, 11, { 0x83, 0x44, 0x24, 0x24, 0x50, 0x83, 0xC0, 0x01, 0x3B, 0x46, 0x4C }, "rail node size, count" },
 		// the game's rail physics, where it uses what the drag reads and changes: the balance component and
 		// what it balances, the rail node, the length of the frame, the speed, a rail node's terrain
 		{ 0x0056D049, 15, { 0x8B, 0x86, 0xCC, 0x04, 0x00, 0x00, 0x8B, 0x48, 0x18, 0x81, 0xF9, 0x6F, 0xD8, 0x5E, 0x25 }, "balance kind" },
@@ -204,10 +253,6 @@ namespace FlickitGame {
 	static bool s_hasPick = false;
 	static Pick s_pick;
 
-	void BeginFrame() {
-		s_active = false;
-	}
-
 	void SetFrame(const Frame& frame) {
 		s_frame = frame;
 		s_active = true;
@@ -253,11 +298,43 @@ namespace FlickitGame {
 	};
 	static RailStay s_rail;
 
+	// Rails that catch by themselves, within Skate's reach
+	struct Reach {
+		bool byItself;              // the catch test just before said yes without the Grind button being down
+		bool found;                 // the search that followed took a rail; the game may still turn it down
+		Flickit::RailPass pass;     // how the board passed it
+		uint32_t catches;           // rails the board went onto that way, for the log
+		Flickit::RailPass caught;
+		bool tookRail;              // in this flight
+		bool turnedDown;            // in this flight the game would not have a rail that was within reach (the one just left, mostly)
+		Flickit::RailPass nearest;  // the rail that came closest in this flight without being within reach
+		uint32_t misses;            // flights that ended on the ground with such a rail close by
+		Flickit::RailPass missed;
+	};
+	static Reach s_reach;
+	// A rail that missed by more than this is not worth a line in the log
+	static const float kWorthTelling = 2.5f;
+
 	// A board that stepped off a rail because it had stopped there stands right next to that rail.
 	// Until it has been on the ground, or a few seconds have passed, rails do not catch by themselves.
 	static bool s_noCatch = false;
 	static int s_noCatchPolls = 0;
 	static const int kNoCatchPolls = 240;
+
+	// Before a catch test, and at the start of a frame: what the last search found has been dealt
+	// with. A rail that is still marked as found was not taken by the game.
+	static void ReachForget() {
+		if (s_reach.found) {
+			s_reach.turnedDown = true;
+		}
+		s_reach.byItself = false;
+		s_reach.found = false;
+	}
+
+	void BeginFrame() {
+		s_active = false;
+		ReachForget();
+	}
 
 	static void RailForget() {
 		s_rail.run.Begin();
@@ -358,6 +435,20 @@ namespace FlickitGame {
 		if (skater != s_lastSkater || (out.state == Flickit::STATE_RAIL && s_lastState != Flickit::STATE_RAIL)) {
 			NewGrind();
 		}
+		// A flight starts with no rail seen. One that ends on the ground with a rail that was just
+		// out of reach is told to the log.
+		if (out.state == Flickit::STATE_AIR && s_lastState != Flickit::STATE_AIR) {
+			s_reach.nearest.miss = Flickit::kNoRail;
+			s_reach.tookRail = false;
+			s_reach.turnedDown = false;
+		}
+		else if (out.state == Flickit::STATE_GROUND && s_lastState == Flickit::STATE_AIR) {
+			if (!s_reach.tookRail && !s_reach.turnedDown && s_reach.nearest.miss < kWorthTelling) {
+				s_reach.missed = s_reach.nearest;
+				s_reach.misses++;
+			}
+			s_reach.nearest.miss = Flickit::kNoRail;
+		}
 		s_lastSkater = skater;
 		s_lastState = out.state;
 
@@ -380,6 +471,10 @@ namespace FlickitGame {
 		out.railTerrain = s_rail.terrain;
 		out.railSurface = s_rail.surface;
 		out.dragClass = s_rail.dragClass;
+		out.catchSerial = s_reach.catches;
+		out.caught = s_reach.caught;
+		out.missSerial = s_reach.misses;
+		out.missed = s_reach.missed;
 		return true;
 	}
 
@@ -391,6 +486,9 @@ namespace FlickitGame {
 	// The game asks "is the Grind button down?" before it looks for a rail under a skater in the air.
 	// Both places that ask call this instead. core: the skater's CSkaterCorePhysicsComponent.
 	static bool __cdecl RailCatchAllowed(const uint8_t* core) {
+		// The search that follows a "yes" is the game's own, at its own reach, unless the yes
+		// comes from further down
+		ReachForget();
 		const uint8_t* input = *(const uint8_t* const*)(core + CORE_INPUT);
 		if (input && input[INPUT_GRIND_PRESSED] != 0) {
 			return true;    // the button, as it always was
@@ -406,6 +504,7 @@ namespace FlickitGame {
 		if (!state || state[STATE_VERT_AIR] != 0) {
 			return false;
 		}
+		s_reach.byItself = true;
 		return true;
 	}
 
@@ -427,6 +526,65 @@ namespace FlickitGame {
 
 	/******************************************************************/
 	/*                                                                */
+	/*  A rail that catches by itself reaches as far as Skate's       */
+	/******************************************************************/
+
+	static bool RailTestOfTheGame(const float* from, const float* to) {
+		const GameVector a = { from[0], from[1], from[2], from[3] };
+		const GameVector b = { to[0], to[1], to[2], to[3] };
+		return RailValid(a, b);
+	}
+
+	// Stands in for the game's search when the catch test before it said yes without the Grind
+	// button. from, to: where the skater was a frame ago and where he is now, in the frame of the
+	// thing the rails belong to (the level, or something that moves).
+	static bool FindRailInReach(const uint8_t* manager, const float* from, const float* to, float* point, void** node, const void* ignore, float minCos) {
+		if (!manager) {
+			return false;
+		}
+		Flickit::RailNodes nodes;
+		nodes.first = *(const uint8_t* const*)(manager + MANAGER_NODES);
+		nodes.count = *(const int32_t*)(manager + MANAGER_COUNT);
+		nodes.stride = RAIL_NODE_SIZE;
+		nodes.boxMin = RAIL_BOX_MIN;
+		nodes.boxMax = RAIL_BOX_MAX;
+		nodes.position = RAIL_POSITION;
+		nodes.next = RAIL_NEXT;
+		nodes.previous = RAIL_PREVIOUS;
+		nodes.flags = RAIL_FLAGS;
+		nodes.needs = RAIL_FLAG_ACTIVE;
+		nodes.skips = RAIL_FLAG_CLIMB_ONLY;
+
+		Flickit::RailPass pass;
+		const uint8_t* found = Flickit::FindRail(nodes, from, to, (const uint8_t*)ignore, minCos, s_frame.reach, &RailTestOfTheGame, pass);
+		if (!found) {
+			if (pass.miss < s_reach.nearest.miss) {
+				s_reach.nearest = pass;
+			}
+			return false;
+		}
+		point[0] = pass.point[0];
+		point[1] = pass.point[1];
+		point[2] = pass.point[2];
+		point[3] = *(const float*)(found + RAIL_POSITION + 12);
+		*node = (void*)found;
+		s_reach.found = true;
+		s_reach.pass = pass;
+		return true;
+	}
+
+	// Stands where the game calls CRailManager::StickToRail after a catch test, for the rails of
+	// the level and for those of each thing that moves. Same arguments, same answer in al, and the
+	// seven arguments are taken off the stack as the game's function does it.
+	static bool __fastcall RailSearchHook(uint8_t* manager, void* /*edx*/, const float* from, const float* to, float* point, void** node, const void* ignore, float minCos, int side) {
+		if (s_reach.byItself && s_active && s_frame.reach > 0) {
+			return FindRailInReach(manager, from, to, point, node, ignore, minCos);
+		}
+		return RailSearch(manager, from, to, point, node, ignore, minCos, side);
+	}
+
+	/******************************************************************/
+	/*                                                                */
 	/*  The board touches a rail                                      */
 	/******************************************************************/
 
@@ -435,6 +593,13 @@ namespace FlickitGame {
 	static void RailTouched(const uint8_t* core, bool railOnLeft) {
 		RailForget();
 		s_noCatch = false;
+		if (s_reach.found) {
+			// It is the rail the search within Skate's reach took a moment ago
+			s_reach.found = false;
+			s_reach.caught = s_reach.pass;
+			s_reach.catches++;
+		}
+		s_reach.tookRail = true;
 
 		// By now the speed points along the rail. With (x, z) the level direction of travel, the
 		// game's flag says the rail lay toward (z, -x) from the board. The board came from the
@@ -686,9 +851,14 @@ namespace FlickitGame {
 		patchCall(kPickCall, (void*)&GrindPickHook);
 		patchCall(kBalanceCall, (void*)&RailBalanceHook);
 		patchCall(kBoostCall, (void*)&RailBoostHook);
+		s_reach.nearest.miss = Flickit::kNoRail;
+		patchCall(kSearchCall1, (void*)&RailSearchHook);
+		patchCall(kSearchCall2, (void*)&RailSearchHook);
+		patchCall(kSearchMovingCall1, (void*)&RailSearchHook);
+		patchCall(kSearchMovingCall2, (void*)&RailSearchHook);
 
 		s_installed = true;
-		Log::TypedLog(CHN_SDL, "Flickit: grind hooks are in (rail catch, grind pick, rail balance, rail boost)\n");
+		Log::TypedLog(CHN_SDL, "Flickit: grind hooks are in (rail catch, rail search, grind pick, rail balance, rail boost)\n");
 		return true;
 	}
 }

@@ -1,4 +1,4 @@
-"""Look at the four hooks of src/flickit_game.cpp in a built thugsdl.dll.
+"""Look at the five hooks of src/flickit_game.cpp in a built thugsdl.dll.
 
 usage: check_hooks.py <built thugsdl.dll> [<built thugsdl.dll> ...]
 
@@ -6,6 +6,9 @@ The hooks are called by the game's own code, at places where a call or a compare
 they have to keep to what the game's code expects there, whatever the compiler makes of the source:
 
   rail catch    a bare function: saves ecx and edx, passes esi, answers in al, returns with a plain ret
+  rail search   takes the place of four calls to the game's search for a rail, which pops seven
+                arguments: every return is ret 1Ch (or a jump into the game's function, which does
+                the popping)
   grind pick    takes the place of a call to a function that pops five arguments: every return is ret 14h
                 (or a jump into the game's function, which does the popping)
   rail balance  takes the place of a call to a function without arguments: every return is a plain ret
@@ -31,6 +34,7 @@ DO_GRIND_TRICK = 0x005608C0
 BALANCE_UPDATE = 0x0050B9C0
 GET_LOCAL_SKATER = 0x004F94F0
 GET_PHYSICS_FLOAT = 0x00516110
+RAIL_SEARCH = 0x00514630
 
 # push ecx / push edx / push esi / call ... / add esp, 4 / pop edx / pop ecx / ret
 RAIL_CATCH_PATTERN = bytes.fromhex("515256e8") + b"...." + bytes.fromhex("83c4045a59c3")
@@ -41,6 +45,8 @@ NAMES = {
     BALANCE_UPDATE: "the balance update",
     GET_LOCAL_SKATER: "GetLocalSkater",
     GET_PHYSICS_FLOAT: "GetPhysicsFloat",
+    RAIL_SEARCH: "the game's search for a rail",
+    0x00512760: "the game's test of a piece of rail",
     0x0076A788: "the skate module pointer",
     0x0041BDC0: "GetComponent",
     0x0040FBC0: "CScript::SetScript",
@@ -219,7 +225,7 @@ def check(path):
     pointers = dll.code_pointers()
     print("  %d functions have their address taken" % len(pointers))
 
-    catch, pick, balance, boost = [], [], [], []
+    catch, pick, balance, boost, search = [], [], [], [], []
     for p in sorted(set(dll.entry(p) for p in pointers)):
         if matches(dll, p, RAIL_CATCH_PATTERN, (4, 8)):
             catch.append(p)
@@ -233,6 +239,8 @@ def check(path):
             pick.append((p, insns))
         elif BALANCE_UPDATE in refs:
             balance.append((p, insns))
+        elif RAIL_SEARCH in refs:
+            search.append((p, insns))
 
     # --- rail catch
     if len(catch) != 1:
@@ -248,6 +256,16 @@ def check(path):
         rets = returns(callee)
         if not rets or any(r != 0 for r in rets):
             problems.append("the function the rail catch hook calls returns with %s, not with a plain ret" % rets)
+
+    # --- rail search
+    if len(search) != 1:
+        problems.append("the rail search hook was found %d times" % len(search))
+    for p, insns in search:
+        show(dll, "rail search hook at %08X" % p, insns)
+        rets = returns(insns)
+        tail = insns and insns[-1].mnemonic == "jmp"
+        if any(r != 0x1C for r in rets) or (not rets and not tail):
+            problems.append("a rail search hook returns with %s: every return has to pop 0x1C bytes" % [hex(r) for r in rets])
 
     # --- grind pick
     if len(pick) != 1:

@@ -145,6 +145,23 @@ The Grind button itself works as it always did. While it is held the game picks 
 
 Off the board Flickit stands down: the right stick is the camera again and the triggers are the game's. Both bumpers get the skater back on, as they got him off.
 
+### How far a rail reaches
+THUG takes a rail when the skater's path comes within 40 units of it while he travels along it (20 when he crosses it). That is a metre at his size. It measures in every direction, so a rail overhead or well below counts too, and it puts the board on the rail in that same frame. With a Grind button to time, that is a reach the player asks for. With rails that catch by themselves it is a magnet: any rail near the flight takes the board.
+
+Skate has nothing like it. Its helper looks eight ticks ahead for a part of the board that is about to pass a rail at less than 17 to 24 cm, and then slides the board toward the rail by at most 3 cm a tick and 20 cm in all. THUG's skater is one point, the middle of his board, so Flickit uses the test Skate has for the middle of the board, which is the same whichever way the board is turned. A rail that catches by itself reaches:
+
+- 19 units to either side, level. That is Skate's 24 cm.
+- 16 units down: the board may be that far above the rail. And 8 units up, for a board that comes in just under it. The board has to come down on the rail; a rail overhead or far below is out of reach.
+- 16 units beyond its end.
+
+Those are the half axes of one rounded shape around the rail, so a board that is both beside the rail and above it has to be nearer on both counts. No point of that shape is as far as 20 units from the rail, so the reach of a rail now lies wholly inside the reach THUG gives it, whichever way the board comes. A rail the board has crossed, or flown off the end of, is let go after 8 units. Nothing pulls the board back.
+
+Where two rails are near, the one under the board is taken. THUG prefers the one that runs the way the skater travels, which at the corner of a ledge is often the wrong edge.
+
+`GrindReach` scales all of it, in percent. At 100 the distances are Skate's at the scale the drag uses, 80 units to the metre: THUG's skater is about twice as fast for his size, so this gives the player the same time to line up a rail as in Skate. At 50 they are Skate's at the skater's own size, 40 units to the metre: the pull is as short on screen as in Skate, and there is half the time to line up. 200 is close to THUG's own reach along a rail. 0 hands the search back to the game.
+
+Holding the Grind button gives the game's own reach for that jump, and the coping of a ramp is on the button as before. With the console on, every rail says how far it had to reach for the board, and a jump that ends on the ground next to a rail says by how much it missed.
+
 ### Speed on a rail
 In THUG a grind lasts as long as the rail does. With Flickit the board loses speed on a rail the way it does in Skate, and steps off by itself when the speed is gone.
 
@@ -158,7 +175,7 @@ In THUG a grind lasts as long as the rail does. With Flickit the board loses spe
 
 The numbers are Skate 3's, put into THUG's units at 80 units of speed for one metre per second. That makes a grind last as long as it would in Skate when both skaters come in at their own rolling speed. THUG's skater is about twice as fast as Skate's, so measured in rail the grinds go about twice as far; `GrindDrag=200` gives roughly Skate's distances instead.
 
-For all this the mod looks at the skater's state and changes four places in the game's rail code: the test for the Grind button before a rail is caught, the pick of the grind, the balance of a grind (the drag is applied in the same place, once per frame of the game's rail physics), and the speed the game adds when the board lands on a rail. The code at every address it uses is compared with what is expected there first. If anything differs nothing is touched and grinds work as in earlier versions, with the Grind button held for a moment after each pop. `GameHooks=0` does the same on purpose. All of it applies to the first player's skater.
+For all this the mod looks at the skater's state and changes five places in the game's rail code: the test for the Grind button before a rail is caught, the search for a rail that follows it, the pick of the grind, the balance of a grind (the drag is applied in the same place, once per frame of the game's rail physics), and the speed the game adds when the board lands on a rail. The code at every address it uses is compared with what is expected there first. If anything differs nothing is touched and grinds work as in earlier versions, with the Grind button held for a moment after each pop. `GameHooks=0` does the same on purpose. All of it applies to the first player's skater.
 
 The settings live in the `[Flickit]` section of `thugsdl.ini`. Thresholds are percent of full stick deflection, times are milliseconds. Press F9 in game to re-read the section without restarting.
 
@@ -195,6 +212,7 @@ The settings live in the `[Flickit]` section of `thugsdl.ini`. Thresholds are pe
 | SwitchHold | 250 | How long the stick has to rest on a rail before the grind switches |
 | RailTap | 50 | How long Ollie is pressed for the pop off a rail. Longer pops higher, up to about 200 |
 | FlickSpeed | 100 | On a rail and in the air, how fast the stick has to travel to be a flick: percent of full deflection per 100 ms. 0: any speed |
+| GrindReach | 100 | How far a rail that catches by itself reaches for the board, in percent of Skate's reach (see How far a rail reaches). 0: the game's own reach, 20 to 40 units all around. Up to 400 |
 | GrindDrag | 100 | How much speed the board loses on a rail, in percent of Skate's drag (see Speed on a rail). 0: none, as in THUG. Up to 1000 |
 | GrindExit | 1 | A board that has run out of speed on a rail steps off by itself. 0: it stays on |
 | GrindBoost | 0 | 1: keep the speed THUG adds when the board lands on a rail. Without the drag (`GrindDrag=0`) it is always kept |
@@ -222,7 +240,7 @@ g++ -std=c++11 -I src tests/flickit_test.cpp src/flickit.cpp -o flickit_test && 
 g++ -std=c++11 -I src tests/flickit_pattern_test.cpp src/flickit.cpp -o flickit_pattern_test && ./flickit_pattern_test
 g++ -std=c++11 -I src tests/flickit_grind_test.cpp src/flickit.cpp -o flickit_grind_test && ./flickit_grind_test
 ```
-The second one also takes a pattern file: `./flickit_pattern_test skater.pat` draws every pattern in it and reports what was recognized. The third one is run from the top of the repository: it checks the grinds the mod asks the game for against the game's own grind table in `scripts/qb/source/scripts/game/skater/grindlist.q`, and the drag on a rail against the times and distances a grind lasts in Skate.
+The second one also takes a pattern file: `./flickit_pattern_test skater.pat` draws every pattern in it and reports what was recognized. The third one is run from the top of the repository: it checks the grinds the mod asks the game for against the game's own grind table in `scripts/qb/source/scripts/game/skater/grindlist.q`, the drag on a rail against the times and distances a grind lasts in Skate, the reach of a rail against the distance to it worked out the slow way and against THUG's own reach, and the search for a rail against trying every piece of rail one by one.
 
 ## TROUBLESHOOTING
 

@@ -14,7 +14,9 @@
 
 #include <math.h>
 #include <stdio.h>
+#include <stddef.h>
 #include <stdlib.h>
+#include <string.h>
 #include <string>
 #include <vector>
 
@@ -2222,15 +2224,752 @@ static void testStepOff(double hz) {
 	}
 }
 
-// ---------------------------------------------------------------------------------------------
-// Random play: things that must hold whatever the stick and the skater do
-// ---------------------------------------------------------------------------------------------
-
 static unsigned int g_seed = 12345;
 static float frand() {
 	g_seed = g_seed * 1664525u + 1013904223u;
 	return (float)((g_seed >> 8) & 0xFFFF) / 65535.0f;
 }
+
+// ---------------------------------------------------------------------------------------------
+// How far a rail reaches for the board
+// ---------------------------------------------------------------------------------------------
+
+static RailPass pass(float ax, float ay, float az, float bx, float by, float bz, const float* from, const float* to, int percent = 100) {
+	const float a[3] = { ax, ay, az };
+	const float b[3] = { bx, by, bz };
+	return PassRail(a, b, from, to, percent);
+}
+
+// A board that falls through the height of a level rail along z, so far beside it
+static RailPass beside(float distance, int percent = 100) {
+	static const float from[3] = { 0.0f, 0.0f, -100.0f };
+	static const float to[3] = { 0.0f, 0.0f, 100.0f };
+	return pass(distance, 5.0f, -10.0f, distance, -5.0f, 0.0f, from, to, percent);
+}
+
+// How far apart two straight pieces are, found the slow way: many points along the first, and
+// for each of them the nearest point of the second. A little too long at most, never too short.
+static double slowDistance(const float* a, const float* b, const float* from, const float* to) {
+	double least = 1.0e30;
+	for (int i = 0; i <= 500; i++) {
+		const double s = i / 500.0;
+		double p[3], d[3];
+		double length2 = 0.0, dot = 0.0;
+		for (int k = 0; k < 3; k++) {
+			p[k] = a[k] + s * ((double)b[k] - a[k]);
+			d[k] = (double)to[k] - from[k];
+			length2 += d[k] * d[k];
+			dot += (p[k] - from[k]) * d[k];
+		}
+		double t = length2 > 0.0 ? dot / length2 : 0.0;
+		if (t < 0.0) t = 0.0;
+		if (t > 1.0) t = 1.0;
+		double distance2 = 0.0;
+		for (int k = 0; k < 3; k++) {
+			const double r = from[k] + t * d[k] - p[k];
+			distance2 += r * r;
+		}
+		const double distance = sqrt(distance2);
+		if (distance < least) least = distance;
+	}
+	return least;
+}
+
+// What THUG's own search asks of a piece of rail: the distance, times 2 less the cosine of the
+// level angle between the way the board goes and the rail, is 40 at most
+static bool thugWouldReach(const float* a, const float* b, const float* from, const float* to) {
+	const double mx = (double)b[0] - a[0], mz = (double)b[2] - a[2];
+	const double rx = (double)to[0] - from[0], rz = (double)to[2] - from[2];
+	const double m = sqrt(mx * mx + mz * mz), r = sqrt(rx * rx + rz * rz);
+	double c = 1.0;
+	if (m > 1.0e-9 && r > 1.0e-9) c = fabs(mx * rx + mz * rz) / (m * r);
+	return slowDistance(a, b, from, to) * (2.0 - c) <= 40.0;
+}
+
+static void testReach() {
+	static const float from[3] = { 0.0f, 0.0f, -100.0f };
+	static const float to[3] = { 0.0f, 0.0f, 100.0f };
+
+	g_case = "reach: Skate's distances in THUG's units";
+	CHECK(near(kReachLevel, 0.243 * 80.0, 0.01));            // 19.4
+	CHECK(near(kReachDown, 0.2 * 80.0, 0.01));               // 16
+	CHECK(near(kReachUp, 8.0, 0.01));
+	CHECK(near(kReachEnd, 16.0, 0.01));
+	CHECK_EQ(kReachMostPercent, 400);
+	// none of it as far as THUG reaches even across a rail (20 units), where it reaches least
+	CHECK(kReachLevel < 20.0f && kReachDown < 20.0f && kReachUp < 20.0f && kReachEnd < 20.0f);
+	CHECK(kReachBehind < kReachLevel && kReachBehind < kReachEnd);
+
+	g_case = "reach: beside the rail";
+	{
+		// the board comes down right on the rail
+		const RailPass on = beside(0.0f);
+		CHECK(on.miss < 0.01f);
+		CHECK(!on.away);
+		CHECK(near(on.side, 0.0, 0.01));
+		CHECK(near(on.point[0], 0.0, 0.01) && near(on.point[1], 0.0, 0.01));
+		// 19.4 units
+		CHECK(beside(10.0f).miss < 1.0f);
+		CHECK(beside(19.0f).miss <= 1.0f);
+		CHECK(beside(20.0f).miss > 1.0f);
+		CHECK(beside(39.0f).miss > 1.9f);            // THUG would have taken this
+		CHECK(near(beside(10.0f).miss, 10.0 / 19.44, 0.001));
+		// and the same on the other side
+		CHECK(near(beside(-10.0f).miss, beside(10.0f).miss, 1e-4));
+		// what is reported: the level distance, signed by the side
+		CHECK(near(fabs(beside(12.0f).side), 12.0, 0.01));
+		CHECK(beside(12.0f).side * beside(-12.0f).side < 0.0f);
+		CHECK(near(beside(12.0f).lift, 0.0, 0.5));
+		CHECK(near(beside(12.0f).past, 0.0, 0.01));
+		// which way the board goes makes no difference to how far the rail reaches: coming
+		// across the rail it is the same 19.4 units as going along it. (THUG: 20 and 40.)
+		CHECK(pass(-29, 0, 0, -19, 0, 0, from, to).miss <= 1.0f);
+		CHECK(pass(-31, 0, 0, -21, 0, 0, from, to).miss > 1.0f);
+		CHECK(near(pass(-22, 0, 0, -12, 0, 0, from, to).miss, 12.0 / 19.44, 0.001));
+		CHECK(near(pass(12, 0, -40, 12, 0, -30, from, to).miss, 12.0 / 19.44, 0.001));
+		CHECK(near(pass(-19, 0, -7, -12, 0, 0, from, to).miss, 12.0 / 19.44, 0.001));
+	}
+
+	g_case = "reach: above and below the rail";
+	{
+		// level flight along the rail, so high above it: up to 16 units
+		CHECK(pass(0, 15, -10, 0, 15, 0, from, to).miss <= 1.0f);
+		CHECK(pass(0, 17, -10, 0, 17, 0, from, to).miss > 1.0f);
+		CHECK(near(pass(0, 15, -10, 0, 15, 0, from, to).lift, -15.0, 0.01));
+		// and under it: up to 8
+		CHECK(pass(0, -7, -10, 0, -7, 0, from, to).miss <= 1.0f);
+		CHECK(pass(0, -9, -10, 0, -9, 0, from, to).miss > 1.0f);
+		CHECK(near(pass(0, -7, -10, 0, -7, 0, from, to).lift, 7.0, 0.01));
+		// THUG pulls a board down from 39 units above a rail; this does not
+		CHECK(pass(0, 39, -10, 0, 39, 0, from, to).miss > 2.0f);
+		// a board that falls through the rail's height between two frames is not missed: what
+		// counts is the path
+		CHECK(pass(5, 40, -10, 5, -40, -5, from, to).miss < 0.5f);
+	}
+
+	g_case = "reach: beside and above at once";
+	{
+		// The reaches are the half axes of one rounded shape. 10 beside and 12 above:
+		// (10 / 19.44)^2 + (12 / 16)^2 = 0.827, the root of that
+		CHECK(near(pass(10, 12, -10, 10, 12, 0, from, to).miss, 0.9095, 0.001));
+		CHECK(near(pass(18, 4, -10, 18, 4, 0, from, to).miss, 0.9591, 0.001));
+		// each within its own reach, the two together not
+		CHECK(pass(15, 0, -10, 15, 0, 0, from, to).miss <= 1.0f);
+		CHECK(pass(0, 12, -10, 0, 12, 0, from, to).miss <= 1.0f);
+		CHECK(near(pass(15, 12, -10, 15, 12, 0, from, to).miss, 1.0760, 0.001));
+		CHECK(pass(19, 15, -10, 19, 15, 0, from, to).miss > 1.3f);
+		// and with the end of a rail: 12 short of it, 12 beside it
+		static const float start[3] = { 0.0f, 0.0f, 0.0f };
+		static const float end[3] = { 0.0f, 0.0f, 100.0f };
+		CHECK(pass(0, 0, -22, 0, 0, -12, start, end).miss <= 1.0f);
+		CHECK(pass(12, 0, -22, 12, 0, -12, start, end).miss <= 1.0f);
+		CHECK(near(pass(12, 0, -22, 12, 0, -12, start, end).miss, 0.9714, 0.001));
+		CHECK(pass(15, 0, -22, 15, 0, -12, start, end).miss > 1.0f);
+	}
+
+	g_case = "reach: the ends of a rail";
+	{
+		static const float start[3] = { 0.0f, 0.0f, 0.0f };
+		static const float end[3] = { 0.0f, 0.0f, 100.0f };
+		// short of the start by so much, flying toward it
+		CHECK(pass(0, 2, -25, 0, 2, -15, start, end).miss <= 1.0f);
+		CHECK(pass(0, 2, -27, 0, 2, -17, start, end).miss > 1.0f);
+		CHECK(near(pass(0, 2, -25, 0, 2, -15, start, end).past, 15.0, 0.01));
+		CHECK(!pass(0, 2, -25, 0, 2, -15, start, end).away);
+		// the board goes to the end of the rail
+		const RailPass p = pass(0, 2, -25, 0, 2, -15, start, end);
+		CHECK(near(p.point[0], 0.0, 0.01) && near(p.point[1], 0.0, 0.01) && near(p.point[2], 0.0, 0.01));
+		// off the far end and flying on: only just past it is still its rail
+		CHECK(pass(0, 2, 105, 0, 2, 115, start, end).miss <= 1.0f);
+		CHECK(!pass(0, 2, 105, 0, 2, 115, start, end).away);
+		CHECK(pass(0, 2, 110, 0, 2, 120, start, end).miss > 1.0f);
+		CHECK(pass(0, 2, 110, 0, 2, 120, start, end).away);
+		// coming back toward that end from beyond it
+		CHECK(pass(0, 2, 125, 0, 2, 112, start, end).miss <= 1.0f);
+		CHECK(pass(0, 2, 130, 0, 2, 118, start, end).miss > 1.0f);
+		CHECK(!pass(0, 2, 130, 0, 2, 118, start, end).away);
+	}
+
+	g_case = "reach: where the board goes";
+	{
+		// beside the rail and flying along it: the place on the rail next to where the board is
+		// now, not where it was a frame ago
+		const RailPass p = pass(8, 3, 20, 8, 3, 32, from, to);
+		CHECK(near(p.point[0], 0.0, 0.01) && near(p.point[1], 0.0, 0.01) && near(p.point[2], 32.0, 0.01));
+		// crossing it: where it crosses
+		const RailPass q = pass(-6, 1, 40, 6, 1, 44, from, to);
+		CHECK(near(q.point[0], 0.0, 0.01) && near(q.point[2], 42.0, 0.05));
+		CHECK(near(q.side, 0.0, 0.05));
+		CHECK(near(q.lift, -1.0, 0.05));
+	}
+
+	g_case = "reach: a rail the board has passed";
+	{
+		// across the rail, toward it: not away, however far
+		CHECK(!pass(-39, 0, 0, -29, 0, 0, from, to).away);
+		CHECK(!pass(-29, 0, 0, -19, 0, 0, from, to).away);
+		// over it and gone: 10 units past it is not pulled back
+		const RailPass gone = pass(10, 0, 0, 20, 0, 0, from, to);
+		CHECK(gone.miss > 1.0f);
+		CHECK(gone.away);
+		CHECK(near(gone.miss, 1.5, 1e-4));          // by the distance alone it would be within reach
+		// only just past it: still its rail
+		CHECK(pass(5, 0, 0, 15, 0, 0, from, to).miss <= 1.0f);
+		CHECK(pass(8, 0, 0, 18, 0, 0, from, to).miss <= 1.0f);
+		CHECK(!pass(8, 0, 0, 18, 0, 0, from, to).away);
+		CHECK(pass(9, 0, 0, 19, 0, 0, from, to).miss > 1.0f);
+		// far past it: away, and as far as it is
+		const RailPass far = pass(50, 0, 0, 60, 0, 0, from, to);
+		CHECK(far.away);
+		CHECK(near(far.miss, 50.0 / 19.44, 0.001));
+		// along the rail with a little drift away from it: that is not leaving it
+		CHECK(pass(15, 2, 0, 16, 2, 10, from, to).miss <= 1.0f);
+		CHECK(!pass(15, 2, 0, 16, 2, 10, from, to).away);
+		// too high over it, then down behind it: gone
+		CHECK(pass(-5, 30, 0, 5, 26, 0, from, to).miss > 1.0f);
+		CHECK(pass(15, 14, 0, 25, 10, 0, from, to).miss > 1.0f);
+		// straight down next to it is not leaving it
+		CHECK(!pass(12, 5, 0, 12, -5, 0, from, to).away);
+		CHECK(pass(12, 5, 0, 12, -5, 0, from, to).miss <= 1.0f);
+	}
+
+	g_case = "reach: GrindReach";
+	{
+		CHECK(beside(9.0f, 50).miss <= 1.0f);
+		CHECK(beside(10.0f, 50).miss > 1.0f);
+		CHECK(beside(38.0f, 200).miss <= 1.0f);
+		CHECK(beside(39.0f, 200).miss > 1.0f);
+		CHECK(pass(0, 31, -10, 0, 31, 0, from, to, 200).miss <= 1.0f);
+		CHECK(pass(0, 33, -10, 0, 33, 0, from, to, 200).miss > 1.0f);
+		// twice the reach: half the miss
+		CHECK(near(beside(12.0f, 200).miss * 2.0, beside(12.0f, 100).miss, 1e-3));
+		CHECK(near(pass(10, 12, -10, 10, 12, 0, from, to, 200).miss * 2.0, pass(10, 12, -10, 10, 12, 0, from, to).miss, 1e-3));
+		// and a rail the board has passed is let go later
+		CHECK(pass(10, 0, 0, 20, 0, 0, from, to, 100).away);
+		CHECK(!pass(10, 0, 0, 20, 0, 0, from, to, 200).away);
+		CHECK(pass(10, 0, 0, 20, 0, 0, from, to, 200).miss <= 1.0f);
+		// off: no rail (the game's own search is used then)
+		CHECK(beside(0.0f, 0).miss >= kNoRail);
+		CHECK(beside(0.0f, -5).miss >= kNoRail);
+	}
+
+	g_case = "reach: a rail on a slope";
+	{
+		// 45 degrees up along z
+		static const float low[3] = { 0.0f, 0.0f, 0.0f };
+		static const float high[3] = { 0.0f, 100.0f, 100.0f };
+		// 10 units off it, square to it, on its upper side
+		const RailPass above = pass(0, 57.07f, 42.93f, 0, 57.07f, 42.93f, low, high);
+		CHECK(near(above.lift, -10.0, 0.05));
+		CHECK(near(above.side, 0.0, 0.01));
+		CHECK(near(above.past, 0.0, 0.05));
+		CHECK(near(above.miss, 10.0 / 16.0, 0.01));
+		CHECK(near(above.point[1], 50.0, 0.05) && near(above.point[2], 50.0, 0.05));
+		// and under it
+		const RailPass under = pass(0, 42.93f, 57.07f, 0, 42.93f, 57.07f, low, high);
+		CHECK(near(under.lift, 10.0, 0.05));
+		CHECK(under.miss > 1.0f);
+		// beside it: level, whatever the slope
+		const RailPass side = pass(12, 50, 50, 12, 50, 50, low, high);
+		CHECK(near(fabs(side.side), 12.0, 0.01));
+		CHECK(near(side.lift, 0.0, 0.05));
+	}
+
+	g_case = "reach: a rail that stands on end";
+	{
+		// It has no top side: only the level distance counts, at any height along it
+		static const float foot[3] = { 0.0f, 0.0f, 0.0f };
+		static const float top[3] = { 0.0f, 100.0f, 0.0f };
+		CHECK(pass(10, 50, -5, 10, 50, 5, foot, top).miss <= 1.0f);
+		CHECK(near(pass(10, 50, -5, 10, 50, 5, foot, top).miss, 10.0 / 19.44, 0.001));
+		CHECK(near(pass(10, 90, -5, 10, 90, 5, foot, top).miss, 10.0 / 19.44, 0.001));
+		CHECK(pass(25, 50, -5, 25, 50, 5, foot, top).miss > 1.0f);
+		// above its top it ends like any rail: 16 units
+		CHECK(pass(5, 110, -5, 5, 110, 5, foot, top).miss <= 1.0f);
+		CHECK(near(pass(5, 110, -5, 5, 110, 5, foot, top).past, -10.0, 0.01));
+		CHECK(pass(5, 118, -5, 5, 118, 5, foot, top).miss > 1.0f);
+		CHECK(pass(0, 130, -5, 0, 130, 5, foot, top).miss > 1.5f);
+		// and under its foot
+		CHECK(pass(0, -10, -5, 0, -10, 5, foot, top).miss <= 1.0f);
+		CHECK(pass(0, -20, -5, 0, -20, 5, foot, top).miss > 1.0f);
+	}
+
+	g_case = "reach: a rail that is one point";
+	{
+		static const float point[3] = { 0.0f, 0.0f, 0.0f };
+		const RailPass p = pass(-5, 3, -10, -5, 3, 10, point, 0);
+		CHECK(near(p.side, 5.0, 0.01));
+		CHECK(near(p.lift, -3.0, 0.01));
+		CHECK(near(p.miss, 0.3183, 0.001));         // (5 / 19.44)^2 + (3 / 16)^2, the root of that
+		CHECK(!p.away);
+		CHECK(near(p.point[0], 0.0, 1e-6) && near(p.point[1], 0.0, 1e-6) && near(p.point[2], 0.0, 1e-6));
+		CHECK(pass(-19, 0, -10, -19, 0, 10, point, 0).miss <= 1.0f);
+		CHECK(pass(-21, 0, -10, -21, 0, 10, point, 0).miss > 1.0f);
+		CHECK(pass(0, 15, -10, 0, 15, 10, point, 0).miss <= 1.0f);
+		CHECK(pass(0, 17, -10, 0, 17, 10, point, 0).miss > 1.0f);
+		CHECK(pass(0, -9, -10, 0, -9, 10, point, 0).miss > 1.0f);
+		// a piece of rail with no length is a point too
+		CHECK(near(pass(-5, 3, -10, -5, 3, 10, point, point).miss, p.miss, 1e-5));
+	}
+
+	g_case = "reach: numbers the game should never hand over";
+	{
+		// a board that has not moved
+		CHECK(pass(10, 2, 0, 10, 2, 0, from, to).miss <= 1.0f);
+		CHECK(pass(25, 2, 0, 25, 2, 0, from, to).miss > 1.0f);
+		CHECK(!pass(25, 2, 0, 25, 2, 0, from, to).away);
+		const float nan = (float)sqrt(-1.0);
+		const float bad[3] = { nan, 0.0f, 0.0f };
+		const float a[3] = { 0.0f, 0.0f, 0.0f };
+		CHECK(PassRail(bad, a, from, to, 100).miss >= kNoRail);
+		CHECK(PassRail(a, bad, from, to, 100).miss >= kNoRail);
+		CHECK(PassRail(a, a, bad, to, 100).miss >= kNoRail);
+		CHECK(PassRail(a, a, from, bad, 100).miss >= kNoRail);
+		CHECK(PassRail(0, a, from, to, 100).miss >= kNoRail);
+		CHECK(PassRail(a, 0, from, to, 100).miss >= kNoRail);
+		CHECK(PassRail(a, a, 0, to, 100).miss >= kNoRail);
+		// numbers too big to reckon with: no rail, or a rail a long way off, never one within reach
+		const float huge[3] = { 1.0e30f, 0.0f, 0.0f };
+		CHECK(PassRail(huge, huge, from, to, 100).miss > 1.0f);
+		CHECK(PassRail(a, a, huge, huge, 100).miss > 1.0f);
+		const float inf = (float)(1.0 / sin(0.0));
+		const float endless[3] = { inf, 0.0f, 0.0f };
+		CHECK(PassRail(endless, a, from, to, 100).miss >= kNoRail);
+		CHECK(PassRail(a, a, from, endless, 100).miss >= kNoRail);
+	}
+
+	g_case = "reach: against the slow way, and never further than THUG";
+	{
+		// Rails and flights of every kind. What is reported has to be the true distance between
+		// the board's path and the rail, split three ways. And at 100 percent a rail within reach
+		// is one THUG's own search would have reached too, with room to spare.
+		int within = 0, sloped = 0;
+		for (int round = 0; round < 40000; round++) {
+			float r0[3], r1[3], a[3], b[3];
+			for (int k = 0; k < 3; k++) {
+				r0[k] = (frand() - 0.5f) * 200.0f;
+				r1[k] = r0[k] + (frand() - 0.5f) * 240.0f;
+			}
+			if (round % 3 == 0) r1[1] = r0[1];                               // level rails, as most are
+			if (round % 7 == 0) { r1[0] = r0[0]; r1[2] = r0[2] + 0.5f; }     // and some on end
+			// a flight that starts somewhere near the rail
+			const float t = frand() * 1.4f - 0.2f;
+			for (int k = 0; k < 3; k++) {
+				a[k] = r0[k] + t * (r1[k] - r0[k]) + (frand() - 0.5f) * 70.0f;
+				b[k] = a[k] + (frand() - 0.5f) * (k == 1 ? 20.0f : 36.0f);
+			}
+			if (round % 11 == 0) { b[0] = a[0]; b[2] = a[2]; }               // straight down
+			if (round % 13 == 0) { b[0] = a[0]; b[1] = a[1]; b[2] = a[2]; }  // not moving
+
+			const RailPass p = PassRail(a, b, r0, r1, 100);
+			const double d = slowDistance(a, b, r0, r1);
+			const double reported = sqrt((double)p.side * p.side + (double)p.lift * p.lift + (double)p.past * p.past);
+			CHECK(near(reported, d, 0.08 + 1e-4 * d));
+			// the point on the rail is on the rail, and that far from the path
+			{
+				double along = 0.0, length2 = 0.0;
+				for (int k = 0; k < 3; k++) {
+					along += ((double)p.point[k] - r0[k]) * ((double)r1[k] - r0[k]);
+					length2 += ((double)r1[k] - r0[k]) * ((double)r1[k] - r0[k]);
+				}
+				const double u = along / length2;
+				CHECK(u > -1e-4 && u < 1.0 + 1e-4);
+				for (int k = 0; k < 3; k++) CHECK(near(p.point[k], r0[k] + u * ((double)r1[k] - r0[k]), 0.02));
+			}
+			const float rise = fabsf(r1[1] - r0[1]);
+			const float run = sqrtf((r1[0] - r0[0]) * (r1[0] - r0[0]) + (r1[2] - r0[2]) * (r1[2] - r0[2]));
+			if (p.miss <= 1.0f) {
+				within++;
+				if (rise > 0.2f * run) sloped++;
+				CHECK(d <= kReachLevel + 0.1);
+				CHECK(thugWouldReach(a, b, r0, r1));
+				CHECK(!p.away);
+			}
+			// by the distance alone: nothing as far as the longest reach is within reach
+			if (d > kReachLevel + 0.1) CHECK(p.miss > 1.0f);
+			// and nothing nearer than the shortest is out of it, unless the board is leaving
+			if (d < kReachUp - 0.1 && !p.away) CHECK(p.miss <= 1.0f);
+			if (p.away) CHECK(p.miss >= 1.5f - 1e-4f);
+			// the reach scales with the setting
+			if (!p.away && p.miss < 100.0f) {
+				const RailPass half = PassRail(a, b, r0, r1, 50);
+				if (!half.away) CHECK(near(half.miss, 2.0 * p.miss, 1e-3 * (1.0 + p.miss)));
+				const RailPass twice = PassRail(a, b, r0, r1, 200);
+				CHECK(!twice.away);
+				CHECK(near(twice.miss * 2.0, p.miss, 1e-3 * (1.0 + p.miss)));
+			}
+		}
+		CHECK(within > 2000);          // the test has to have had rails within reach to look at
+		CHECK(sloped > 300);
+	}
+}
+
+// Rail nodes laid out the way the search is told, with whatever size a pointer has here
+struct FakeNode {
+	float boxMin[4];
+	float boxMax[4];
+	float position[4];
+	FakeNode* next;
+	FakeNode* previous;
+	uint32_t flags;
+	uint32_t unused;
+};
+
+static const uint32_t kFakeActive = 1u << 2;
+static const uint32_t kFakeClimbOnly = 1u << 4;
+
+static RailNodes fakeNodes(const std::vector<FakeNode>& nodes) {
+	RailNodes n;
+	n.first = nodes.empty() ? 0 : (const unsigned char*)&nodes[0];
+	n.count = (int)nodes.size();
+	n.stride = (int)sizeof(FakeNode);
+	n.boxMin = (int)offsetof(FakeNode, boxMin);
+	n.boxMax = (int)offsetof(FakeNode, boxMax);
+	n.position = (int)offsetof(FakeNode, position);
+	n.next = (int)offsetof(FakeNode, next);
+	n.previous = (int)offsetof(FakeNode, previous);
+	n.flags = (int)offsetof(FakeNode, flags);
+	n.needs = kFakeActive;
+	n.skips = kFakeClimbOnly;
+	return n;
+}
+
+// Rails given as runs of points; the nodes of one run are linked, and each node's box is the box
+// around the piece that starts at it, the way the game stores it
+static void addRail(std::vector<FakeNode>& nodes, const float (*points)[3], int count) {
+	const size_t first = nodes.size();
+	for (int i = 0; i < count; i++) {
+		FakeNode n;
+		memset(&n, 0, sizeof(n));
+		for (int k = 0; k < 3; k++) n.position[k] = points[i][k];
+		n.position[3] = 1.0f;
+		n.flags = kFakeActive;
+		nodes.push_back(n);
+	}
+	for (int i = 0; i < count; i++) {
+		const float* p = points[i];
+		const float* q = points[i + 1 < count ? i + 1 : i];
+		for (int k = 0; k < 3; k++) {
+			nodes[first + i].boxMin[k] = p[k] < q[k] ? p[k] : q[k];
+			nodes[first + i].boxMax[k] = p[k] > q[k] ? p[k] : q[k];
+		}
+	}
+}
+
+static void linkRails(std::vector<FakeNode>& nodes, const std::vector<int>& lengths) {
+	size_t at = 0;
+	for (size_t r = 0; r < lengths.size(); r++) {
+		for (int i = 0; i < lengths[r]; i++) {
+			nodes[at + i].next = i + 1 < lengths[r] ? &nodes[at + i + 1] : 0;
+			nodes[at + i].previous = i > 0 ? &nodes[at + i - 1] : 0;
+		}
+		at += lengths[r];
+	}
+}
+
+static int g_railTests = 0;
+static const float* g_refuse = 0;
+static bool countingTest(const float* from, const float*) {
+	g_railTests++;
+	return from != g_refuse;
+}
+
+static void testFindRail() {
+	g_case = "find rail: one rail";
+	{
+		static const float line[][3] = { { 0, 0, 0 }, { 0, 0, 100 }, { 0, 0, 200 } };
+		std::vector<FakeNode> nodes;
+		addRail(nodes, line, 3);
+		std::vector<int> lengths(1, 3);
+		linkRails(nodes, lengths);
+		const RailNodes n = fakeNodes(nodes);
+		RailPass p;
+		// down onto the second piece, 10 beside it
+		const float a[3] = { 10, 6, 140 }, b[3] = { 10, -4, 150 };
+		const unsigned char* found = FindRail(n, a, b, 0, 1.0f, 100, 0, p);
+		CHECK(found == (const unsigned char*)&nodes[1]);
+		CHECK(p.miss <= 1.0f);
+		CHECK(near(fabs(p.side), 10.0, 0.01));
+		CHECK(near(p.point[0], 0.0, 0.01) && near(p.point[1], 0.0, 0.01) && p.point[2] > 139.0f && p.point[2] < 151.0f);
+		// onto the first piece
+		const float c[3] = { -5, 6, 40 }, d[3] = { -5, -4, 50 };
+		CHECK(FindRail(n, c, d, 0, 1.0f, 100, 0, p) == (const unsigned char*)&nodes[0]);
+		// too far beside it: nothing, and the rail that came closest is reported
+		const float e[3] = { 30, 6, 140 }, f[3] = { 30, -4, 150 };
+		CHECK(FindRail(n, e, f, 0, 1.0f, 100, 0, p) == 0);
+		CHECK(p.miss > 1.0f && p.miss < 2.0f);
+		CHECK(near(fabs(p.side), 30.0, 0.01));
+		// twice the reach: taken
+		CHECK(FindRail(n, e, f, 0, 1.0f, 200, 0, p) == (const unsigned char*)&nodes[1]);
+		// nowhere near any rail
+		const float g[3] = { 900, 6, 140 }, h[3] = { 900, -4, 150 };
+		CHECK(FindRail(n, g, h, 0, 1.0f, 100, 0, p) == 0);
+		CHECK(p.miss >= kNoRail);
+		// the last node of a rail has no piece of its own
+		const float i2[3] = { 0, 6, 205 }, j[3] = { 0, -4, 210 };
+		CHECK(FindRail(n, i2, j, 0, 1.0f, 100, 0, p) == (const unsigned char*)&nodes[1]);
+		CHECK(near(p.point[2], 200.0, 0.01));
+		// the node the game says to leave alone
+		CHECK(FindRail(n, a, b, (const unsigned char*)&nodes[1], 1.0f, 100, 0, p) == 0);
+		// switched off
+		CHECK(FindRail(n, a, b, 0, 1.0f, 0, 0, p) == 0);
+		CHECK(p.miss >= kNoRail);
+	}
+
+	g_case = "find rail: the rail under the board, not the one it travels along";
+	{
+		// A box of ledges: one edge along z at x = 0, one along x at z = 100. The board flies
+		// along z over the second, 15 beside the first: THUG takes the first (it runs the way the
+		// board goes). The board is on the second.
+		static const float first[][3] = { { 0, 0, 0 }, { 0, 0, 100 } };
+		static const float second[][3] = { { 0, 0, 100 }, { 60, 0, 100 } };
+		std::vector<FakeNode> nodes;
+		addRail(nodes, first, 2);
+		addRail(nodes, second, 2);
+		std::vector<int> lengths(2, 2);
+		linkRails(nodes, lengths);
+		const RailNodes n = fakeNodes(nodes);
+		RailPass p;
+		const float a[3] = { 15, 5, 94 }, b[3] = { 15, -3, 104 };
+		const unsigned char* found = FindRail(n, a, b, 0, 1.0f, 100, 0, p);
+		CHECK(found == (const unsigned char*)&nodes[2]);
+		CHECK(p.miss < 0.3f);
+		CHECK(near(p.point[0], 15.0, 0.1) && near(p.point[2], 100.0, 0.01));
+		// further down the first edge, away from the corner, the first edge it is
+		const float c[3] = { 15, 5, 34 }, d[3] = { 15, -3, 44 };
+		CHECK(FindRail(n, c, d, 0, 1.0f, 100, 0, p) == (const unsigned char*)&nodes[0]);
+		// with the order of the rails the other way around the answer is the same
+		std::vector<FakeNode> other;
+		addRail(other, second, 2);
+		addRail(other, first, 2);
+		linkRails(other, lengths);
+		const RailNodes m = fakeNodes(other);
+		CHECK(FindRail(m, a, b, 0, 1.0f, 100, 0, p) == (const unsigned char*)&other[0]);
+		CHECK(FindRail(m, c, d, 0, 1.0f, 100, 0, p) == (const unsigned char*)&other[2]);
+	}
+
+	g_case = "find rail: nodes that do not count";
+	{
+		static const float line[][3] = { { 0, 0, 0 }, { 0, 0, 100 } };
+		std::vector<FakeNode> nodes;
+		addRail(nodes, line, 2);
+		std::vector<int> lengths(1, 2);
+		linkRails(nodes, lengths);
+		RailPass p;
+		const float a[3] = { 5, 6, 40 }, b[3] = { 5, -4, 50 };
+		CHECK(FindRail(fakeNodes(nodes), a, b, 0, 1.0f, 100, 0, p) != 0);
+		// switched off by the level
+		nodes[0].flags = 0;
+		CHECK(FindRail(fakeNodes(nodes), a, b, 0, 1.0f, 100, 0, p) == 0);
+		CHECK(p.miss >= kNoRail);
+		// only for climbing
+		nodes[0].flags = kFakeActive | kFakeClimbOnly;
+		CHECK(FindRail(fakeNodes(nodes), a, b, 0, 1.0f, 100, 0, p) == 0);
+		// other flags do not matter
+		nodes[0].flags = kFakeActive | 0xFFFFFFEBu;
+		CHECK(FindRail(fakeNodes(nodes), a, b, 0, 1.0f, 100, 0, p) != 0);
+		// no nodes at all
+		std::vector<FakeNode> none;
+		CHECK(FindRail(fakeNodes(none), a, b, 0, 1.0f, 100, 0, p) == 0);
+		RailNodes broken = fakeNodes(nodes);
+		broken.count = -3;
+		CHECK(FindRail(broken, a, b, 0, 1.0f, 100, 0, p) == 0);
+		broken = fakeNodes(nodes);
+		broken.stride = 0;
+		CHECK(FindRail(broken, a, b, 0, 1.0f, 100, 0, p) == 0);
+		// positions that are not numbers
+		const float nan = (float)sqrt(-1.0);
+		const float bad[3] = { nan, nan, nan };
+		CHECK(FindRail(fakeNodes(nodes), bad, b, 0, 1.0f, 100, 0, p) == 0);
+		CHECK(FindRail(fakeNodes(nodes), 0, b, 0, 1.0f, 100, 0, p) == 0);
+	}
+
+	g_case = "find rail: what the game's own search passes over";
+	{
+		static const float line[][3] = { { 0, 0, 0 }, { 0, 0, 100 } };
+		std::vector<FakeNode> nodes;
+		addRail(nodes, line, 2);
+		std::vector<int> lengths(1, 2);
+		linkRails(nodes, lengths);
+		RailPass p;
+		// a board that has not moved in this frame: no rail, though it sits right on one
+		const float a[3] = { 2, 1, 50 };
+		const float nearly[3] = { 2, 1, 50.000004f };
+		const float moved[3] = { 2, 1, 50.1f };
+		CHECK(FindRail(fakeNodes(nodes), a, a, 0, 1.0f, 100, 0, p) == 0);
+		CHECK(p.miss >= kNoRail);
+		CHECK(FindRail(fakeNodes(nodes), a, nearly, 0, 1.0f, 100, 0, p) == 0);
+		CHECK(FindRail(fakeNodes(nodes), a, moved, 0, 1.0f, 100, 0, p) == (const unsigned char*)&nodes[0]);
+
+		// a piece without length in the middle of a rail: never that one, its neighbours instead
+		static const float knot[][3] = { { 0, 0, 0 }, { 0, 0, 100 }, { 0, 0, 100 }, { 0, 0, 200 } };
+		std::vector<FakeNode> knotted;
+		addRail(knotted, knot, 4);
+		std::vector<int> four(1, 4);
+		linkRails(knotted, four);
+		for (int i = 0; i < 200; i++) {
+			const float x = (frand() - 0.5f) * 30.0f, z = 80.0f + frand() * 40.0f;
+			const float c[3] = { x, 6, z }, d[3] = { x + (frand() - 0.5f) * 10.0f, -4, z + (frand() - 0.5f) * 10.0f };
+			const unsigned char* found = FindRail(fakeNodes(knotted), c, d, 0, 1.0f, 100, 0, p);
+			CHECK(found != (const unsigned char*)&knotted[1]);
+			if (fabsf(x) < 5.0f) CHECK(found == (const unsigned char*)&knotted[0] || found == (const unsigned char*)&knotted[2]);
+		}
+		// two nodes on one spot and nothing else: no rail at all
+		static const float spot[][3] = { { 0, 0, 0 }, { 0, 0, 0 } };
+		std::vector<FakeNode> twin;
+		addRail(twin, spot, 2);
+		linkRails(twin, lengths);
+		const float e[3] = { 1, 6, -3 }, f[3] = { 1, -4, 3 };
+		CHECK(FindRail(fakeNodes(twin), e, f, 0, 1.0f, 100, 0, p) == 0);
+	}
+
+	g_case = "find rail: a point";
+	{
+		static const float post[][3] = { { 50, 20, 50 } };
+		std::vector<FakeNode> nodes;
+		addRail(nodes, post, 1);
+		std::vector<int> lengths(1, 1);
+		linkRails(nodes, lengths);
+		RailPass p;
+		const float a[3] = { 45, 26, 40 }, b[3] = { 45, 24, 52 };
+		CHECK(FindRail(fakeNodes(nodes), a, b, 0, 1.0f, 100, 0, p) == (const unsigned char*)&nodes[0]);
+		CHECK(near(p.point[0], 50.0, 1e-4) && near(p.point[1], 20.0, 1e-4) && near(p.point[2], 50.0, 1e-4));
+		const float c[3] = { 20, 26, 40 }, d[3] = { 20, 24, 52 };
+		CHECK(FindRail(fakeNodes(nodes), c, d, 0, 1.0f, 100, 0, p) == 0);
+	}
+
+	g_case = "find rail: the game's rules for parks from the editor";
+	{
+		static const float along[][3] = { { 0, 0, 0 }, { 0, 0, 100 } };
+		static const float across[][3] = { { 200, 0, 50 }, { 300, 0, 50 } };
+		std::vector<FakeNode> nodes;
+		addRail(nodes, along, 2);
+		addRail(nodes, across, 2);
+		std::vector<int> lengths(2, 2);
+		linkRails(nodes, lengths);
+		const RailNodes n = fakeNodes(nodes);
+		RailPass p;
+		const float minCos = 0.6428f;    // 50 degrees
+		// travelling along z: the rail along z is taken, the one across it is not
+		const float a[3] = { 5, 6, 40 }, b[3] = { 5, -4, 50 };
+		CHECK(FindRail(n, a, b, 0, minCos, 100, 0, p) == (const unsigned char*)&nodes[0]);
+		const float c[3] = { 250, 6, 40 }, d[3] = { 250, -4, 52 };
+		CHECK(FindRail(n, c, d, 0, 1.0f, 100, 0, p) == (const unsigned char*)&nodes[2]);
+		CHECK(FindRail(n, c, d, 0, minCos, 100, 0, p) == 0);
+		// straight down: no direction of travel, no rule
+		const float e[3] = { 250, 6, 50 }, f[3] = { 250, -4, 50 };
+		CHECK(FindRail(n, e, f, 0, minCos, 100, 0, p) == (const unsigned char*)&nodes[2]);
+		// a rail that stands on end runs no way at all: with the rule it is left out
+		{
+			static const float pole[][3] = { { 500, 0, 0 }, { 500, 100, 0 } };
+			std::vector<FakeNode> upright;
+			addRail(upright, pole, 2);
+			std::vector<int> two(1, 2);
+			linkRails(upright, two);
+			const float g[3] = { 505, 50, -5 }, h[3] = { 505, 50, 5 };
+			CHECK(FindRail(fakeNodes(upright), g, h, 0, 1.0f, 100, 0, p) == (const unsigned char*)&upright[0]);
+			CHECK(FindRail(fakeNodes(upright), g, h, 0, minCos, 100, 0, p) == 0);
+		}
+
+		// the game's own test of a piece of rail: asked only about rails within reach
+		g_railTests = 0;
+		g_refuse = 0;
+		CHECK(FindRail(n, a, b, 0, 1.0f, 100, countingTest, p) == (const unsigned char*)&nodes[0]);
+		CHECK_EQ(g_railTests, 1);
+		g_refuse = nodes[0].position;
+		CHECK(FindRail(n, a, b, 0, 1.0f, 100, countingTest, p) == 0);
+		g_refuse = 0;
+		g_railTests = 0;
+		const float g[3] = { 30, 6, 40 }, h[3] = { 30, -4, 50 };
+		CHECK(FindRail(n, g, h, 0, 1.0f, 100, countingTest, p) == 0);
+		CHECK_EQ(g_railTests, 0);
+	}
+
+	g_case = "find rail: against looking at every piece";
+	{
+		// Rails strewn about, a board flying through them: the search with its boxes has to agree
+		// with the plain way of trying every piece
+		int takenAt100 = 0;
+		for (int round = 0; round < 300; round++) {
+			std::vector<FakeNode> nodes;
+			std::vector<int> lengths;
+			const int rails = 1 + (int)(frand() * 6.0f);
+			for (int r = 0; r < rails; r++) {
+				const int count = 1 + (int)(frand() * 4.0f);
+				float points[4][3];
+				float x = (frand() - 0.5f) * 200.0f, y = (frand() - 0.5f) * 60.0f, z = (frand() - 0.5f) * 200.0f;
+				for (int i = 0; i < count; i++) {
+					points[i][0] = x; points[i][1] = y; points[i][2] = z;
+					x += (frand() - 0.5f) * 120.0f; y += (frand() - 0.5f) * 40.0f; z += (frand() - 0.5f) * 120.0f;
+				}
+				addRail(nodes, points, count);
+				lengths.push_back(count);
+			}
+			linkRails(nodes, lengths);
+			for (size_t i = 0; i < nodes.size(); i++) {
+				if (frand() < 0.1f) nodes[i].flags = 0;
+				else if (frand() < 0.1f) nodes[i].flags |= kFakeClimbOnly;
+			}
+			const RailNodes n = fakeNodes(nodes);
+			const int percent = 25 + (int)(frand() * 300.0f);
+			for (int flight = 0; flight < 40; flight++) {
+				const float a[3] = { (frand() - 0.5f) * 260.0f, (frand() - 0.5f) * 80.0f, (frand() - 0.5f) * 260.0f };
+				const float b[3] = { a[0] + (frand() - 0.5f) * 30.0f, a[1] + (frand() - 0.5f) * 24.0f, a[2] + (frand() - 0.5f) * 30.0f };
+				RailPass p;
+				const unsigned char* found = FindRail(n, a, b, 0, 1.0f, percent, 0, p);
+
+				const FakeNode* want = 0;
+				float least = kNoRail;
+				for (size_t i = 0; i < nodes.size(); i++) {
+					const FakeNode& node = nodes[i];
+					if (!(node.flags & kFakeActive) || (node.flags & kFakeClimbOnly)) continue;
+					if (!node.next && node.previous) continue;
+					if (node.next) {
+						const float dx = node.next->position[0] - node.position[0], dy = node.next->position[1] - node.position[1], dz = node.next->position[2] - node.position[2];
+						if (dx * dx + dy * dy + dz * dz < 0.01f * 0.01f) continue;
+					}
+					const RailPass one = PassRail(a, b, node.position, node.next ? node.next->position : 0, percent);
+					if (one.miss < least) { least = one.miss; want = &node; }
+				}
+				if (least <= 1.0f) {
+					CHECK(found == (const unsigned char*)want);
+					CHECK(near(p.miss, least, 1e-5));
+				}
+				else {
+					CHECK(found == 0);
+					// What is reported then is the closest rail among those near enough to be
+					// looked at, so it cannot be closer than the closest of all
+					CHECK(p.miss > 1.0f);
+					CHECK(p.miss >= least - 1e-5f);
+					// and a rail that only just missed is always the one reported
+					if (least < 2.0f) CHECK(near(p.miss, least, 1e-5));
+				}
+				// a longer reach never loses a rail
+				if (found) {
+					RailPass q;
+					CHECK(FindRail(n, a, b, 0, 1.0f, percent * 2, 0, q) != 0);
+				}
+				// and at 100 percent the rail that is taken is one THUG's own search reaches too
+				{
+					RailPass q;
+					const unsigned char* taken = FindRail(n, a, b, 0, 1.0f, 100, 0, q);
+					if (taken) {
+						const FakeNode* node = (const FakeNode*)taken;
+						takenAt100++;
+						if (node->next) CHECK(thugWouldReach(a, b, node->position, node->next->position));
+						else CHECK(slowDistance(a, b, node->position, node->position) <= 20.0);
+					}
+				}
+			}
+		}
+		CHECK(takenAt100 > 300);       // the test has to have had rails to take
+	}
+}
+
+// ---------------------------------------------------------------------------------------------
+// Random play: things that must hold whatever the stick and the skater do
+// ---------------------------------------------------------------------------------------------
+
 
 static void testFuzz(double hz) {
 	char name[128];
@@ -2244,7 +2983,6 @@ static void testFuzz(double hz) {
 		s.railCatch = run % 7 != 0;
 		s.cfg.grindExit = run % 11 != 0;
 		s.game.noRelease = run % 3 == 0;
-		int phase = 0;                          // what the skater does next
 		for (int move = 0; move < 60; move++) {
 			// a stick move
 			const float r = frand();
@@ -2276,7 +3014,6 @@ static void testFuzz(double hz) {
 				else if (s.state == STATE_RAIL) { s.state = STATE_AIR; s.game.leave(); }
 				else { s.state = STATE_AIR; }
 			}
-			phase++;
 		}
 		s.spring();
 		s.lt = s.rt = false;
@@ -2377,6 +3114,8 @@ int main(int argc, char** argv) {
 	testGrindTable(scriptDir);
 	testTiltTable();
 	testDragNumbers();
+	testReach();
+	testFindRail();
 	const double rates[] = { 30.0, 60.0, 120.0, 144.0, 240.0 };
 	for (size_t i = 0; i < sizeof(rates) / sizeof(rates[0]); i++) {
 		const double hz = rates[i];

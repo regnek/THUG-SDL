@@ -91,6 +91,7 @@ namespace Flickit {
 		s.grindDrag = 100;
 		s.grindExit = 1;
 		s.grindBoost = 0;
+		s.grindReach = 100;
 	}
 
 	void Sanitize(Settings& s) {
@@ -135,6 +136,7 @@ namespace Flickit {
 		s.grindDrag = Clamp(s.grindDrag, 0, 1000);
 		s.grindExit = s.grindExit ? 1 : 0;
 		s.grindBoost = s.grindBoost ? 1 : 0;
+		s.grindReach = Clamp(s.grindReach, 0, kReachMostPercent);
 	}
 
 	float AngleDeg(float x, float y) {
@@ -933,6 +935,306 @@ namespace Flickit {
 			m_wantsOff = false;
 		}
 		return speed;
+	}
+
+	// ------------------------------------------------------------------------------------------
+	// How far a rail reaches for the board
+	// ------------------------------------------------------------------------------------------
+
+	// Skate's helper, in metres: the most the middle of the board may be about to miss a rail by
+	// and still be helped, whichever way the board is turned; and the most the board is moved
+	static const float kHelpMiddle = 0.243f;
+	static const float kHelpInAll = 0.2f;
+
+	const int kReachMostPercent = 400;
+	const float kReachLevel = kHelpMiddle * kUnitsPerMetre;                        // 19.4
+	const float kReachDown = kHelpInAll * kUnitsPerMetre;                          // 16
+	const float kReachUp = 0.5f * kHelpInAll * kUnitsPerMetre;                     // 8
+	const float kReachEnd = kHelpInAll * kUnitsPerMetre;                           // 16
+	const float kReachBehind = 8.0f;
+	const float kNoRail = 1.0e9f;
+
+	// Moving away from a rail: more than this share of the speed goes straight away from it
+	static const float kAwayShare = 0.25f;
+	// A rail that stands on end: less than this share of it is level
+	static const float kUprightShare = 0.05f;
+	// What a rail the board is leaving counts as: out of reach
+	static const float kAwayMiss = 1.5f;
+	// Less than this in every direction, in one frame, is a board that has not moved
+	static const float kNoMove = 1.0e-5f;
+	// A piece of rail shorter than this is none
+	static const float kNoPiece = 0.01f;
+
+	static inline float Dot3(const float* a, const float* b) {
+		return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+	}
+
+	static inline float Clamp01(float v) {
+		return v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
+	}
+
+	static inline bool Finite3(const float* v) {
+		// A number that is not one fails every comparison with itself
+		return v[0] - v[0] == 0.0f && v[1] - v[1] == 0.0f && v[2] - v[2] == 0.0f;
+	}
+
+	// The two points, one on each of two straight pieces, that are closest to each other: s along
+	// p1..q1, t along p2..q2, both 0..1. Where the pieces run side by side, the end of the first
+	// one is used (the board's place now, not a frame ago).
+	static void ClosestOnPieces(const float* p1, const float* q1, const float* p2, const float* q2, float& s, float& t) {
+		const float d1[3] = { q1[0] - p1[0], q1[1] - p1[1], q1[2] - p1[2] };
+		const float d2[3] = { q2[0] - p2[0], q2[1] - p2[1], q2[2] - p2[2] };
+		const float r[3] = { p1[0] - p2[0], p1[1] - p2[1], p1[2] - p2[2] };
+		const float a = Dot3(d1, d1);
+		const float e = Dot3(d2, d2);
+		const float f = Dot3(d2, r);
+		const float tiny = 1.0e-6f;
+
+		if (a <= tiny && e <= tiny) {
+			s = 1.0f;
+			t = 0.0f;
+			return;
+		}
+		if (a <= tiny) {
+			s = 1.0f;
+			t = Clamp01(f / e);
+			return;
+		}
+		const float c = Dot3(d1, r);
+		if (e <= tiny) {
+			t = 0.0f;
+			s = Clamp01(-c / a);
+			return;
+		}
+		const float b = Dot3(d1, d2);
+		const float denominator = a * e - b * b;
+		if (denominator > 1.0e-5f * a * e) {
+			s = Clamp01((b * f - c * e) / denominator);
+		}
+		else {
+			s = 1.0f;
+		}
+		t = (b * s + f) / e;
+		if (t < 0.0f) {
+			t = 0.0f;
+			s = Clamp01(-c / a);
+		}
+		else if (t > 1.0f) {
+			t = 1.0f;
+			s = Clamp01((b - c) / a);
+		}
+	}
+
+	RailPass PassRail(const float* a, const float* b, const float* from, const float* to, int percent) {
+		RailPass out;
+		out.miss = kNoRail;
+		out.side = 0.0f;
+		out.lift = 0.0f;
+		out.past = 0.0f;
+		out.away = false;
+		out.point[0] = from ? from[0] : 0.0f;
+		out.point[1] = from ? from[1] : 0.0f;
+		out.point[2] = from ? from[2] : 0.0f;
+		if (!a || !b || !from || percent <= 0 || !Finite3(a) || !Finite3(b) || !Finite3(from) || (to && !Finite3(to))) {
+			return out;
+		}
+
+		const float scale = (float)percent * 0.01f;
+		const float move[3] = { b[0] - a[0], b[1] - a[1], b[2] - a[2] };
+		float rail[3] = { 0.0f, 0.0f, 0.0f };
+		float railLength = 0.0f;
+		if (to) {
+			rail[0] = to[0] - from[0];
+			rail[1] = to[1] - from[1];
+			rail[2] = to[2] - from[2];
+			railLength = std::sqrt(Dot3(rail, rail));
+		}
+
+		if (railLength < 0.01f) {
+			// A rail that is one point: how near the board's path comes to it
+			const float moved = Dot3(move, move);
+			float s = 1.0f;
+			if (moved > 1.0e-6f) {
+				const float toPoint[3] = { from[0] - a[0], from[1] - a[1], from[2] - a[2] };
+				s = Clamp01(Dot3(toPoint, move) / moved);
+			}
+			const float dx = from[0] - (a[0] + s * move[0]);
+			const float dy = from[1] - (a[1] + s * move[1]);
+			const float dz = from[2] - (a[2] + s * move[2]);
+			out.side = std::sqrt(dx * dx + dz * dz);
+			out.lift = dy;
+		}
+		else {
+			float s, t;
+			ClosestOnPieces(a, b, from, to, s, t);
+			out.point[0] = from[0] + t * rail[0];
+			out.point[1] = from[1] + t * rail[1];
+			out.point[2] = from[2] + t * rail[2];
+			// From the board to the rail
+			const float gap[3] = {
+				out.point[0] - (a[0] + s * move[0]),
+				out.point[1] - (a[1] + s * move[1]),
+				out.point[2] - (a[2] + s * move[2])
+			};
+			const float along[3] = { rail[0] / railLength, rail[1] / railLength, rail[2] / railLength };
+			const float railLevel = std::sqrt(rail[0] * rail[0] + rail[2] * rail[2]);
+			// Beyond an end of the rail the gap has a part along it
+			out.past = Dot3(gap, along);
+
+			if (railLevel < kUprightShare * railLength) {
+				// A rail that stands on end has no side and no top: the board is so far from
+				// its line, and above or below its ends or not
+				const float off[3] = { gap[0] - out.past * along[0], gap[1] - out.past * along[1], gap[2] - out.past * along[2] };
+				out.side = std::sqrt(Dot3(off, off));
+			}
+			else {
+				const float levelX = rail[0] / railLevel;
+				const float levelZ = rail[2] / railLevel;
+				// Level and square to the rail, and square to the rail in the upright plane through it
+				const float side[3] = { levelZ, 0.0f, -levelX };
+				const float up[3] = {
+					along[1] * side[2],
+					along[2] * side[0] - along[0] * side[2],
+					-along[1] * side[0]
+				};
+				out.side = Dot3(gap, side);
+				out.lift = Dot3(gap, up);
+
+				// A rail the board has left behind is not come back to: neither one it has crossed
+				// nor one whose end it has flown off
+				const float moveLevel = std::sqrt(move[0] * move[0] + move[2] * move[2]);
+				const float toward = (move[0] * side[0] + move[2] * side[2]) * (out.side >= 0.0f ? 1.0f : -1.0f);
+				if (-toward > kAwayShare * moveLevel && std::fabs(out.side) > scale * kReachBehind) {
+					out.away = true;
+				}
+				const float towardEnd = Dot3(move, along) * (out.past >= 0.0f ? 1.0f : -1.0f);
+				if (-towardEnd > kAwayShare * std::sqrt(Dot3(move, move)) && std::fabs(out.past) > scale * kReachBehind) {
+					out.away = true;
+				}
+			}
+		}
+
+		// One rounded shape around the rail: each distance against its own reach, and the three
+		// together as the distance from the middle of that shape
+		const float beside = out.side / (scale * kReachLevel);
+		const float height = out.lift > 0.0f ? out.lift / (scale * kReachUp) : out.lift / (scale * kReachDown);
+		const float end = out.past / (scale * kReachEnd);
+		float miss = std::sqrt(beside * beside + height * height + end * end);
+		if (out.away && miss < kAwayMiss) {
+			miss = kAwayMiss;
+		}
+		// Not a number: no rail
+		if (!(miss >= 0.0f)) {
+			miss = kNoRail;
+			out.away = false;
+		}
+		out.miss = miss;
+		return out;
+	}
+
+	static inline const unsigned char* PointerAt(const unsigned char* p) {
+		const unsigned char* value;
+		memcpy(&value, p, sizeof(value));
+		return value;
+	}
+
+	static inline unsigned int FlagsAt(const unsigned char* p) {
+		uint32_t value;
+		memcpy(&value, p, sizeof(value));
+		return value;
+	}
+
+	const unsigned char* FindRail(const RailNodes& nodes, const float* a, const float* b,
+		const unsigned char* ignore, float minCos, int percent, RailTest test, RailPass& pass) {
+		pass.miss = kNoRail;
+		pass.side = pass.lift = pass.past = 0.0f;
+		pass.away = false;
+		pass.point[0] = pass.point[1] = pass.point[2] = 0.0f;
+		if (!nodes.first || nodes.count <= 0 || nodes.stride <= 0 || !a || !b || percent <= 0 || !Finite3(a) || !Finite3(b)) {
+			return 0;
+		}
+		// A board that has not moved in this frame takes no rail. The game's own search finds
+		// none then either (it has no line to measure from).
+		if (std::fabs(b[0] - a[0]) < kNoMove && std::fabs(b[1] - a[1]) < kNoMove && std::fabs(b[2] - a[2]) < kNoMove) {
+			return 0;
+		}
+
+		// The box the board moved through, grown by the longest reach there is. Nothing outside it
+		// can be within reach, and a little more is looked at so that the rail that came closest
+		// can be told.
+		const float scale = (float)percent * 0.01f;
+		const float grow = 2.5f * scale * (kReachLevel > kReachDown ? kReachLevel : kReachDown);
+		float low[3], high[3];
+		for (int i = 0; i < 3; i++) {
+			low[i] = (a[i] < b[i] ? a[i] : b[i]) - grow;
+			high[i] = (a[i] > b[i] ? a[i] : b[i]) + grow;
+		}
+
+		// The game's rule for parks from the editor: only rails that run about the way the board goes
+		const bool angleRule = minCos < 1.0f;
+		const float moveX = b[0] - a[0];
+		const float moveZ = b[2] - a[2];
+		const float moveLevel = std::sqrt(moveX * moveX + moveZ * moveZ);
+
+		const unsigned char* best = 0;       // within reach
+		const unsigned char* nearest = 0;    // or not
+		RailPass nearestPass = pass;
+
+		const unsigned char* node = nodes.first;
+		for (int i = 0; i < nodes.count; i++, node += nodes.stride) {
+			const unsigned int flags = FlagsAt(node + nodes.flags);
+			if ((flags & nodes.skips) != 0 || (flags & nodes.needs) != nodes.needs || node == ignore) {
+				continue;
+			}
+			const unsigned char* next = PointerAt(node + nodes.next);
+			if (!next && PointerAt(node + nodes.previous)) {
+				continue;    // the last node of a rail: its piece belongs to the node before it
+			}
+			const float* boxMin = (const float*)(node + nodes.boxMin);
+			const float* boxMax = (const float*)(node + nodes.boxMax);
+			if (boxMin[0] > high[0] || boxMax[0] < low[0] || boxMin[1] > high[1] || boxMax[1] < low[1] || boxMin[2] > high[2] || boxMax[2] < low[2]) {
+				continue;
+			}
+
+			const float* from = (const float*)(node + nodes.position);
+			const float* to = next ? (const float*)(next + nodes.position) : 0;
+			if (to) {
+				// A piece without length is no rail to stand on, and the game's own search
+				// passes it over. The pieces next to it end where it is.
+				const float piece[3] = { to[0] - from[0], to[1] - from[1], to[2] - from[2] };
+				if (!(Dot3(piece, piece) >= kNoPiece * kNoPiece)) {
+					continue;
+				}
+			}
+			const RailPass one = PassRail(a, b, from, to, percent);
+			if (!(one.miss < nearestPass.miss)) {
+				continue;
+			}
+			if (angleRule && to && moveLevel > 1.0e-3f) {
+				const float railX = to[0] - from[0];
+				const float railZ = to[2] - from[2];
+				const float railLevel = std::sqrt(railX * railX + railZ * railZ);
+				// (a rail that stands on end runs no way at all, and is left out as well)
+				if (railLevel <= 1.0e-3f || std::fabs(moveX * railX + moveZ * railZ) < minCos * moveLevel * railLevel) {
+					continue;
+				}
+			}
+			if (one.miss <= 1.0f && test && to && !test(from, to)) {
+				continue;
+			}
+			nearest = node;
+			nearestPass = one;
+			if (one.miss <= 1.0f) {
+				best = node;
+			}
+		}
+
+		pass = nearestPass;
+		if (!nearest) {
+			pass.miss = kNoRail;
+			pass.away = false;
+		}
+		return best;
 	}
 
 	TiltTracker::TiltTracker() {

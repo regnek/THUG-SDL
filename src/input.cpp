@@ -321,6 +321,8 @@ bool flickitRailTimed = false;                           // for the log: the sta
 float flickitRailSeconds = 0.0f;
 float flickitRailSpeedIn = 0.0f;
 float flickitRailSpeed = 0.0f;
+uint32_t flickitCatchSerial = 0;                         // for the log: the last rail that caught the board by itself, and the last that did not
+uint32_t flickitMissSerial = 0;
 
 // Reads the stick pattern file named in the ini (default: skater.pat) from the folder the ini is in.
 // Without the file, or with Patterns=0, Flickit decides tricks from its built-in directions.
@@ -412,6 +414,7 @@ void loadFlickitSettings() {
 	s.grindDrag = (int)GetPrivateProfileInt(FLICKIT_SECTION, "GrindDrag", s.grindDrag, configFile);
 	s.grindExit = (int)GetPrivateProfileInt(FLICKIT_SECTION, "GrindExit", s.grindExit, configFile);
 	s.grindBoost = (int)GetPrivateProfileInt(FLICKIT_SECTION, "GrindBoost", s.grindBoost, configFile);
+	s.grindReach = (int)GetPrivateProfileInt(FLICKIT_SECTION, "GrindReach", s.grindReach, configFile);
 
 	Flickit::Sanitize(s);
 	flickitSettings = s;
@@ -443,6 +446,14 @@ void loadFlickitSettings() {
 			}
 			else {
 				Log::TypedLog(CHN_SDL, "Flickit rails: no drag, %s\n", s.grindExit ? "the board steps off a rail it has stopped on" : "the board stays on a rail it has stopped on");
+			}
+			if (s.grindCatch && s.grindReach > 0) {
+				const float scale = (float)s.grindReach * 0.01f;
+				Log::TypedLog(CHN_SDL, "Flickit rails: a rail catches the board from %.0f units beside it, %.0f above it and %.0f below (the game's own reach: 20 to 40 all around; hold the Grind button for that)\n",
+					Flickit::kReachLevel * scale, Flickit::kReachDown * scale, Flickit::kReachUp * scale);
+			}
+			else if (s.grindCatch) {
+				Log::TypedLog(CHN_SDL, "Flickit rails: a rail catches the board at the game's own reach, 20 to 40 units all around\n");
 			}
 		}
 		else {
@@ -476,6 +487,48 @@ static void flickitLogGame(const FlickitGame::Skater& sk, uint32_t now) {
 		else {
 			Log::TypedLog(CHN_SDL, "Flickit: rail on the %s, %s: %s, which this game's scripts do not have, so %s\n", pick.railOnLeft ? "left" : "right",
 				flickitTiltText(pick.tilt, tilt, sizeof(tilt)), Flickit::GrindName(pick.grind), Flickit::GrindName(pick.started));
+		}
+	}
+
+	// Rails that caught the board by themselves: how far they had to reach. And the one that did not.
+	if (sk.catchSerial != flickitCatchSerial) {
+		flickitCatchSerial = sk.catchSerial;
+		const Flickit::RailPass& c = sk.caught;
+		const float side = c.side < 0.0f ? -c.side : c.side;
+		const float lift = c.lift < 0.0f ? -c.lift : c.lift;
+		const float past = c.past < 0.0f ? -c.past : c.past;
+		const char* where = c.lift < 0.0f ? "above" : "below";
+		if (past >= 0.5f) {
+			Log::TypedLog(CHN_SDL, "Flickit: the rail took the board from %.0f units beyond its end, %.0f beside it and %.0f %s it (%.0f%% of the reach)\n",
+				past, side, lift, where, c.miss * 100.0f);
+		}
+		else {
+			Log::TypedLog(CHN_SDL, "Flickit: the rail took the board from %.0f units beside it and %.0f %s it (%.0f%% of the reach)\n",
+				side, lift, where, c.miss * 100.0f);
+		}
+	}
+	if (sk.missSerial != flickitMissSerial) {
+		flickitMissSerial = sk.missSerial;
+		const Flickit::RailPass& m = sk.missed;
+		const float side = m.side < 0.0f ? -m.side : m.side;
+		const float lift = m.lift < 0.0f ? -m.lift : m.lift;
+		const float past = m.past < 0.0f ? -m.past : m.past;
+		const char* where = m.lift < 0.0f ? "under" : "over";
+		// the setting that would have caught it; beyond what the setting can be, nothing is said
+		const int would = (int)(m.miss * (float)flickitSettings.grindReach) + 1;
+		if (m.away) {
+			Log::TypedLog(CHN_SDL, "Flickit: no grind. The nearest rail was %.0f units beside the board and %.0f %s it, and the board had passed it\n",
+				side, lift, where);
+		}
+		else if (would <= Flickit::kReachMostPercent) {
+			if (past >= 0.5f) {
+				Log::TypedLog(CHN_SDL, "Flickit: no grind. The nearest rail ended %.0f units from the board, %.0f beside it and %.0f %s it, %.0f%% of the reach (about GrindReach=%d would have caught it)\n",
+					past, side, lift, where, m.miss * 100.0f, would);
+			}
+			else {
+				Log::TypedLog(CHN_SDL, "Flickit: no grind. The nearest rail was %.0f units beside the board and %.0f %s it, %.0f%% of the reach (about GrindReach=%d would have caught it)\n",
+					side, lift, where, m.miss * 100.0f, would);
+			}
 		}
 	}
 
@@ -636,6 +689,7 @@ void flickitGameFrame(device* dev) {
 	frame.drag = flickitSettings.grindDrag;
 	frame.stepOff = flickitSettings.grindExit != 0;
 	frame.boost = flickitSettings.grindBoost != 0;
+	frame.reach = flickitSettings.grindReach;
 	FlickitGame::SetFrame(frame);
 }
 
