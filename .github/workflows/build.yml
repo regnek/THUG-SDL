@@ -72,8 +72,16 @@ jobs:
       - name: Check the built DLLs against the one shipped in Game/
         shell: pwsh
         run: |
-          python -m pip install --quiet --disable-pip-version-check pefile
+          python -m pip install --quiet --disable-pip-version-check pefile capstone
           python .github/flickit/check_dll.py --sdl2 Game/SDL2.dll Game/thugsdl.dll out/thugsdl.dll out/alt-unoptimized/thugsdl.dll
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      # The grind hooks are called from the game's own code, so what the compiler made of them is looked at:
+      # how each one returns has to fit the place it is called from. The disassembly goes into the log.
+      - name: Check the grind hooks in the built DLLs
+        shell: pwsh
+        run: |
+          python .github/flickit/check_hooks.py out/thugsdl.dll out/alt-unoptimized/thugsdl.dll
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - uses: actions/upload-artifact@v4
