@@ -1,19 +1,30 @@
 """Compare freshly built thugsdl.dll files with the one shipped in Game/.
 
-usage: check_dll.py <shipped.dll> <built.dll> [<built.dll> ...]
+usage: check_dll.py [--sdl2 Game/SDL2.dll] <shipped thugsdl.dll> <built thugsdl.dll> [<built thugsdl.dll> ...]
 
 A built DLL replaces the shipped one in a player's game folder, so it has to load wherever the shipped
-one loads. This fails the build if a built DLL is not a 32-bit DLL, lacks the Direct3DCreate9 export or
-depends on a DLL the shipped one does not need. It also lists every function a built DLL imports that
-the shipped one does not, because a C++ runtime function that only a newer Visual C++ redistributable
+one loads. This fails the build if a built DLL
+  - is not a 32-bit DLL or lacks the Direct3DCreate9 export,
+  - depends on a DLL the shipped one does not need,
+  - calls an SDL function that the SDL2.dll shipped next to it does not have (--sdl2).
+It also lists every function a built DLL imports that the shipped one does not, and warns when such a
+function comes from the Visual C++ runtime, because one that only a newer Visual C++ redistributable
 has would stop the DLL from loading on a PC with an older one.
 """
+import argparse
 import os
 import sys
 
 import pefile
 
 RUNTIME_DLLS = ("msvcp140", "vcruntime140")
+
+# Plain C functions that vcruntime140.dll has exported since its first version (Visual Studio 2015).
+# Whether the compiler calls them or expands them inline depends on the optimization level.
+RUNTIME_BASELINE = frozenset((
+    "memchr", "memcmp", "memcpy", "memmove", "memset",
+    "strchr", "strrchr", "strstr", "wcschr", "wcsrchr", "wcsstr",
+))
 
 
 def describe(path):
@@ -44,10 +55,9 @@ def describe(path):
 def show(info):
     sections = "  ".join("%s %d" % section for section in info["sections"])
     print("%s\n  %d bytes, linker %s, sections: %s" % (info["path"], info["size"], info["linker"], sections))
-    print("  exports: %s" % ", ".join(info["exports"]))
 
 
-def check(shipped, built):
+def check(shipped, built, sdl2):
     problems = []
     if built["machine"] != 0x14C or not built["is_dll"]:
         problems.append("not a 32-bit x86 DLL")
@@ -56,36 +66,49 @@ def check(shipped, built):
             problems.append("export %s is missing" % name)
     for dll in sorted(set(built["imports"]) - set(shipped["imports"])):
         problems.append("needs %s, which the shipped DLL does not" % dll)
+    if sdl2 is not None:
+        for name in sorted(built["imports"].get("sdl2.dll", set()) - set(sdl2["exports"])):
+            problems.append("calls %s, which %s does not have" % (name, sdl2["path"]))
+
     for dll in sorted(set(built["imports"]) & set(shipped["imports"])):
         added = sorted(built["imports"][dll] - shipped["imports"][dll])
         if not added:
             continue
         print("  imports from %s that the shipped DLL does not have: %s" % (dll, ", ".join(added)))
-        if dll.startswith(RUNTIME_DLLS):
+        unknown = [name for name in added if name not in RUNTIME_BASELINE]
+        if dll.startswith(RUNTIME_DLLS) and unknown:
             print("::warning::%s imports %s from %s, which the shipped DLL does not. Check that it is not "
-                  "something only a newer Visual C++ redistributable has." % (built["path"], ", ".join(added), dll))
+                  "something only a newer Visual C++ redistributable has." % (built["path"], ", ".join(unknown), dll))
     for dll in sorted(set(shipped["imports"]) - set(built["imports"])):
         print("  no longer needs %s" % dll)
     return problems
 
 
-def main(argv):
-    if len(argv) < 3:
-        print(__doc__)
-        return 2
-    shipped = describe(argv[1])
+def main():
+    parser = argparse.ArgumentParser(description="Compare built thugsdl.dll files with the shipped one.")
+    parser.add_argument("--sdl2", help="the SDL2.dll players have; every SDL function a built DLL calls must be in it")
+    parser.add_argument("shipped")
+    parser.add_argument("built", nargs="+")
+    args = parser.parse_args()
+
+    shipped = describe(args.shipped)
     show(shipped)
+    sdl2 = None
+    if args.sdl2:
+        sdl2 = describe(args.sdl2)
+        print("%s\n  %d bytes, %d functions" % (sdl2["path"], sdl2["size"], len(sdl2["exports"])))
+
     failed = False
-    for path in argv[2:]:
+    for path in args.built:
         built = describe(path)
         show(built)
-        problems = check(shipped, built)
+        problems = check(shipped, built, sdl2)
         for problem in problems:
             print("::error::%s: %s" % (path, problem))
-        print("  %s" % ("FAILED" if problems else "ok: loads wherever the shipped DLL loads, as far as its imports and exports show"))
+        print("  %s" % ("FAILED" if problems else "ok"))
         failed = failed or bool(problems)
     return 1 if failed else 0
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv))
+    sys.exit(main())
