@@ -1213,6 +1213,7 @@ static void testPushing() {
 		CHECK(near(speed + rest, 420.0, 0.01));
 		CHECK_EQ(run.Phase(), PUSH_NONE);
 		CHECK_EQ((int)run.Serial(), 1);
+		CHECK(near(run.To(), 420.0, 0.01));     // the speed the push ended at, the rest included
 		CHECK(run.Step(f60, (float)speed + rest, false, 100, idle, late) == 0.0f);
 		// "It ran to its end" is said of this animation only: how the last one went by is forgotten
 		PushRun stale;
@@ -2323,6 +2324,138 @@ static void testFeet() {
 		CHECK(near(PushDone(r.profile, 0.475f), 0.5, 0.03));
 	}
 
+	g_case = "feet: a foot that stands where it was put";
+	{
+		// As in THUG's own push animations, in the skater's frame: the foot comes down beside
+		// the board and stays where it was put until it goes back up. It is on the ground from
+		// 25% to 67% of the animation (the fifth of its drop nearest the ground), and the speed
+		// of a push comes in over that time, gently at both ends.
+		Clip c = kClip;
+		c.ahead = 0.0;
+		c.behind = 0.0;
+		FootResult r = watchClip(c, 60.0, 0.0, 1.0, 0);
+		CHECK_EQ(r.why, FOOT_OK);
+		CHECK(!r.swept);
+		CHECK(!r.left);
+		CHECK(near(r.drop, 4.5, 0.1));
+		CHECK(near(r.floor, 1.2, 1e-5));
+		CHECK(r.sweep > 0.5 && r.sweep < 1.5);      // the last of its way in as it lands, as in the game (1 to 3 units)
+		CHECK(near(r.lowFrom, 0.25, 1e-5));
+		CHECK(near(r.lowTo, 32.0 / 48.0, 1e-5));
+		CHECK(near(r.profile.down, r.lowFrom, 1e-6));
+		CHECK(near(r.profile.up, r.lowTo, 1e-6));
+		for (int k = 0; k < PUSH_KNOTS; k++) CHECK(near(r.profile.done[k], smooth(k / 16.0), 1e-6));
+		// a push that goes by it
+		PushRun run;
+		PushAnim anim = { true, true, 1, 0.0f, 0.8f };
+		double speed = 100.0;
+		for (int k = 0; k <= 48; k++) {
+			anim.time = (float)(k / 60.0);
+			const float add = run.Step(1.0f / 60.0f, (float)speed, true, 100, anim, r.profile);
+			const double share = k / 60.0 / 0.8;
+			if (share <= r.lowFrom) CHECK(add == 0.0f);
+			if (share > r.lowTo + 1.0 / 48.0) CHECK(add == 0.0f);
+			speed += add;
+			CHECK(near(speed - 100.0, 320.0 * smooth((share - r.lowFrom) / (r.lowTo - r.lowFrom)), 320.0 * 0.004 + 0.01));
+		}
+		CHECK(near(speed, 420.0, 0.01));
+		CHECK(near(run.To(), 420.0, 0.01));
+		CHECK(near(run.From(), 100.0, 1e-6));
+		// whichever foot, at any frame rate, jittering by a twentieth of a unit
+		c.leftPushes = true;
+		FootResult l = watchClip(c, 60.0, 0.0, 1.0, 0);
+		CHECK_EQ(l.why, FOOT_OK);
+		CHECK(l.left);
+		CHECK(near(l.lowFrom, r.lowFrom, 1e-6));
+		CHECK(near(l.lowTo, r.lowTo, 1e-6));
+		c.leftPushes = false;
+		const double rates[] = { 30.0, 50.0, 144.0, 240.0 };
+		for (int i = 0; i < 4; i++) {
+			const FootResult f = watchClip(c, rates[i], 0.0, 1.0, 0);
+			const double step = 1.0 / rates[i] / 0.8;
+			CHECK_EQ(f.why, FOOT_OK);
+			CHECK(!f.swept);
+			CHECK(near(f.lowFrom, 0.2502, step + 1e-3));
+			CHECK(near(f.lowTo, 0.6744, step + 1e-3));
+		}
+		c.noise = 0.05;
+		FootResult n = watchClip(c, 60.0, 0.0, 1.0, 0);
+		CHECK_EQ(n.why, FOOT_OK);
+		CHECK(!n.swept);
+		CHECK(n.sweep < 2.0);
+		CHECK(near(n.lowFrom, r.lowFrom, 0.03));
+		CHECK(near(n.lowTo, r.lowTo, 0.03));
+		// A foot that rolls on the ground as it pushes, the toe coming up by half a unit: it
+		// is still on the ground. One whose toe comes up by two units has left it.
+		for (int roll = 0; roll < 2; roll++) {
+			FootWatch w;
+			for (int k = 0; k < 48; k++) {
+				const double share = k / 48.0;
+				float left[3], right[3];
+				clipFeet(c, share, left, right, 0);
+				if (share >= 0.30 && share < 0.66) right[1] += (float)((roll ? 2.0 : 0.5) * (share - 0.30) / 0.36);
+				w.Sample((float)share, left, right);
+			}
+			FootResult f;
+			w.End(0.8f, f);
+			CHECK_EQ(f.why, FOOT_OK);
+			CHECK(near(f.lowFrom, r.lowFrom, 1e-6));
+			if (roll) CHECK(f.lowTo < 0.55);
+			else CHECK(near(f.lowTo, r.lowTo, 1.0 / 48.0 + 1e-6));
+		}
+		// the game blends into the animation over 0.3 s: the foot that is shown comes down later
+		c = kClip;
+		c.ahead = 0.0;
+		c.behind = 0.0;
+		c.blend = 0.3;
+		const FootResult b = watchClip(c, 60.0, 0.0, 1.0, 0);
+		CHECK_EQ(b.why, FOOT_OK);
+		CHECK(b.lowFrom > r.lowFrom);
+		CHECK(b.lowFrom < 0.375);
+		CHECK(near(b.lowTo, r.lowTo, 1e-6));
+	}
+
+	g_case = "feet: the looks in order";
+	{
+		FootWatch w;
+		float out[7 * 128];
+		CHECK_EQ(w.Looks(out, 128), 0);
+		int seed = 3;
+		for (int k = 47; k >= 0; k--) {     // in any order: they come out by their share
+			float left[3], right[3];
+			clipFeet(kClip, k / 48.0, left, right, &seed);
+			w.Sample((float)(k / 48.0), left, right);
+		}
+		CHECK_EQ(w.Looks(out, 128), 48);
+		for (int i = 0; i < 48; i++) {
+			float left[3], right[3];
+			clipFeet(kClip, i / 48.0, left, right, 0);
+			CHECK(near(out[7 * i], i / 48.0, 1e-6));
+			for (int j = 0; j < 3; j++) {
+				CHECK(fabs(out[7 * i + 1 + j] - left[j]) < 1e-5 || kClip.noise > 0.0);
+				CHECK(fabs(out[7 * i + 4 + j] - right[j]) < 1e-5 || kClip.noise > 0.0);
+			}
+			if (i > 0) CHECK(out[7 * i] > out[7 * (i - 1)]);
+		}
+		// no more than there is room for
+		float few[7 * 5];
+		for (int i = 0; i < 7 * 5; i++) few[i] = -99.0f;
+		CHECK_EQ(w.Looks(few, 5), 5);
+		CHECK(near(few[7 * 4], 4.0 / 48.0, 1e-6));
+		CHECK_EQ(w.Looks(few, 0), 0);
+		// the same as End sees: a second look in the same 128th of the animation replaces the first
+		const float l[3] = { 1.0f, 2.0f, 3.0f };
+		const float rr[3] = { 4.0f, 5.0f, 6.0f };
+		w.Sample(0.5f + 0.001f, l, rr);
+		CHECK_EQ(w.Looks(out, 128), 48);
+		const int at = 24;
+		CHECK(near(out[7 * at], 0.501, 1e-6));
+		CHECK(out[7 * at + 1] == 1.0f && out[7 * at + 2] == 2.0f && out[7 * at + 3] == 3.0f);
+		CHECK(out[7 * at + 4] == 4.0f && out[7 * at + 5] == 5.0f && out[7 * at + 6] == 6.0f);
+		w.Begin();
+		CHECK_EQ(w.Looks(out, 128), 0);
+	}
+
 	g_case = "feet: a foot that goes back on itself";
 	{
 		// Half way through its stroke the foot comes 2 units back before it goes on. What it
@@ -2391,23 +2524,20 @@ static void testFeet() {
 		dip.End(0.8f, r);
 		CHECK_EQ(r.why, FOOT_NO_DROP);
 		CHECK(near(r.drop, 1.0, 0.01));
-		// a foot that is put down and lifted again where it was
+		// A foot that travels 3 units on the ground goes by the time it is on the ground, one
+		// that travels 5 by its travel
 		c = kClip;
-		c.ahead = 0.0;
-		c.behind = 0.0;
-		r = watchClip(c, 60.0, 0.0, 1.0, 0);
-		CHECK_EQ(r.why, FOOT_NO_SWEEP);
-		CHECK(near(r.drop, 4.5, 0.1));
-		CHECK(r.sweep < 4.0);
-		// one that travels 3 units down there, and one that travels 5
 		c.ahead = 1.5;
 		c.behind = 1.5;
 		r = watchClip(c, 60.0, 0.0, 1.0, 0);
-		CHECK_EQ(r.why, FOOT_NO_SWEEP);
+		CHECK_EQ(r.why, FOOT_OK);
+		CHECK(!r.swept);
+		CHECK(near(r.sweep, 3.0, 0.3));
 		c.ahead = 2.5;
 		c.behind = 2.5;
 		r = watchClip(c, 60.0, 0.0, 1.0, 0);
 		CHECK_EQ(r.why, FOOT_OK);
+		CHECK(r.swept);
 		CHECK(near(r.sweep, 5.0, 0.3));
 		// too few looks
 		int looks = 0;
@@ -2439,36 +2569,81 @@ static void testFeet() {
 			w.End(0.8f, r);
 			CHECK_EQ(r.why, hole ? FOOT_PART : FOOT_OK);
 		}
-		// a foot that is at one end of its way on one look and at the other on the next
+		// A travel that is over in no time is no way to give the speed: a foot that is at one
+		// end of its way on one look and at the other on the next, one that travels for 6% of
+		// an animation of half a second (three hundredths of a second), and a fortieth of an
+		// animation, however long that animation is said to be. The speed then comes in over
+		// the time the foot is on the ground.
+		const FootResult planted = watchClip(kClip, 60.0, 0.0, 1.0, 0);
 		c = kClip;
 		c.go = 0.45;
 		c.stop = 0.4501;
 		r = watchClip(c, 60.0, 0.0, 1.0, 0);
-		CHECK_EQ(r.why, FOOT_SHORT);
+		CHECK_EQ(r.why, FOOT_OK);
+		CHECK(!r.swept);
 		CHECK(near(r.sweep, 28.0, 0.2));
-		// and one that travels for 6% of an animation of half a second: three hundredths of a second
+		CHECK(near(r.profile.down, r.lowFrom, 1e-6));
+		CHECK(near(r.profile.up, r.lowTo, 1e-6));
+		CHECK(near(r.lowFrom, planted.lowFrom, 1e-6));
+		CHECK(near(r.lowTo, planted.lowTo, 1e-6));
 		c = kClip;
 		c.length = 0.5;
 		c.go = 0.40;
 		c.stop = 0.46;
 		r = watchClip(c, 240.0, 0.0, 1.0, 0);
-		CHECK_EQ(r.why, FOOT_SHORT);
+		CHECK_EQ(r.why, FOOT_OK);
+		CHECK(!r.swept);
 		c.length = 1.2;
 		r = watchClip(c, 240.0, 0.0, 1.0, 0);
 		CHECK_EQ(r.why, FOOT_OK);
-		// nothing that was found wanting leaves a foot behind that pushes at once
+		CHECK(r.swept);
 		CHECK(near(r.profile.up - r.profile.down, 0.05, 0.012));
-		// Nor is a fortieth of an animation a stroke, however long the animation is said to be
 		c = kClip;
 		c.length = 4.0;
 		c.go = 0.45;
 		c.stop = 0.48;
 		r = watchClip(c, 240.0, 0.0, 1.0, 0);
-		CHECK_EQ(r.why, FOOT_SHORT);
+		CHECK_EQ(r.why, FOOT_OK);
+		CHECK(!r.swept);
 		c.stop = 0.52;
 		r = watchClip(c, 240.0, 0.0, 1.0, 0);
 		CHECK_EQ(r.why, FOOT_OK);
+		CHECK(r.swept);
 		CHECK(r.profile.up - r.profile.down >= 0.04);
+		// A foot that is on the ground for no time at all: down on one look, up on the next.
+		// And one that is down for three looks, a twentieth of a second in an animation of
+		// 0.8 s, which is not enough either; in one of 2 s it is a tenth, and that is.
+		for (int width = 1; width <= 3; width += 2) {
+			for (int longer = 0; longer < 2; longer++) {
+				FootWatch w;
+				for (int k = 0; k < 48; k++) {
+					const int from = 20 - width / 2;
+					const float y = k >= from && k < from + width ? 1.2f : (k == from - 1 || k == from + width ? 3.5f : 5.7f);
+					const float left[3] = { -3.0f, 5.7f, 9.0f };
+					const float right[3] = { 3.0f, y, -9.0f };
+					w.Sample((float)(k / 48.0), left, right);
+				}
+				w.End(longer ? 2.0f : 0.8f, r);
+				CHECK(near(r.drop, 4.5, 1e-4));
+				CHECK(near(r.floor, 1.2, 1e-6));
+				CHECK_EQ(r.why, width == 3 && longer ? FOOT_OK : FOOT_SHORT);
+				CHECK(near(r.lowTo - r.lowFrom, (width - 1) / 48.0, 1e-5));
+			}
+		}
+		// Down for two looks, a 48th of the animation: in an animation of 4 s that is a twelfth of
+		// a second, but under a 25th of the animation, and that is too little all the same
+		for (int longer = 0; longer < 2; longer++) {
+			FootWatch w;
+			for (int k = 0; k < 48; k++) {
+				const float y = k >= 20 && k < 22 + 2 * longer ? 1.2f : 5.7f;
+				const float left[3] = { -3.0f, 5.7f, 9.0f };
+				const float right[3] = { 3.0f, y, -9.0f };
+				w.Sample((float)(k / 48.0), left, right);
+			}
+			w.End(4.0f, r);
+			CHECK_EQ(r.why, longer ? FOOT_OK : FOOT_SHORT);
+			CHECK(near(r.lowTo - r.lowFrom, (1 + 2 * longer) / 48.0, 1e-5));
+		}
 	}
 
 	g_case = "feet: looks that are no looks";

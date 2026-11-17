@@ -1422,9 +1422,9 @@ namespace Flickit {
 	static const float kFootGapMost = 0.2f;
 	// The foot that pushes gets at least this far below where the other stands (the game's units; a board is 4 to 5 high)
 	static const float kFootDropLeast = 1.5f;
-	// It is down while it is within this share of that drop from its lowest point
-	static const float kFootLowShare = 0.4f;
-	// Down there it travels at least this far (units)
+	// It is on the ground while it is within this share of that drop of its lowest point
+	static const float kFootGroundShare = 0.2f;
+	// Where it travels this far along the ground at least (units), the speed goes with that travel
 	static const float kFootSweepLeast = 4.0f;
 	// Its stroke starts when it has left the first fiftieth of that way behind, and ends when the last is ahead
 	static const float kFootEdge = 0.02f;
@@ -1507,6 +1507,7 @@ namespace Flickit {
 		m_asked = 0.0f;
 		m_added = 0.0f;
 		m_from = 0.0f;
+		m_to = 0.0f;
 		m_play = 0;
 		m_seenPlay = 0;
 		m_askPlay = 0;
@@ -1597,6 +1598,7 @@ namespace Flickit {
 					// It ran to its end between two frames: the foot has finished its stroke
 					add += Pull(speed, dt, units, 1.0f);
 				}
+				m_to = speed + add;
 				m_serial++;
 			}
 			m_tracking = false;
@@ -1662,6 +1664,7 @@ namespace Flickit {
 				if (share >= m_profile.up) {
 					m_tracking = false;
 					m_phase = PUSH_RECOVER;
+					m_to = speed + add;
 					m_serial++;
 				}
 			}
@@ -1765,10 +1768,29 @@ namespace Flickit {
 		}
 	}
 
+	int FootWatch::Looks(float* out, int most) const {
+		int n = 0;
+		for (int b = 0; b < BINS && n < most; b++) {
+			if (!m_have[b]) {
+				continue;
+			}
+			float* look = out + 7 * n;
+			look[0] = m_share[b];
+			for (int i = 0; i < 3; i++) {
+				look[1 + i] = m_left[b][i];
+				look[4 + i] = m_right[b][i];
+			}
+			n++;
+		}
+		return n;
+	}
+
 	void FootWatch::End(float seconds, FootResult& out) const {
 		out.why = FOOT_FEW;
 		out.left = false;
+		out.swept = false;
 		out.drop = 0.0f;
+		out.floor = 0.0f;
 		out.sweep = 0.0f;
 		out.lowFrom = 0.0f;
 		out.lowTo = 0.0f;
@@ -1817,13 +1839,14 @@ namespace Flickit {
 		const float (*foot)[3] = out.left ? m_left : m_right;
 		const float low = out.left ? lowLeft : lowRight;
 		out.drop = out.left ? dropLeft : dropRight;
+		out.floor = low;
 		out.why = FOOT_NO_DROP;
 		if (!(out.drop >= kFootDropLeast)) {
 			return;
 		}
 
-		// It is down around its lowest point, for as long as it stays near that
-		const float line = low + kFootLowShare * out.drop;
+		// It is on the ground around its lowest point, for as long as it stays near that
+		const float line = low + kFootGroundShare * out.drop;
 		int lowest = 0;
 		for (int i = 1; i < n; i++) {
 			if (foot[at[i]][1] < foot[at[lowest]][1]) {
@@ -1840,9 +1863,9 @@ namespace Flickit {
 		}
 		out.lowFrom = m_share[at[first]];
 		out.lowTo = m_share[at[last]];
+		out.why = FOOT_SHORT;
 
-		// Its stroke: between the two points down there that are farthest apart along the ground
-		out.why = FOOT_NO_SWEEP;
+		// How far it travels along the ground there: between the two points farthest apart
 		int a = first;
 		int b = first;
 		float far = 0.0f;
@@ -1860,63 +1883,71 @@ namespace Flickit {
 		}
 		const float way = std::sqrt(far);
 		out.sweep = way;
-		if (!(way >= kFootSweepLeast)) {
-			return;
-		}
-		// How far along that way it is at every look: nothing at the one point, all of it at the other
-		const float ux = (foot[at[b]][0] - foot[at[a]][0]) / way;
-		const float uz = (foot[at[b]][2] - foot[at[a]][2]) / way;
-		float along[BINS];
-		for (int i = a; i <= b; i++) {
-			along[i] = (foot[at[i]][0] - foot[at[a]][0]) * ux + (foot[at[i]][2] - foot[at[a]][2]) * uz;
-		}
-		// Trimmed to where the foot is on its way: from the last look at which it has not left
-		// yet to the first at which it has arrived
-		const float edge = kFootEdge * way;
-		int from = a;
-		for (int i = a; i <= b; i++) {
-			if (along[i] <= edge) {
-				from = i;
+		if (way >= kFootSweepLeast) {
+			// How far along that way it is at every look: nothing at the one point, all of it at the other
+			const float ux = (foot[at[b]][0] - foot[at[a]][0]) / way;
+			const float uz = (foot[at[b]][2] - foot[at[a]][2]) / way;
+			float along[BINS];
+			for (int i = a; i <= b; i++) {
+				along[i] = (foot[at[i]][0] - foot[at[a]][0]) * ux + (foot[at[i]][2] - foot[at[a]][2]) * uz;
+			}
+			// Trimmed to where the foot is on its way: from the last look at which it has not
+			// left yet to the first at which it has arrived
+			const float edge = kFootEdge * way;
+			int from = a;
+			for (int i = a; i <= b; i++) {
+				if (along[i] <= edge) {
+					from = i;
+				}
+			}
+			int to = b;
+			for (int i = b; i > from; i--) {
+				if (along[i] >= way - edge) {
+					to = i;
+				}
+			}
+			const float down = m_share[at[from]];
+			const float up = m_share[at[to]];
+			if (up - down >= kFootSpanLeast && (up - down) * seconds >= kFootSecondsLeast) {
+				// How much of the way is behind the foot at every look, never falling ...
+				out.profile.down = down;
+				out.profile.up = up;
+				const float span = along[to] - along[from];
+				float done[BINS];
+				float best = 0.0f;
+				for (int i = from; i <= to; i++) {
+					const float d = Clamp01((along[i] - along[from]) / span);
+					if (d > best) {
+						best = d;
+					}
+					done[i] = best;
+				}
+				// ... and at even steps between its start and its end
+				int i = from;
+				for (int k = 0; k < PUSH_KNOTS; k++) {
+					const float share = down + (up - down) * (float)k / (float)(PUSH_KNOTS - 1);
+					while (i < to - 1 && m_share[at[i + 1]] <= share) {
+						i++;
+					}
+					const float t = Clamp01((share - m_share[at[i]]) / (m_share[at[i + 1]] - m_share[at[i]]));
+					out.profile.done[k] = done[i] + (done[i + 1] - done[i]) * t;
+				}
+				out.profile.done[0] = 0.0f;
+				out.profile.done[PUSH_KNOTS - 1] = 1.0f;
+				out.swept = true;
+				out.why = FOOT_OK;
+				return;
 			}
 		}
-		int to = b;
-		for (int i = b; i > from; i--) {
-			if (along[i] >= way - edge) {
-				to = i;
-			}
-		}
-		const float down = m_share[at[from]];
-		const float up = m_share[at[to]];
-		out.why = FOOT_SHORT;
+
+		// It stands where it was put (or its travel is over in no time): the speed comes in
+		// over the time it is on the ground, gently at both ends
+		const float down = out.lowFrom;
+		const float up = out.lowTo;
 		if (!(up - down >= kFootSpanLeast) || !((up - down) * seconds >= kFootSecondsLeast)) {
 			return;
 		}
-
-		// How much of the stroke is behind the foot at every look, never falling ...
-		out.profile.down = down;
-		out.profile.up = up;
-		const float span = along[to] - along[from];
-		float done[BINS];
-		float best = 0.0f;
-		for (int i = from; i <= to; i++) {
-			const float d = Clamp01((along[i] - along[from]) / span);
-			if (d > best) {
-				best = d;
-			}
-			done[i] = best;
-		}
-		// ... and at even steps between its start and its end
-		int i = from;
-		for (int k = 0; k < PUSH_KNOTS; k++) {
-			const float share = down + (up - down) * (float)k / (float)(PUSH_KNOTS - 1);
-			while (i < to - 1 && m_share[at[i + 1]] <= share) {
-				i++;
-			}
-			const float t = Clamp01((share - m_share[at[i]]) / (m_share[at[i + 1]] - m_share[at[i]]));
-			out.profile.done[k] = done[i] + (done[i + 1] - done[i]) * t;
-		}
-		out.profile.done[0] = 0.0f;
-		out.profile.done[PUSH_KNOTS - 1] = 1.0f;
+		SmoothPushProfile(out.profile, down, up);
 		out.why = FOOT_OK;
 	}
 

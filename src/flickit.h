@@ -607,6 +607,7 @@ namespace Flickit {
 		float Asked() const { return m_asked; }        // units/s the push was asked to add
 		float Added() const { return m_added; }        // units/s it did add
 		float From() const { return m_from; }          // the speed it started at
+		float To() const { return m_to; }              // and the speed when its foot had pushed
 		float Down() const { return m_profile.down; }  // the shares of the animation between which its foot pushed
 		float Up() const { return m_profile.up; }
 
@@ -632,6 +633,7 @@ namespace Flickit {
 		float m_asked;
 		float m_added;
 		float m_from;
+		float m_to;
 		uint32_t m_serial;
 	};
 
@@ -673,23 +675,27 @@ namespace Flickit {
 		FOOT_FEW = 1,       // too few looks at the feet
 		FOOT_PART = 2,      // not the whole animation was seen
 		FOOT_NO_DROP = 3,   // neither foot gets below the other: both stay on the board
-		FOOT_NO_SWEEP = 4,  // the foot that goes down does not travel along the ground
-		FOOT_SHORT = 5      // it travels for no time at all
+		FOOT_SHORT = 4      // the foot is on the ground for no time at all
 	};
 	struct FootResult {
 		int why;                // FOOT_OK, or why nothing came of it
 		int samples;            // looks at the feet
 		bool left;              // the foot that pushes is the first of the two
+		bool swept;             // it travels along the ground, and the speed goes by that; else it stands where it was put
 		float drop;             // how far below the other foot it gets, in the game's units
-		float sweep;            // how far it travels along the ground down there
-		float lowFrom, lowTo;   // the shares of the animation between which it is down
-		PushProfile profile;    // the shares between which it travels, and how
+		float floor;            // its lowest height, in the skater's own frame
+		float sweep;            // how far it travels along the ground while it is on it
+		float lowFrom, lowTo;   // the shares of the animation between which it is on the ground
+		PushProfile profile;    // where the speed of a push comes in, and how
 	};
 
 	// Watches the two feet through one play of a push animation and works out where the foot
-	// pushes. The foot that pushes is the one that gets lower than the other stands. It is down
-	// while it is within two fifths of that drop from its lowest point; its stroke is the way it
-	// travels along the ground there, between the two points farthest apart.
+	// pushes. The foot that pushes is the one that gets lower than the other stands. It is on
+	// the ground while it is within a fifth of that drop of its lowest point. Where it travels
+	// along the ground there, the speed of a push goes with that travel, between the two
+	// points farthest apart. Where it stands where it was put (as in THUG's own push
+	// animations, in the skater's frame), the speed comes in over the time it is on the ground,
+	// gently at both ends.
 	class FootWatch {
 	public:
 		FootWatch();
@@ -700,6 +706,9 @@ namespace Flickit {
 		// The play is over. seconds: the length of the animation.
 		void End(float seconds, FootResult& out) const;
 		int Samples() const;
+		// The looks in order, seven numbers each: the share, then the left foot, then the
+		// right. At most "most" of them. Returns how many.
+		int Looks(float* out, int most) const;
 
 	private:
 		enum { BINS = 128 };

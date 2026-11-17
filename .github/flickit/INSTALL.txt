@@ -83,13 +83,17 @@ three settings.
     which animation the skater is in and how far into it. No animation, no
     push: there is no speed without a foot any more.
   - Where the foot pushes, the mod finds out by watching the skater's feet
-    while the animation plays. It knows after the first push of a session;
-    that first one goes by PushFootDown and PushFootUp.
-  - If the speed still does not sit on the foot: set Console=1 or
-    WriteFile=1 under [Logger] in thugsdl.ini (WriteFile makes debug.txt in
-    the game folder), push a dozen times, and look for the lines
+    while the animation plays: the speed comes while the foot is on the
+    ground. It knows after the first push of a session; that first one goes
+    by PushFootDown and PushFootUp.
+  - If the speed still does not sit on the foot: set Console=1 under
+    [Logger] in thugsdl.ini, push a dozen times, and look for the lines
     "Flickit: watched the feet in ..." and "Flickit: push with ...". They
-    say what the mod saw and what it did. PushMeasure=0 switches the
+    say what the mod saw and what it did. With WriteFile=1 as well, what the
+    console shows is also written to debug.txt in the folder the game was
+    started from (WriteFile=1 does nothing without Console=1; under Program
+    Files, Windows may put the file in your AppData\Local\VirtualStore
+    instead). PushMeasure=0 switches the
     watching off; then PushFootDown and PushFootUp alone say where in the
     animation the foot pushes, in percent of its length.
   - The push is shown in a turn too (THUG shows only the turn). If that looks

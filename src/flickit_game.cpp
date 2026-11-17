@@ -632,6 +632,7 @@ namespace FlickitGame {
 		Flickit::PushProfile profile;
 		uint32_t stamp;                  // the later it was watched, the bigger
 		int told;                        // what the log was last told about it: a Flickit::FootWhy plus one, 0 nothing yet
+		bool traced;                     // the log has had every look at its feet once
 	};
 	static FootKnown s_footKnown[PUSH_CLIPS];
 	static uint32_t s_footStamp = 0;
@@ -648,6 +649,10 @@ namespace FlickitGame {
 	static int s_footToldClip = 0;
 	static float s_footToldLength = 0.0f;
 	static Flickit::FootResult s_footTold;
+	// and with it, the first time an animation was watched whole, every look at its feet
+	enum { FOOT_TRACE_LOOKS = 128 };
+	static float s_footTrace[FOOT_TRACE_LOOKS * 7];
+	static int s_footTraceLooks = 0;
 	// A foot that pushes this much earlier or later than last time (as a share of the animation) is news
 	static const float kFootNews = 0.03f;
 	// The clock that stands in where the game is told to play a push and no push animation is
@@ -958,6 +963,7 @@ namespace FlickitGame {
 		out.pushAsked = s_push.Asked();
 		out.pushAdded = s_push.Added();
 		out.pushFrom = s_push.From();
+		out.pushTo = s_push.To();
 		out.pushAnim = s_pushClip >= 0 ? kPushClips[s_pushClip].text : "the clock";
 		out.pushLength = s_pushLength;
 		out.pushDown = s_push.Down();
@@ -967,6 +973,8 @@ namespace FlickitGame {
 		out.footAnim = kPushClips[s_footToldClip].text;
 		out.footLength = s_footToldLength;
 		out.foot = s_footTold;
+		out.footTrace = s_footTrace;
+		out.footTraceLooks = s_footTraceLooks;
 		out.blindSerial = s_clock.Serial();
 		out.blindAnim = s_clockAnim;
 		out.spinSerial = s_spinSerial;
@@ -1542,6 +1550,11 @@ namespace FlickitGame {
 			s_footToldClip = s_footClip;
 			s_footToldLength = s_footLength;
 			s_footTold = result;
+			s_footTraceLooks = 0;
+			if (!known.traced && result.why != Flickit::FOOT_FEW && result.why != Flickit::FOOT_PART) {
+				known.traced = true;
+				s_footTraceLooks = s_foot.Looks(s_footTrace, FOOT_TRACE_LOOKS);
+			}
 			s_footSerial++;
 		}
 	}

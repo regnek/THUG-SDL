@@ -89,6 +89,7 @@ namespace FlickitGame {
 		float pushAsked;        // the speed it was asked to add
 		float pushAdded;        // the speed it added
 		float pushFrom;         // the speed it started at
+		float pushTo;           // and the speed when its foot had pushed
 		const char* pushAnim;   // the game's animation it went with ("the clock" if none was seen)
 		float pushLength;       // how long that is, in seconds
 		float pushDown;         // the shares of it between which the foot pushed
@@ -100,6 +101,8 @@ namespace FlickitGame {
 		const char* footAnim;   // the animation
 		float footLength;       // its length in seconds
 		Flickit::FootResult foot;   // what its feet did
+		const float* footTrace; // the first time an animation was watched whole: every look at its feet,
+		int footTraceLooks;     // seven numbers each (Flickit::FootWatch::Looks), and how many. Else 0
 		uint32_t blindSerial;   // goes up when the game was told to play a push again and again and no push animation was seen
 		uint32_t blindAnim;     // the animation the skater was in instead (the checksum of its name)
 
