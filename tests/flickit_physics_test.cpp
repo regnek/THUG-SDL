@@ -318,89 +318,332 @@ static const Table kSkateStick = { { 0, 0.05859375, 0.25, 0.375, 0.508789122, 0.
 static const Table kSkateTruckSpeed = { { 0.0569550917, 0.123767801, 0.173055902, 0.219058096, 0.297918886, 0.400000006, 0.5, 1 },
 	{ 1, 0.969594598, 0.847972989, 0.608108103, 0.395270288, 0.300000012, 0.280000001, 0.270000011 } };
 
-static const PushTiming kTiming = { 0.3f, 0.25f, 0.9f };
-
 // One run of the push: the button is down from each "down" to the "up" after it (seconds)
 struct Press {
 	double down, up;
 };
 
-// What stands in for the game's scripts in a run: nobody ever takes a push that asks for its
-// animation, or a script takes it as soon as it is not busy and is then busy for so many seconds
-// with the animation it has started (0: it is never busy)
-static const double kNobody = -1.0;
+// What stands in for the game in a run: its scripts, and the animation they play
+enum {
+	SCRIPT_FLAT = 0,    // the loop of a skater on flat ground: plays the push while the Flip button counts as held,
+	                    // waits for it to end, plays the idle, looks again on the next frame
+	SCRIPT_NOLLIE = 1,  // the loop of a skater riding nollie: starts the push on a yes to CanKick if it is
+	                    // not his animation already; on a no, and with his animation at its end, the idle
+	SCRIPT_CROUCH = 2   // the crouch: starts the push while the button counts as held if it is not his
+	                    // animation already; then, with his animation at its end, the idle
+};
+struct Game {
+	double length;      // of the push animation (s)
+	double freeFrom;    // the scripts look for a push from this time on (s); less than 0: never
+	int script;
+	bool loops;         // the animation starts over at its end by itself
+	double cutAt;       // the first play is replaced by another animation when it is this far (a share); less than 0: never
+	double speed;       // how fast the animation runs: 1 is its own speed
+};
+static const Game kGame = { 0.8, 0.0, SCRIPT_FLAT, false, -1.0, 1.0 };
 
 struct PushLog {
 	double speed;               // at the end
 	double most;                // the fastest it ever was
-	int pushes;                 // feet that left the ground
-	double firstAdd, lastAdd;   // when speed was first and last added
-	double added[16];           // what each push added
-	double asked[16];
-	double start[16];           // when each push started adding
-	int taken;                  // pushes whose animation the script started
-	double took[16];            // and when
+	int pushes;                 // feet that have pushed
+	int plays;                  // plays of the push animation
+	double took[16];            // when each play started
+	double added[16];           // what was added during each play
+	double asked[16];           // what the push that went with it was asked to add
+	double from[16];            // and the speed it started at
+	double held[16];            // and how long the button had been down
+	double said[16];            // and what it says it added
+	double firstAt[16];         // when speed was first added in each play, ...
+	double lastAt[16];          // ... and last (the end of that frame)
+	double firstShare[16];      // how far into the animation that was
+	double lastShare[16];
+	double biggest[16];         // the most one frame added in each play
+	double firstAdd[16];        // what the first frame added, and the last
+	double lastAdd[16];
+	double worst;               // the furthest the speed ever was from where the foot said, in units/s
+	double asking;              // for how long the game was asked to play a push
+	double hiding;              // for how long the scripts were kept from seeing Left and Right
+	int phase;                  // at the end
 };
 
-static PushLog runPush(double rate, double seconds, double speed, const Press* presses, int count, int percent, const PushTiming& timing, int coast, double animation) {
+static PushLog runPush(double rate, double seconds, double speed, const Press* presses, int count, int percent, const PushProfile& profile, int coast, const Game& game) {
 	PushRun run;
 	PushLog log;
 	memset(&log, 0, sizeof(log));
-	log.firstAdd = -1.0;
-	log.lastAdd = -1.0;
+	for (int i = 0; i < 16; i++) {
+		log.firstAt[i] = -1.0;
+		log.lastAt[i] = -1.0;
+	}
 	log.most = speed;
 	const double dt = 1.0 / rate;
+	PushAnim anim = { false, false, 0, 0.0f, (float)game.length };
+	double clock = 0.0;         // into the animation
+	bool waiting = false;       // the flat loop is waiting for the animation to end
+	bool cut = false;
 	uint32_t serial = run.Serial();
-	bool adding = false;
-	double busyUntil = -1.0;
 	const int frames = (int)(seconds * rate + 0.5);
 	for (int frame = 0; frame < frames; frame++) {
 		const double t = frame * dt;
+		// the game's scripts, before the physics
+		bool start = false;
+		if (game.cutAt >= 0.0 && !cut && anim.current && anim.running && clock / game.length >= game.cutAt) {
+			// something else takes the skater's animation
+			cut = true;
+			anim.current = false;
+			anim.running = false;
+			anim.play++;
+			waiting = false;
+		}
+		else if (game.freeFrom >= 0.0 && t >= game.freeFrom - 1e-9) {
+			if (game.script == SCRIPT_FLAT) {
+				if (waiting) {
+					if (!anim.running) {
+						waiting = false;
+						anim.current = false;   // the idle
+						anim.play++;
+					}
+				}
+				else if (run.Animating()) {
+					start = true;
+					waiting = true;
+				}
+			}
+			else if (game.script == SCRIPT_NOLLIE) {
+				if (run.Animating() && !run.AnimCurrent()) {
+					start = !anim.current;
+				}
+				else if (anim.current && !anim.running) {
+					anim.current = false;
+					anim.play++;
+				}
+			}
+			else {
+				if (run.Animating() && !anim.current) {
+					start = true;
+				}
+				else if (anim.current && !anim.running) {
+					anim.current = false;
+					anim.play++;
+				}
+			}
+		}
+		if (start) {
+			anim.current = true;
+			anim.running = true;
+			anim.play++;
+			clock = 0.0;
+			if (log.plays < 16) log.took[log.plays] = t;
+			log.plays++;
+		}
+		anim.time = (float)clock;
+		const int play = log.plays > 0 && log.plays <= 16 ? log.plays - 1 : -1;
+		const double share = clock / game.length;
+
+		// the physics
 		bool held = false;
 		for (int i = 0; i < count; i++) {
 			if (t >= presses[i].down - 1e-9 && t < presses[i].up - 1e-9) held = true;
 		}
-		const float add = run.Step((float)dt, (float)speed, held, percent, timing);
+		const float add = run.Step((float)dt, (float)speed, held, percent, anim, profile);
 		CHECK(add >= 0.0f);
 		CHECK(add == add);
-		if (add > 0.0f) {
-			if (log.firstAdd < 0.0) log.firstAdd = t;
-			log.lastAdd = t + dt;
-			if (!adding && log.pushes < 16) log.start[log.pushes] = t;
-			adding = true;
-		}
 		speed += add;
+		if (add > 0.0f) {
+			CHECK(play >= 0);   // no speed before the game has played a push
+			if (play >= 0) {
+				if (log.firstAt[play] < 0.0) {
+					log.firstAt[play] = t;
+					log.firstShare[play] = share;
+					log.firstAdd[play] = add;
+				}
+				log.lastAt[play] = t + dt;
+				log.lastShare[play] = share;
+				log.lastAdd[play] = add;
+				log.added[play] += add;
+				if (add > log.biggest[play]) log.biggest[play] = add;
+			}
+		}
+		if (run.Phase() == PUSH_CONTACT && anim.current) {
+			const double off = fabs((speed - run.From()) - run.Asked() * PushDone(profile, (float)share));
+			if (off > log.worst) log.worst = off;
+		}
 		if (coast > 0) speed = Coast((float)speed, (float)dt, coast);
 		if (speed > log.most) log.most = speed;
 		if (run.Serial() != serial) {
+			CHECK_EQ((int)(run.Serial() - serial), 1);
 			serial = run.Serial();
-			if (log.pushes < 16) {
-				log.added[log.pushes] = run.Added();
-				log.asked[log.pushes] = run.Asked();
+			if (play >= 0) {
+				log.asked[play] = run.Asked();
+				log.from[play] = run.From();
+				log.held[play] = run.HeldFor();
+				log.said[play] = run.Added();
 			}
 			log.pushes++;
-			adding = false;
 		}
-		// the game's script, after the physics: it looks for a push only while its last
-		// animation is not playing
-		if (animation >= 0.0 && t + dt >= busyUntil - 1e-9 && run.Animating()) {
-			const bool asking = run.Phase() == PUSH_ASKED;
-			run.Taken();
-			if (asking) {
-				CHECK_EQ(run.Phase(), PUSH_INTO);
-				busyUntil = t + dt + animation;
-				if (log.taken < 16) log.took[log.taken] = t + dt;
-				log.taken++;
+		if (run.Animating()) log.asking += dt;
+		if (run.HideTurn()) {
+			CHECK(run.Animating());
+			log.hiding += dt;
+		}
+		// a push that has an animation is that animation's
+		if (run.Phase() >= PUSH_INTO) {
+			CHECK(anim.current);
+			CHECK_EQ((int)run.Play(), (int)anim.play);
+			CHECK(!run.Animating());
+		}
+		CHECK_EQ(run.AnimCurrent() ? 1 : 0, anim.current ? 1 : 0);
+
+		// the game's animation, after the physics
+		if (anim.current && anim.running) {
+			clock += dt * game.speed;
+			if (clock >= game.length - 1e-9) {
+				if (game.loops) {
+					clock -= game.length;
+					anim.play++;
+					if (log.plays < 16) log.took[log.plays] = t + dt;
+					log.plays++;
+				}
+				else {
+					clock = game.length;
+					anim.running = false;
+				}
 			}
 		}
 	}
 	log.speed = speed;
+	log.phase = run.Phase();
 	return log;
+}
+
+// The speed a hold of so many seconds asks for (units/s), as Skate's curve has it: from a
+// standstill the full hold is 0.2268 s, from walking pace on a quarter of a second
+static double askedFor(double hold, bool standing) {
+	double v = at(kSkatePush, hold / (standing ? 0.226785704 : 0.25));
+	if (v > 4.0) v = 4.0;
+	return v * 80.0;
+}
+
+static double smooth(double t) {
+	if (t <= 0.0) return 0.0;
+	if (t >= 1.0) return 1.0;
+	return t * t * (3.0 - 2.0 * t);
+}
+
+// A push animation to watch the feet in: where its two feet are (the ball of each) at a share
+// of it. The board is 4.5 high and the ball of a foot 1.2 above its sole.
+struct Clip {
+	double length;      // s
+	double off;         // the share at which the foot leaves the board, ...
+	double down;        // ... is on the ground,
+	double go;          // ... starts back along it,
+	double stop;        // ... has travelled,
+	double up;          // ... leaves the ground,
+	double on;          // ... and is on the board again
+	double ahead;       // how far ahead of its place on the board it comes down (units)
+	double behind;      // how far behind that place it stops
+	double start;       // where on that way it comes down: 0 at the point ahead, more: further back (it reaches ahead on the ground first)
+	bool leftPushes;
+	bool sideways;      // the board points along the first axis instead of the third
+	double blend;       // s over which the game blends into the animation from the skater standing on his board
+	double noise;       // units of jitter on every number
+};
+static const Clip kClip = { 0.8, 0.12, 0.30, 0.30, 0.60, 0.66, 0.88, 14.0, 14.0, 0.0, false, false, 0.0, 0.0 };
+
+static double jitter(int& seed) {
+	seed = seed * 1103515245 + 12345;
+	return ((seed >> 16) & 0x7FFF) / 16383.5 - 1.0;
+}
+
+static void clipFeet(const Clip& c, double share, float* left, float* right, int* seed) {
+	const double deck = 5.7, ground = 1.2;
+	const double rest[3] = { 3.0, deck, -9.0 };
+	const double land[3] = { 9.0, ground, -9.0 + c.ahead - c.start };
+	const double front[3] = { 9.0, ground, -9.0 + c.ahead };
+	const double end[3] = { 9.0, ground, -9.0 - c.behind };
+	double p[3];
+	if (share <= c.off) {
+		for (int i = 0; i < 3; i++) p[i] = rest[i];
+	}
+	else if (share < c.down) {
+		const double u = smooth((share - c.off) / (c.down - c.off));
+		for (int i = 0; i < 3; i++) p[i] = rest[i] + (land[i] - rest[i]) * u;
+	}
+	else if (share < c.go) {
+		// on the ground, before the stroke: it stays, or reaches ahead
+		const double u = smooth((share - c.down) / (c.go - c.down));
+		for (int i = 0; i < 3; i++) p[i] = land[i] + (front[i] - land[i]) * u;
+	}
+	else if (share < c.stop) {
+		const double u = smooth((share - c.go) / (c.stop - c.go));
+		for (int i = 0; i < 3; i++) p[i] = front[i] + (end[i] - front[i]) * u;
+	}
+	else if (share < c.up) {
+		for (int i = 0; i < 3; i++) p[i] = end[i];
+	}
+	else if (share < c.on) {
+		const double u = (share - c.up) / (c.on - c.up);
+		for (int i = 0; i < 3; i++) p[i] = end[i] + (rest[i] - end[i]) * smooth(u);
+		p[1] += 3.0 * sin(3.14159265358979 * u);
+	}
+	else {
+		for (int i = 0; i < 3; i++) p[i] = rest[i];
+	}
+	// the game blends into the animation from the skater on his board
+	if (c.blend > 0.0) {
+		const double w = share * c.length / c.blend;
+		if (w < 1.0) {
+			for (int i = 0; i < 3; i++) p[i] = rest[i] + (p[i] - rest[i]) * w;
+		}
+	}
+	// the other foot stays where it is and shifts a little with the weight
+	double q[3] = { -3.0, deck + 0.15 * sin(6.2831853 * share), 9.0 };
+	if (seed && c.noise > 0.0) {
+		for (int i = 0; i < 3; i++) {
+			p[i] += c.noise * jitter(*seed);
+			q[i] += c.noise * jitter(*seed);
+		}
+	}
+	if (c.sideways) {
+		double s = p[0]; p[0] = p[2]; p[2] = s;
+		s = q[0]; q[0] = q[2]; q[2] = s;
+	}
+	float* pushing = c.leftPushes ? left : right;
+	float* standing = c.leftPushes ? right : left;
+	const double mirror = c.leftPushes ? -1.0 : 1.0;
+	for (int i = 0; i < 3; i++) {
+		pushing[i] = (float)(i == 0 && !c.sideways ? mirror * p[i] : p[i]);
+		standing[i] = (float)(i == 0 && !c.sideways ? mirror * q[i] : q[i]);
+	}
+}
+
+// The feet of one play of a clip, looked at so many times a second from the first share to the last
+static FootResult watchClip(const Clip& c, double fps, double firstShare, double lastShare, int* looks) {
+	FootWatch watch;
+	int seed = 7;
+	int n = 0;
+	for (int k = 0;; k++) {
+		const double share = k / fps / c.length;
+		if (share > lastShare + 1e-9 || share > 1.0 - 1e-9) break;     // the game never shows the push at its very end
+		if (share < firstShare - 1e-9) continue;
+		float left[3], right[3];
+		clipFeet(c, share, left, right, &seed);
+		watch.Sample((float)share, left, right);
+		n++;
+	}
+	if (looks) *looks = n;
+	FootResult result;
+	watch.End((float)c.length, result);
+	return result;
 }
 
 static void testPushing() {
 	const double unit = 80.0;
 	const double frame60 = 1.0 / 60.0;
+	const float f60 = (float)frame60;
+	const float nan = nanf("");
+	// the foot pushes from 30% to 62% of the game's push animation, which is 0.8 s long
+	PushProfile foot;
+	SmoothPushProfile(foot, 0.30f, 0.62f);
 
 	g_case = "rolling: the settings and their defaults";
 	{
@@ -409,16 +652,16 @@ static void testPushing() {
 		CHECK_EQ(s.push, 100);
 		CHECK_EQ(s.pushOnOllie, 1);
 		CHECK_EQ(s.pushOverTurn, 1);
-		CHECK_EQ(s.pushDelay, 300);
-		CHECK_EQ(s.pushContact, 250);
-		CHECK_EQ(s.pushCycle, 900);
+		CHECK_EQ(s.pushMeasure, 1);
+		CHECK_EQ(s.pushFootDown, 30);
+		CHECK_EQ(s.pushFootUp, 62);
 		CHECK_EQ(s.coast, 100);
 		CHECK_EQ(s.steering, 100);
 		Sanitize(s);
 		CHECK_EQ(s.push, 100);
-		CHECK_EQ(s.pushDelay, 300);
-		CHECK_EQ(s.pushContact, 250);
-		CHECK_EQ(s.pushCycle, 900);
+		CHECK_EQ(s.pushMeasure, 1);
+		CHECK_EQ(s.pushFootDown, 30);
+		CHECK_EQ(s.pushFootUp, 62);
 		CHECK_EQ(s.coast, 100);
 		CHECK_EQ(s.steering, 100);
 		// 0 is THUG's own; anything else stays within reason
@@ -445,22 +688,37 @@ static void testPushing() {
 		CHECK_EQ(s.coast, 1000);
 		s.pushOnOllie = 7;
 		s.pushOverTurn = -2;
-		s.pushDelay = -5; s.pushContact = 1; s.pushCycle = 1;
+		s.pushMeasure = 5;
+		s.pushFootDown = -5; s.pushFootUp = 1;
 		Sanitize(s);
 		CHECK_EQ(s.pushOnOllie, 1);
 		CHECK_EQ(s.pushOverTurn, 1);
-		CHECK_EQ(s.pushDelay, 0);
-		CHECK_EQ(s.pushContact, 50);
-		CHECK_EQ(s.pushCycle, 200);
+		CHECK_EQ(s.pushMeasure, 1);
+		CHECK_EQ(s.pushFootDown, 0);
+		CHECK_EQ(s.pushFootUp, 5);
 		s.pushOnOllie = 0;
 		s.pushOverTurn = 0;
-		s.pushDelay = 99999; s.pushContact = 99999; s.pushCycle = 99999;
+		s.pushMeasure = 0;
+		s.pushFootDown = 99999; s.pushFootUp = 99999;
 		Sanitize(s);
 		CHECK_EQ(s.pushOnOllie, 0);
 		CHECK_EQ(s.pushOverTurn, 0);
-		CHECK_EQ(s.pushDelay, 1000);
-		CHECK_EQ(s.pushContact, 1000);
-		CHECK_EQ(s.pushCycle, 3000);
+		CHECK_EQ(s.pushMeasure, 0);
+		CHECK_EQ(s.pushFootDown, 90);
+		CHECK_EQ(s.pushFootUp, 100);
+		// the foot has pushed after it has started to, by a twentieth of the animation at least
+		s.pushFootDown = 40; s.pushFootUp = 20;
+		Sanitize(s);
+		CHECK_EQ(s.pushFootDown, 40);
+		CHECK_EQ(s.pushFootUp, 45);
+		s.pushFootDown = 90; s.pushFootUp = 0;
+		Sanitize(s);
+		CHECK_EQ(s.pushFootDown, 90);
+		CHECK_EQ(s.pushFootUp, 95);
+		s.pushFootDown = 10; s.pushFootUp = 80;
+		Sanitize(s);
+		CHECK_EQ(s.pushFootDown, 10);
+		CHECK_EQ(s.pushFootUp, 80);
 	}
 
 	g_case = "rolling: what a push is asked to add";
@@ -507,554 +765,1789 @@ static void testPushing() {
 		CHECK(near(PushStep(30.0f), 0.5, 1e-6));
 	}
 
+	g_case = "rolling: where the foot pushes";
+	{
+		PushProfile p;
+		SmoothPushProfile(p, 0.30f, 0.62f);
+		CHECK(near(p.down, 0.30, 1e-6));
+		CHECK(near(p.up, 0.62, 1e-6));
+		CHECK_EQ((int)PUSH_KNOTS, 17);
+		CHECK(p.done[0] == 0.0f);
+		CHECK(p.done[PUSH_KNOTS - 1] == 1.0f);
+		CHECK(near(p.done[8], 0.5, 1e-6));
+		for (int k = 0; k < PUSH_KNOTS; k++) {
+			if (k + 1 < PUSH_KNOTS) CHECK(p.done[k + 1] > p.done[k]);
+			CHECK(near(p.done[k] + p.done[PUSH_KNOTS - 1 - k], 1.0, 1e-6));
+			CHECK(near(p.done[k], smooth(k / 16.0), 1e-6));
+		}
+		// gentle at both ends: the first sixteenth of the time is a hundredth of the way, a middle one a tenth
+		CHECK(p.done[1] - p.done[0] < 0.02);
+		CHECK(p.done[9] - p.done[8] > 0.09);
+		// nothing before it pushes, all of it after, and between as the points say
+		CHECK(PushDone(p, -1.0f) == 0.0f);
+		CHECK(PushDone(p, 0.0f) == 0.0f);
+		CHECK(PushDone(p, 0.29f) == 0.0f);
+		CHECK(PushDone(p, 0.30f) == 0.0f);
+		CHECK(PushDone(p, 0.62f) == 1.0f);
+		CHECK(PushDone(p, 0.63f) == 1.0f);
+		CHECK(PushDone(p, 1.0f) == 1.0f);
+		CHECK(PushDone(p, 5.0f) == 1.0f);
+		CHECK(PushDone(p, nan) == 0.0f);
+		CHECK(near(PushDone(p, 0.46f), 0.5, 1e-4));
+		CHECK(near(PushDone(p, 0.38f), smooth(0.25), 1e-4));
+		CHECK(near(PushDone(p, 0.54f), smooth(0.75), 1e-4));
+		float before = 0.0f;
+		for (int i = 0; i <= 1000; i++) {
+			const double share = i * 0.001;
+			const float d = PushDone(p, (float)share);
+			CHECK(d >= before);
+			CHECK(d >= 0.0f && d <= 1.0f);
+			CHECK(near(d, smooth((share - 0.30) / 0.32), 0.004));
+			before = d;
+		}
+		// what is asked for stays within reason: it starts in the first 95 hundredths and takes 2 at least
+		SmoothPushProfile(p, -3.0f, 0.5f);
+		CHECK(p.down == 0.0f);
+		CHECK(near(p.up, 0.5, 1e-6));
+		SmoothPushProfile(p, 2.0f, 3.0f);
+		CHECK(near(p.down, 0.95, 1e-6));
+		CHECK(p.up == 1.0f);
+		SmoothPushProfile(p, 0.99f, 0.5f);
+		CHECK(near(p.down, 0.95, 1e-6));
+		CHECK(near(p.up, 0.97, 1e-6));
+		SmoothPushProfile(p, 0.5f, 0.2f);
+		CHECK(near(p.down, 0.5, 1e-6));
+		CHECK(near(p.up, 0.52, 1e-6));
+		SmoothPushProfile(p, 0.5f, 0.51f);
+		CHECK(near(p.up, 0.52, 1e-6));
+		SmoothPushProfile(p, 0.5f, 9.0f);
+		CHECK(p.up == 1.0f);
+		SmoothPushProfile(p, nan, nan);
+		CHECK(p.down == 0.0f);
+		CHECK(near(p.up, 0.02, 1e-6));
+		CHECK(near(p.done[8], 0.5, 1e-6));
+		// a foot that pushes in no time at all: nothing before, everything after
+		PushProfile none;
+		SmoothPushProfile(none, 0.4f, 0.5f);
+		none.up = 0.4f;
+		CHECK(PushDone(none, 0.39f) == 0.0f);
+		CHECK(PushDone(none, 0.4f) == 0.0f);
+		CHECK(PushDone(none, 0.401f) == 1.0f);
+		// a foot of any other kind is read between its points just the same: this one waits for half the time
+		PushProfile bent;
+		SmoothPushProfile(bent, 0.2f, 0.6f);
+		for (int k = 0; k < PUSH_KNOTS; k++) bent.done[k] = k < 8 ? 0.0f : (float)(k - 8) / 8.0f;
+		CHECK(PushDone(bent, 0.3f) == 0.0f);
+		CHECK(PushDone(bent, 0.4f) == 0.0f);
+		CHECK(near(PushDone(bent, 0.45f), 0.25, 1e-5));
+		CHECK(near(PushDone(bent, 0.5f), 0.5, 1e-5));
+		CHECK(near(PushDone(bent, 0.55f), 0.75, 1e-5));
+		CHECK(near(PushDone(bent, 0.5999f), 1.0, 0.002));
+	}
+
 	g_case = "rolling: one tap";
 	{
-		// A tap of 50 ms from a standstill, the game starts its animation at once: the speed
-		// comes while the foot is on the ground, from 0.3 s to 0.55 s into the animation, and it
-		// is what Skate's curve gives for 50 ms
+		// A tap of 50 ms from a standstill. The game plays its push animation, and the speed
+		// comes while its foot pushes, from 30% to 62% of it: nothing before, nothing after.
+		// How much: what Skate's curve gives for 50 ms.
 		const Press tap[] = { { 0.0, 0.05 } };
-		const PushLog log = runPush(60.0, 3.0, 0.0, tap, 1, 100, kTiming, 0, 0.0);
+		const PushLog log = runPush(60.0, 3.0, 0.0, tap, 1, 100, foot, 0, kGame);
+		CHECK_EQ(log.plays, 1);
 		CHECK_EQ(log.pushes, 1);
-		CHECK_EQ(log.taken, 1);
-		CHECK(near(log.took[0], frame60, 1e-6));
-		const double want = at(kSkatePush, 0.05 / 0.226785704) * unit;
-		CHECK(near(log.speed, want, 0.5));
+		CHECK(near(log.took[0], frame60, 1e-6));    // the script starts it on the frame after the press
+		CHECK(near(log.speed, askedFor(0.05, true), 0.5));
 		CHECK(near(log.speed, 81.5, 1.0));
 		CHECK(near(log.added[0], log.speed, 1e-3));
 		CHECK(near(log.asked[0], log.speed, 1e-3));
-		CHECK(log.firstAdd >= log.took[0] + 0.3 - frame60 - 1e-6 && log.firstAdd <= log.took[0] + 0.3 + 1e-6);
-		CHECK(log.lastAdd >= log.took[0] + 0.55 - frame60 && log.lastAdd <= log.took[0] + 0.55 + frame60 + 1e-6);
+		CHECK(near(log.held[0], 0.05, 1e-4));
+		CHECK(near(log.from[0], 0.0, 1e-6));
+		CHECK(log.firstShare[0] > 0.30 && log.firstShare[0] <= 0.30 + frame60 / 0.8 + 1e-6);
+		CHECK(log.lastShare[0] >= 0.62 - 1e-6 && log.lastShare[0] < 0.62 + frame60 / 0.8);
+		CHECK(near(log.firstAt[0], log.took[0] + 0.30 * 0.8, frame60 + 1e-6));
+		CHECK(near(log.lastAt[0], log.took[0] + 0.62 * 0.8, 2.0 * frame60));
+		CHECK_EQ(log.phase, PUSH_NONE);
+		CHECK(near(log.asking, frame60, 1e-6));     // the game was asked for one frame
 		// the shortest tap there is, one frame: Skate's tap
 		const Press blip[] = { { 0.0, 1.0 / 60.0 } };
-		const PushLog least = runPush(60.0, 3.0, 300.0, blip, 1, 100, kTiming, 0, 0.0);
+		const PushLog least = runPush(60.0, 3.0, 300.0, blip, 1, 100, foot, 0, kGame);
 		CHECK_EQ(least.pushes, 1);
 		CHECK(least.speed - 300.0 >= 0.75 * unit - 0.01);
 		CHECK(least.speed - 300.0 < 0.9 * unit);
 	}
 
+	g_case = "rolling: the speed comes as the foot pushes";
+	{
+		const Press hold[] = { { 0.0, 0.5 } };
+		const PushLog log = runPush(60.0, 3.0, 0.0, hold, 1, 100, foot, 0, kGame);
+		CHECK_EQ(log.pushes, 1);
+		CHECK_EQ(log.plays, 1);
+		CHECK(near(log.added[0], 4.0 * unit, 0.01));
+		// on every frame the foot pushes the board has as much of the push as the foot has of its stroke
+		CHECK(log.worst < 0.01);
+		// so it comes gently: the first frame and the last add little, the middle ones the most,
+		// and that is one and a half times what an even share would be: 320 units/s over 0.256 s
+		CHECK(log.firstAdd[0] < 0.25 * log.biggest[0]);
+		CHECK(log.lastAdd[0] < 0.25 * log.biggest[0]);
+		CHECK(log.biggest[0] <= 1.5 * 320.0 * frame60 / 0.256 + 0.01);
+		CHECK(log.biggest[0] > 1.4 * 320.0 * frame60 / 0.256);
+		// frame by frame, with the button down and the animation running
+		PushRun run;
+		PushAnim anim = { true, true, 1, 0.0f, 0.8f };
+		double speed = 100.0;
+		for (int k = 0; k <= 48; k++) {
+			anim.time = (float)(k * frame60);
+			speed += run.Step(f60, (float)speed, true, 100, anim, foot);
+			const double share = k * frame60 / 0.8;
+			CHECK(near(speed, 100.0 + 320.0 * smooth((share - 0.30) / 0.32), 320.0 * 0.004 + 0.01));
+			CHECK_EQ(run.Phase(), share < 0.30 ? PUSH_INTO : (share < 0.62 ? PUSH_CONTACT : PUSH_RECOVER));
+			CHECK_EQ(run.Active() ? 1 : 0, share < 0.62 ? 1 : 0);
+			CHECK_EQ((int)run.Serial(), share < 0.62 ? 0 : 1);
+		}
+		CHECK(near(speed, 420.0, 0.01));
+		CHECK(near(run.Added(), 320.0, 0.01));
+		CHECK(near(run.Asked(), 320.0, 0.01));
+		CHECK(near(run.From(), 100.0, 1e-6));
+	}
+
+	g_case = "rolling: at any frame rate";
+	{
+		const Press hold[] = { { 0.0, 0.5 } };
+		const double rates[] = { 30.0, 50.0, 60.0, 75.0, 120.0, 144.0, 240.0 };
+		for (int i = 0; i < 7; i++) {
+			const PushLog log = runPush(rates[i], 3.0, 100.0, hold, 1, 100, foot, 0, kGame);
+			const double step = 1.0 / rates[i] / 0.8;
+			CHECK_EQ(log.plays, 1);
+			CHECK_EQ(log.pushes, 1);
+			CHECK(near(log.added[0], 320.0, 0.05));
+			CHECK(near(log.speed, 420.0, 0.05));
+			CHECK(log.worst < 0.05);
+			CHECK(log.firstShare[0] > 0.30 && log.firstShare[0] <= 0.30 + step + 1e-6);
+			CHECK(log.lastShare[0] >= 0.62 - 1e-6 && log.lastShare[0] < 0.62 + step + 1e-6);
+		}
+	}
+
+	g_case = "rolling: the animation is the clock";
+	{
+		// Whatever the length of the game's animation: the speed comes from 30% to 62% of it
+		const Press hold[] = { { 0.0, 0.6 } };
+		const double lengths[] = { 0.6, 0.8, 1.2, 1.6 };
+		for (int i = 0; i < 4; i++) {
+			Game g = kGame;
+			g.length = lengths[i];
+			const PushLog log = runPush(60.0, 4.0, 100.0, hold, 1, 100, foot, 0, g);
+			CHECK_EQ(log.plays, 1);
+			CHECK_EQ(log.pushes, 1);
+			CHECK(near(log.firstAt[0], log.took[0] + 0.30 * lengths[i], frame60 + 1e-6));
+			CHECK(near(log.lastAt[0], log.took[0] + 0.62 * lengths[i], 2.0 * frame60 + 1e-6));
+			CHECK(near(log.added[0], 320.0, 0.05));
+		}
+		// And whatever speed the game plays it at: at twice its own the foot pushes from 0.12 s
+		// to 0.248 s after the start, at half from 0.48 s to 0.992 s
+		Game fast = kGame;
+		fast.speed = 2.0;
+		const Press shorter[] = { { 0.0, 0.3 } };
+		PushLog log = runPush(60.0, 4.0, 100.0, shorter, 1, 100, foot, 0, fast);
+		CHECK_EQ(log.plays, 1);
+		CHECK_EQ(log.pushes, 1);
+		CHECK(near(log.firstAt[0], log.took[0] + 0.12, frame60 + 1e-6));
+		CHECK(near(log.lastAt[0], log.took[0] + 0.248, 2.0 * frame60 + 1e-6));
+		CHECK(near(log.asked[0], 320.0, 0.01));
+		// (a stroke of an eighth of a second is too short for all of 4 m/s: Skate lets a push
+		// come in only so fast. See below.)
+		CHECK(log.added[0] > 0.85 * 320.0 && log.added[0] <= 320.01);
+		CHECK(log.biggest[0] <= 0.6 * unit + 0.01);
+		Game slow = kGame;
+		slow.speed = 0.5;
+		log = runPush(60.0, 4.0, 100.0, hold, 1, 100, foot, 0, slow);
+		CHECK_EQ(log.pushes, 1);
+		CHECK(near(log.firstAt[0], log.took[0] + 0.48, frame60 + 1e-6));
+		CHECK(near(log.lastAt[0], log.took[0] + 0.992, 2.0 * frame60 + 1e-6));
+		CHECK(near(log.added[0], 320.0, 0.05));
+	}
+
 	g_case = "rolling: the button held";
 	{
 		// Held from a standstill: every push has all there is, 4 m/s, until the top speed is
-		// reached. 320, 640, 680, and then no more.
+		// reached. 320, 640, 680, and then no more: from 8.3 m/s on no push starts, and the
+		// game is not asked for an animation that would push nothing.
 		const Press hold[] = { { 0.0, 30.0 } };
-		const PushLog log = runPush(60.0, 12.0, 0.0, hold, 1, 100, kTiming, 0, 0.0);
+		const PushLog log = runPush(60.0, 12.0, 0.0, hold, 1, 100, foot, 0, kGame);
 		CHECK_EQ(log.pushes, 3);
-		CHECK_EQ(log.taken, 3);
-		CHECK(near(log.added[0], 4.0 * unit, 0.5));
-		CHECK(near(log.added[1], 4.0 * unit, 0.5));
-		CHECK(near(log.added[2], 8.5 * unit - 8.0 * unit, 0.5));
+		CHECK_EQ(log.plays, 3);
+		CHECK(near(log.added[0], 4.0 * unit, 0.05));
+		CHECK(near(log.added[1], 4.0 * unit, 0.05));
+		CHECK(near(log.added[2], 8.5 * unit - 8.0 * unit, 0.05));
 		CHECK(near(log.asked[2], 4.0 * unit, 0.5));
 		CHECK(near(log.speed, 8.5 * unit, 0.01));
 		CHECK(log.most <= 8.5 * unit + 0.01);
-		// the foot is down 0.3 s into each animation, and with a script that is never busy the
-		// next push follows 0.9 s after the last
+		// one push for every play of the animation, at the same point of each
 		for (int i = 0; i < 3; i++) {
-			CHECK(near(log.start[i], log.took[i] + 0.3, frame60 + 1e-6));
+			CHECK(near(log.firstAt[i], log.took[i] + 0.30 * 0.8, frame60 + 1e-6));
+			CHECK(near(log.lastAt[i], log.took[i] + 0.62 * 0.8, 2.0 * frame60));
+			CHECK(near(log.said[i], log.added[i], 1e-3));
 		}
-		CHECK(near(log.took[1] - log.took[0], 0.9, 2.0 * frame60));
-		CHECK(near(log.took[2] - log.took[1], 0.9, 2.0 * frame60));
+		// the animation ends, the game shows the idle for a frame, and starts the next push
+		CHECK(near(log.took[1] - log.took[0], 0.8 + frame60, 1e-6));
+		CHECK(near(log.took[2] - log.took[1], 0.8 + frame60, 1e-6));
+		CHECK_EQ(log.phase, PUSH_NONE);
+		CHECK(near(log.asking, 3.0 * frame60, 1e-6));   // asked three times, for a frame each
 	}
 
-	g_case = "rolling: the game's animation sets the pace";
+	g_case = "rolling: no animation, no push";
 	{
+		// The game's scripts do not get to play the push: they are busy with a landing, say. A
+		// button that stays down keeps asking, and nothing is added.
+		Game never = kGame;
+		never.freeFrom = -1.0;
 		const Press hold[] = { { 0.0, 30.0 } };
-		// An animation longer than the cycle: the script looks for the next push when the
-		// animation is over, and that is when the next push starts. Every 1.2 s here.
-		const PushLog longer = runPush(60.0, 12.0, 0.0, hold, 1, 100, kTiming, 0, 1.2);
-		CHECK_EQ(longer.pushes, 3);
-		CHECK_EQ(longer.taken, 3);
-		CHECK(near(longer.took[1] - longer.took[0], 1.2, 2.0 * frame60));
-		CHECK(near(longer.took[2] - longer.took[1], 1.2, 2.0 * frame60));
-		for (int i = 0; i < 3; i++) {
-			CHECK(near(longer.start[i], longer.took[i] + 0.3, frame60 + 1e-6));
-			CHECK(near(longer.added[i], i < 2 ? 4.0 * unit : 0.5 * unit, 0.5));
-		}
-		// An animation shorter than the cycle: the cycle is the least there is between pushes
-		const PushLog shorter = runPush(60.0, 12.0, 0.0, hold, 1, 100, kTiming, 0, 0.5);
-		CHECK_EQ(shorter.pushes, 3);
-		CHECK(near(shorter.took[1] - shorter.took[0], 0.9, 2.0 * frame60));
-		// Nobody takes the push (the game shows something else): it starts by itself after a
-		// tenth of a second, and so does each one after it
-		const PushLog alone = runPush(60.0, 12.0, 0.0, hold, 1, 100, kTiming, 0, kNobody);
-		CHECK_EQ(alone.pushes, 3);
-		CHECK_EQ(alone.taken, 0);
-		CHECK(near(alone.start[0], 0.1 + 0.3, frame60 + 1e-6));
-		CHECK(near(alone.start[1], 0.1 + 0.9 + 0.1 + 0.3, 2.0 * frame60));
-		CHECK(near(alone.start[2], 0.1 + 0.9 + 0.1 + 0.9 + 0.1 + 0.3, 3.0 * frame60));
-		CHECK(near(alone.added[0], 4.0 * unit, 0.5));
-		// The script took the first push and then went on to something else for a long time:
-		// the second push waits for it until a second and a half after the first was taken and
-		// then goes by itself, and the third does not wait that long again
-		const PushLog left = runPush(60.0, 12.0, 0.0, hold, 1, 100, kTiming, 0, 30.0);
-		CHECK_EQ(left.pushes, 3);
-		CHECK_EQ(left.taken, 1);
-		CHECK(near(left.start[1], left.took[0] + 1.5 + 0.3, 2.0 * frame60));
-		CHECK(near(left.start[2] - left.start[1], 0.9 + 0.1, 2.0 * frame60));
-		// The same with a script whose animation is too long to wait for, 1.7 s: the second push
-		// goes by itself, and the script comes back for the third
-		const PushLog late = runPush(60.0, 12.0, 0.0, hold, 1, 100, kTiming, 0, 1.7);
-		CHECK_EQ(late.pushes, 3);
-		CHECK_EQ(late.taken, 2);
-		CHECK(near(late.start[1], late.took[0] + 1.5 + 0.3, 2.0 * frame60));
-		CHECK(near(late.took[1], late.took[0] + 1.5 + 0.9, 3.0 * frame60));
-		// Taps. One a long time after a push the game took: the game is not taken to be busy
-		// any more, so the push waits a tenth of a second.
-		const Press taps[] = { { 0.0, 0.05 }, { 2.0, 2.05 } };
-		const PushLog apart = runPush(60.0, 6.0, 0.0, taps, 2, 100, kTiming, 0, 30.0);
-		CHECK_EQ(apart.pushes, 2);
-		CHECK_EQ(apart.taken, 1);
-		CHECK(near(apart.start[1], 2.0 + 0.1 + 0.3, 2.0 * frame60));
-		// One just after the first push is over, while the game's animation of it is still
-		// playing: it waits for the animation to end and is taken then, ...
-		const Press soon[] = { { 0.0, 0.05 }, { 0.95, 1.0 } };
-		const PushLog after = runPush(60.0, 6.0, 0.0, soon, 2, 100, kTiming, 0, 1.2);
-		CHECK_EQ(after.pushes, 2);
-		CHECK_EQ(after.taken, 2);
-		CHECK(near(after.took[1], after.took[0] + 1.2, 2.0 * frame60));
-		CHECK(near(after.start[1], after.took[1] + 0.3, frame60 + 1e-6));
-		// ... and is as strong as the tap it came from, not as the wait was long
-		CHECK(near(after.asked[1], at(kSkatePush, 0.05 / 0.25) * unit, 3.0));
-		CHECK(after.asked[1] < 1.1 * unit);
-		// and if the game never comes for it, it goes when the game can no longer be busy
-		const PushLog never = runPush(60.0, 6.0, 0.0, soon, 2, 100, kTiming, 0, 30.0);
-		CHECK_EQ(never.pushes, 2);
-		CHECK_EQ(never.taken, 1);
-		CHECK(near(never.start[1], never.took[0] + 1.5 + 0.3, 2.0 * frame60));
-		// One a second and 0.45 after: under a tenth of a second is left of the game's time, so
-		// it waits the tenth
-		const Press edge[] = { { 0.0, 0.05 }, { 1.45, 1.5 } };
-		const PushLog least = runPush(60.0, 6.0, 0.0, edge, 2, 100, kTiming, 0, 30.0);
-		CHECK_EQ(least.pushes, 2);
-		CHECK(near(least.start[1], 1.45 + 0.1 + 0.3, 2.0 * frame60));
-		// What was under way is forgotten on a reset, and so is the game's being busy
-		{
-			PushRun run;
-			float v = 0.0f;
-			v += run.Step(1.0f / 60.0f, v, true, 100, kTiming);
-			run.Taken();
-			for (int frame = 0; frame < 10; frame++) v += run.Step(1.0f / 60.0f, v, false, 100, kTiming);
-			CHECK_EQ(run.Phase(), PUSH_INTO);
-			run.Reset();
-			int waited = 0;
-			for (int frame = 0; frame < 60 && run.Phase() != PUSH_INTO; frame++) {
-				v += run.Step(1.0f / 60.0f, v, true, 100, kTiming);
-				waited++;
-			}
-			CHECK_EQ(run.Phase(), PUSH_INTO);
-			CHECK(waited >= 6 && waited <= 8);
-		}
+		PushLog log = runPush(60.0, 5.0, 200.0, hold, 1, 100, foot, 0, never);
+		CHECK_EQ(log.plays, 0);
+		CHECK_EQ(log.pushes, 0);
+		CHECK(near(log.speed, 200.0, 1e-6));
+		CHECK(near(log.asking, 5.0, 1e-6));
+		CHECK_EQ(log.phase, PUSH_ASKED);
+		// a tap gives up after three quarters of a second
+		const Press tap[] = { { 0.0, 0.05 } };
+		log = runPush(60.0, 5.0, 200.0, tap, 1, 100, foot, 0, never);
+		CHECK_EQ(log.pushes, 0);
+		CHECK(near(log.speed, 200.0, 1e-6));
+		CHECK(near(log.asking, 0.75, frame60 + 1e-6));
+		CHECK_EQ(log.phase, PUSH_NONE);
+		// When the scripts get to it in time the push is there, late but whole: the animation and the speed together
+		Game late = kGame;
+		late.freeFrom = 0.5;
+		log = runPush(60.0, 5.0, 200.0, tap, 1, 100, foot, 0, late);
+		CHECK_EQ(log.plays, 1);
+		CHECK_EQ(log.pushes, 1);
+		CHECK(near(log.took[0], 0.5, 1e-6));
+		CHECK(near(log.firstAt[0], log.took[0] + 0.24, frame60 + 1e-6));
+		CHECK(near(log.added[0], askedFor(0.05, false), 0.5));
+		late.freeFrom = 0.7;
+		log = runPush(60.0, 5.0, 200.0, tap, 1, 100, foot, 0, late);
+		CHECK_EQ(log.pushes, 1);
+		// and when they do not, it is not: nothing happens a second after a tap
+		late.freeFrom = 0.8;
+		log = runPush(60.0, 5.0, 200.0, tap, 1, 100, foot, 0, late);
+		CHECK_EQ(log.plays, 0);
+		CHECK_EQ(log.pushes, 0);
+		CHECK(near(log.speed, 200.0, 1e-6));
+		// a button that is still down gets its push whenever the scripts get to it
+		late.freeFrom = 3.0;
+		log = runPush(60.0, 4.2, 200.0, hold, 1, 100, foot, 0, late);
+		CHECK_EQ(log.plays, 2);
+		CHECK_EQ(log.pushes, 1);
+		CHECK(near(log.took[0], 3.0, 1e-6));
+		CHECK(near(log.added[0], 320.0, 0.05));
+		CHECK(near(log.asking, 3.0 + frame60, 1e-6));
 	}
 
-	g_case = "rolling: the same at any frame rate";
+	g_case = "rolling: a tap while the foot is busy";
 	{
-		const Press hold[] = { { 0.0, 30.0 } };
-		const Press taps[] = { { 0.0, 0.05 }, { 1.5, 1.6 }, { 3.0, 3.2 }, { 4.5, 4.52 } };
-		const double rates[] = { 30.0, 60.0, 75.0, 144.0, 240.0, 1000.0 };
-		const double scripts[] = { kNobody, 0.0, 1.2 };
-		for (size_t k = 0; k < sizeof(scripts) / sizeof(scripts[0]); k++) {
-			const PushLog heldAt60 = runPush(60.0, 12.0, 0.0, hold, 1, 100, kTiming, 0, scripts[k]);
-			const PushLog rolledAt60 = runPush(60.0, 12.0, 0.0, hold, 1, 100, kTiming, 100, scripts[k]);
-			CHECK_EQ(heldAt60.pushes, 3);
-			for (size_t r = 0; r < sizeof(rates) / sizeof(rates[0]); r++) {
-				const PushLog held = runPush(rates[r], 12.0, 0.0, hold, 1, 100, kTiming, 0, scripts[k]);
-				CHECK_EQ(held.pushes, heldAt60.pushes);
-				CHECK(near(held.speed, heldAt60.speed, 0.05));
-				for (int i = 0; i < 3; i++) {
-					CHECK(near(held.added[i], heldAt60.added[i], 0.5));
-					// each push may be taken a frame late, so the times drift apart by a frame a push
-					CHECK(near(held.start[i], heldAt60.start[i], (i + 2) * (1.0 / rates[r] + frame60)));
-				}
-				// With the board rolling out in between, when the next push starts hangs on the
-				// moment the speed falls under the limit, so runs drift apart in time. What they
-				// have in common: about as many pushes, and a speed near the top.
-				const PushLog rolled = runPush(rates[r], 12.0, 0.0, hold, 1, 100, kTiming, 100, scripts[k]);
-				CHECK(rolled.pushes >= rolledAt60.pushes - 1 && rolled.pushes <= rolledAt60.pushes + 1);
-				CHECK(rolled.speed > 8.0 * unit && rolled.speed <= 8.5 * unit + 0.01);
-				CHECK(rolled.most <= 8.5 * unit + 0.01);
-				const PushLog tapped = runPush(rates[r], 12.0, 0.0, taps, 4, 100, kTiming, 0, scripts[k]);
-				CHECK_EQ(tapped.pushes, 4);
-				// a tap lasts a whole number of frames, so its length differs by up to a frame
-				for (int i = 0; i < 4; i++) {
-					const double length = taps[i].up - taps[i].down;
-					const double low = at(kSkatePush, (length - 1.0 / rates[r]) / 0.25) * unit;
-					const double high = at(kSkatePush, (length + 1.0 / rates[r]) / 0.226785704) * unit;
-					CHECK(tapped.added[i] >= (low < 0.75 * unit ? 0.75 * unit : low) - 1.0);
-					CHECK(tapped.added[i] <= (high > 4.0 * unit ? 4.0 * unit : high) + 1.0);
-				}
+		// A second tap during the animation is kept: the next push follows the first, with an animation of its own
+		const Press two[] = { { 0.0, 0.05 }, { 0.4, 0.45 } };
+		PushLog log = runPush(60.0, 4.0, 0.0, two, 2, 100, foot, 0, kGame);
+		CHECK_EQ(log.plays, 2);
+		CHECK_EQ(log.pushes, 2);
+		CHECK(near(log.took[1] - log.took[0], 0.8 + frame60, 1e-6));
+		CHECK(near(log.added[0], askedFor(0.05, true), 0.5));
+		CHECK(near(log.added[1], askedFor(0.05, false), 0.5));
+		CHECK(near(log.speed, log.added[0] + log.added[1], 1e-3));
+		// one is kept, not three
+		const Press four[] = { { 0.0, 0.05 }, { 0.2, 0.25 }, { 0.4, 0.45 }, { 0.6, 0.65 } };
+		log = runPush(60.0, 5.0, 0.0, four, 4, 100, foot, 0, kGame);
+		CHECK_EQ(log.plays, 2);
+		CHECK_EQ(log.pushes, 2);
+		// The push that was kept is as strong as its own tap was long, whatever the button
+		// does while it waits and after its animation has started
+		const Press three[] = { { 0.0, 0.05 }, { 0.4, 0.5 }, { 0.9, 1.9 } };
+		log = runPush(60.0, 1.75, 0.0, three, 3, 100, foot, 0, kGame);
+		CHECK_EQ(log.pushes, 2);
+		CHECK(near(log.held[1], 0.1, 1e-4));
+		CHECK(near(log.added[1], askedFor(0.1, false), 0.5));
+		// A press that comes before the foot of the first push is down does not make that push
+		// stronger. It is the next push, and that one has all a held button gives.
+		const Press quick[] = { { 0.0, 0.05 }, { 0.1, 2.0 } };
+		log = runPush(60.0, 1.9, 0.0, quick, 2, 100, foot, 0, kGame);
+		CHECK_EQ(log.pushes, 2);
+		CHECK(near(log.added[0], askedFor(0.05, true), 0.5));
+		CHECK(near(log.held[0], 0.05, 1e-4));
+		CHECK(near(log.added[1], 320.0, 0.05));
+	}
+
+	g_case = "rolling: how long the button was down";
+	{
+		// held for a tenth of a second and let go before the foot is down: a tenth of a second's push
+		const Press brief[] = { { 0.0, 0.1 } };
+		PushLog log = runPush(60.0, 3.0, 0.0, brief, 1, 100, foot, 0, kGame);
+		CHECK_EQ(log.pushes, 1);
+		CHECK(near(log.held[0], 0.1, 1e-4));
+		CHECK(near(log.added[0], askedFor(0.1, true), 0.5));
+		const Press medium[] = { { 0.0, 0.15 } };
+		log = runPush(60.0, 3.0, 300.0, medium, 1, 100, foot, 0, kGame);
+		CHECK(near(log.held[0], 0.15, 1e-4));
+		CHECK(near(log.added[0], askedFor(0.15, false), 0.5));
+		CHECK(log.added[0] > 200.0 && log.added[0] < 230.0);
+		// Let go while the foot pushes: what it had been down for by then. The foot starts
+		// 0.27 s after the press here, so that is the whole push.
+		const Press into[] = { { 0.0, 0.35 } };
+		log = runPush(60.0, 3.0, 300.0, into, 1, 100, foot, 0, kGame);
+		CHECK_EQ(log.pushes, 1);
+		CHECK_EQ(log.plays, 1);
+		CHECK(near(log.held[0], 0.35, 1e-4));
+		CHECK(near(log.added[0], 320.0, 0.05));
+		// Still down when the foot has pushed: what comes after does not count for this push
+		const Press longer[] = { { 0.0, 0.7 } };
+		log = runPush(60.0, 3.0, 300.0, longer, 1, 100, foot, 0, kGame);
+		CHECK_EQ(log.pushes, 1);
+		CHECK_EQ(log.plays, 1);
+		CHECK(near(log.held[0], 32.0 * frame60, 1e-4));     // the press, a frame for the script, and 0.5 s of animation
+		CHECK(near(log.added[0], 320.0, 0.05));
+		// A foot that starts to push before the button has been down for a quarter of a second
+		// (the animation at twice its speed: 0.15 s after the press): a button that stays down
+		// counts for more as the foot pushes on, and by the end of the stroke it is the whole push
+		Game fast = kGame;
+		fast.speed = 2.0;
+		const Press held[] = { { 0.0, 0.3 } };
+		log = runPush(60.0, 3.0, 300.0, held, 1, 100, foot, 0, fast);
+		CHECK_EQ(log.pushes, 1);
+		CHECK(near(log.from[0], 300.0, 1e-6));
+		CHECK(near(log.asked[0], 320.0, 0.01));
+		// (as much of it as fits into a stroke that short: Skate lets a push come in only so fast)
+		CHECK(log.added[0] > 0.85 * 320.0 && log.added[0] <= 320.01);
+		// let go in the middle of that stroke, 0.2 s after the press: a fifth of a second's push
+		const Press partly[] = { { 0.0, 0.2 } };
+		log = runPush(60.0, 3.0, 300.0, partly, 1, 100, foot, 0, fast);
+		CHECK_EQ(log.pushes, 1);
+		CHECK(near(log.held[0], 0.2, 1e-4));
+		CHECK(near(log.asked[0], askedFor(0.2, false), 0.5));
+		CHECK(log.added[0] > 0.9 * log.asked[0] && log.added[0] <= log.asked[0] + 0.01);
+		// and pressed again after that: the first push stays what it was
+		const Press again[] = { { 0.0, 0.2 }, { 0.22, 0.4 } };
+		log = runPush(60.0, 0.45, 300.0, again, 2, 100, foot, 0, fast);
+		CHECK_EQ(log.pushes, 1);
+		CHECK(near(log.held[0], 0.2, 1e-4));
+		CHECK(near(log.asked[0], askedFor(0.2, false), 0.5));
+		// the push never gets weaker while the foot pushes, and the board never loses what it has
+		PushRun run;
+		PushAnim anim = { true, true, 1, 0.0f, 0.4f };
+		double speed = 300.0;
+		float asked = 0.0f;
+		for (int k = 0; k <= 24; k++) {
+			anim.time = (float)(k * frame60);
+			const float add = run.Step(f60, (float)speed, k < 12, 100, anim, foot);
+			CHECK(add >= 0.0f);
+			speed += add;
+			if (run.Phase() == PUSH_CONTACT) {
+				CHECK(run.Asked() >= asked);
+				asked = run.Asked();
 			}
 		}
+		CHECK(near(asked, askedFor(0.2, false), 0.5));
+		CHECK(speed > 300.0 + 0.9 * asked && speed <= 300.0 + asked + 0.01);
+	}
+
+	g_case = "rolling: the animation is cut short";
+	{
+		// Something else takes the skater's animation before the foot is down: no push. The
+		// button is still down, so the game is asked again, and the next animation pushes.
+		Game early = kGame;
+		early.cutAt = 0.2;
+		const Press hold[] = { { 0.0, 30.0 } };
+		PushLog log = runPush(60.0, 1.2, 100.0, hold, 1, 100, foot, 0, early);
+		CHECK_EQ(log.plays, 3);
+		CHECK_EQ(log.pushes, 1);
+		CHECK(log.added[0] == 0.0);
+		CHECK(log.firstAt[0] < 0.0);
+		CHECK(near(log.added[1], 320.0, 0.05));
+		CHECK(log.added[2] == 0.0);
+		// In the middle of the stroke: the board has what the foot had done by then, and that is all
+		Game middle = kGame;
+		middle.cutAt = 0.46;
+		const Press once[] = { { 0.0, 0.35 } };
+		log = runPush(60.0, 3.0, 100.0, once, 1, 100, foot, 0, middle);
+		CHECK_EQ(log.plays, 1);
+		CHECK_EQ(log.pushes, 1);
+		CHECK(log.lastShare[0] < 0.46);
+		CHECK(near(log.added[0], 320.0 * smooth((log.lastShare[0] - 0.30) / 0.32), 320.0 * 0.004 + 0.01));
+		CHECK(log.added[0] > 0.4 * 320.0 && log.added[0] < 0.5 * 320.0);
+		CHECK(near(log.speed, 100.0 + log.added[0], 1e-3));
+		CHECK_EQ(log.phase, PUSH_NONE);
+		// after the stroke it makes no difference
+		Game after = kGame;
+		after.cutAt = 0.7;
+		log = runPush(60.0, 3.0, 100.0, once, 1, 100, foot, 0, after);
+		CHECK_EQ(log.pushes, 1);
+		CHECK(near(log.added[0], 320.0, 0.05));
+	}
+
+	g_case = "rolling: the animation ends between two frames";
+	{
+		// A foot that pushes to the very end of its animation: the game has put the next
+		// animation in its place before the last of the stroke was seen. The stroke is
+		// finished all the same.
+		PushProfile late;
+		SmoothPushProfile(late, 0.60f, 1.0f);
+		const Press once[] = { { 0.0, 0.5 } };
+		const double rates[] = { 30.0, 60.0, 144.0 };
+		for (int i = 0; i < 3; i++) {
+			const PushLog log = runPush(rates[i], 3.0, 100.0, once, 1, 100, late, 0, kGame);
+			CHECK_EQ(log.pushes, 1);
+			CHECK(near(log.added[0], 320.0, 0.05));
+		}
+		// frame by frame: the last the push sees of the animation is 98% of it, where the foot
+		// has a little of its way left. On the next frame the skater is in his idle, and the
+		// board gets the rest.
+		PushRun run;
+		PushAnim anim = { true, true, 1, 0.0f, 0.8f };
+		double speed = 100.0;
+		for (int k = 0; k <= 47; k++) {
+			anim.time = (float)(k * frame60);
+			speed += run.Step(f60, (float)speed, k < 30, 100, anim, late);
+		}
+		CHECK_EQ(run.Phase(), PUSH_CONTACT);
+		CHECK(speed < 419.0 && speed > 415.0);
+		CHECK_EQ((int)run.Serial(), 0);
+		PushAnim idle = { false, false, 2, 0.0f, 0.0f };
+		const float rest = run.Step(f60, (float)speed, false, 100, idle, late);
+		CHECK(rest > 1.0f);
+		CHECK(near(speed + rest, 420.0, 0.01));
+		CHECK_EQ(run.Phase(), PUSH_NONE);
+		CHECK_EQ((int)run.Serial(), 1);
+		CHECK(run.Step(f60, (float)speed + rest, false, 100, idle, late) == 0.0f);
+		// "It ran to its end" is said of this animation only: how the last one went by is forgotten
+		PushRun stale;
+		PushAnim hitch = { true, true, 1, 0.0f, 0.8f };
+		stale.Step(f60, 100.0f, true, 100, hitch, late);
+		hitch.time = 0.24f;         // 30% of it gone on the next frame
+		stale.Step(f60, 100.0f, true, 100, hitch, late);
+		CHECK_EQ(stale.Phase(), PUSH_INTO);
+		idle.play = 2;
+		stale.Step(f60, 100.0f, true, 100, idle, late);     // and then it is cut: no push, the game is asked again
+		CHECK_EQ(stale.Phase(), PUSH_ASKED);
+		hitch.play = 3;
+		hitch.time = 0.56f;         // the next one is first seen 70% in, in its stroke
+		const float some = stale.Step(f60, 100.0f, true, 100, hitch, late);
+		CHECK(some > 0.0f);
+		CHECK_EQ(stale.Phase(), PUSH_CONTACT);
+		idle.play = 4;              // cut again, nowhere near its end: nothing more
+		CHECK(stale.Step(f60, 100.0f + some, true, 100, idle, late) == 0.0f);
+		// the same with the animation started over (a loop) instead of replaced
+		PushRun round;
+		anim.play = 5;
+		speed = 100.0;
+		for (int k = 0; k <= 47; k++) {
+			anim.time = (float)(k * frame60);
+			speed += round.Step(f60, (float)speed, k < 30, 100, anim, late);
+		}
+		anim.play = 6;
+		anim.time = 0.0f;
+		speed += round.Step(f60, (float)speed, false, 100, anim, late);
+		CHECK(near(speed, 420.0, 0.01));
+		CHECK_EQ(round.Phase(), PUSH_NONE);
+		// but one that was cut off well before its end is not: at 80% this foot has done a
+		// little under half of its stroke
+		Game cut = kGame;
+		cut.cutAt = 0.8;
+		const PushLog log = runPush(60.0, 3.0, 100.0, once, 1, 100, late, 0, cut);
+		CHECK_EQ(log.pushes, 1);
+		CHECK(log.added[0] > 0.3 * 320.0 && log.added[0] < 0.5 * 320.0);
 	}
 
 	g_case = "rolling: as fast as pushing gets";
 	{
-		// With the board rolling out between pushes: the button held keeps it near the top, and it
-		// is never faster than Skate's 8.5 m/s
-		const Press hold[] = { { 0.0, 100.0 } };
-		const PushLog log = runPush(60.0, 60.0, 0.0, hold, 1, 100, kTiming, 100, 0.0);
-		CHECK(log.most <= 8.5 * unit + 0.01);
-		CHECK(log.most > 8.4 * unit);
-		CHECK(log.speed > 8.0 * unit);
-		CHECK(log.pushes > 10);
-		// From 8.3 m/s on no push starts, and a press made then is not kept for later
+		const Press hold[] = { { 0.0, 30.0 } };
+		// from 8.3 m/s on no push starts, and the game is not asked for one
+		PushLog log = runPush(60.0, 3.0, 8.3 * unit, hold, 1, 100, foot, 0, kGame);
+		CHECK_EQ(log.plays, 0);
+		CHECK_EQ(log.pushes, 0);
+		CHECK(log.asking == 0.0);
+		CHECK(near(log.speed, 664.0, 1e-3));
+		CHECK_EQ(log.phase, PUSH_NONE);
+		// just below it one does, and it ends at 8.5 m/s
+		log = runPush(60.0, 3.0, 8.29 * unit, hold, 1, 100, foot, 0, kGame);
+		CHECK_EQ(log.plays, 1);
+		CHECK_EQ(log.pushes, 1);
+		CHECK(near(log.asked[0], 320.0, 0.5));
+		CHECK(near(log.speed, 680.0, 0.01));
+		CHECK(log.most <= 680.01);
+		// a tap at that speed is not kept for when the board has slowed
+		const Press tap[] = { { 0.0, 1.0 / 60.0 } };
+		log = runPush(60.0, 6.0, 8.3 * unit, tap, 1, 100, foot, 100, kGame);
+		CHECK_EQ(log.plays, 0);
+		CHECK(log.asking == 0.0);
+		CHECK(log.speed < 664.0);
+		// a button that stays down pushes as soon as it has
+		log = runPush(60.0, 6.0, 8.3 * unit, hold, 1, 100, foot, 100, kGame);
+		CHECK(log.plays >= 1);
+		CHECK(log.took[0] < 0.1);
+		CHECK(log.most <= 680.01);
+		// percent: half of Skate's push, and twice
+		log = runPush(60.0, 12.0, 0.0, hold, 1, 50, foot, 0, kGame);
+		CHECK(near(log.added[0], 160.0, 0.05));
+		CHECK(near(log.speed, 340.0, 0.01));
+		CHECK_EQ(log.pushes, 3);
+		log = runPush(60.0, 12.0, 0.0, hold, 1, 200, foot, 0, kGame);
+		CHECK(near(log.added[0], 640.0, 0.05));
+		CHECK(near(log.speed, 1360.0, 0.01));
+		CHECK_EQ(log.pushes, 3);
+		// A board that got that fast by itself, downhill, while the push was waiting for its
+		// animation: the animation plays, and pushes nothing
 		PushRun run;
-		const float fast = 8.35f * (float)unit;
-		for (int frame = 0; frame < 120; frame++) {
-			CHECK(run.Step(1.0f / 60.0f, fast, frame < 10, 100, kTiming) == 0.0f);
+		PushAnim anim = { false, false, 1, 0.0f, 0.8f };
+		CHECK(run.Step(f60, 600.0f, true, 100, anim, foot) == 0.0f);
+		CHECK_EQ(run.Phase(), PUSH_ASKED);
+		anim.current = true;
+		anim.running = true;
+		anim.play = 2;
+		for (int k = 0; k <= 48; k++) {
+			anim.time = (float)(k * frame60);
+			CHECK(run.Step(f60, 670.0f, true, 100, anim, foot) == 0.0f);
 			CHECK_EQ(run.Phase(), PUSH_NONE);
-			CHECK(!run.Active());
 			CHECK(!run.Animating());
 		}
-		for (int frame = 0; frame < 120; frame++) {
-			CHECK(run.Step(1.0f / 60.0f, 300.0f, false, 100, kTiming) == 0.0f);
-			CHECK_EQ(run.Phase(), PUSH_NONE);
-		}
-		// but a button that is still down when the board has slowed pushes
-		PushRun again;
-		for (int frame = 0; frame < 60; frame++) {
-			CHECK(again.Step(1.0f / 60.0f, fast, true, 100, kTiming) == 0.0f);
-		}
-		CHECK_EQ(again.Phase(), PUSH_NONE);
-		again.Step(1.0f / 60.0f, 8.2f * (float)unit, true, 100, kTiming);
-		CHECK_EQ(again.Phase(), PUSH_ASKED);
-		// and that push has all there is: the button has been down the whole time, however
-		// soon the foot comes down
-		{
-			const PushTiming soon = { 0.05f, 0.25f, 0.9f };
-			PushRun waited;
-			for (int frame = 0; frame < 120; frame++) {
-				CHECK(waited.Step(1.0f / 60.0f, fast, true, 100, soon) == 0.0f);
-			}
-			float v = 300.0f;
-			for (int frame = 0; frame < 40; frame++) {
-				v += waited.Step(1.0f / 60.0f, v, true, 100, soon);
-				waited.Taken();
-			}
-			CHECK_EQ((int)waited.Serial(), 1);
-			CHECK(near(waited.Asked(), 4.0 * unit, 0.5));
-			CHECK(near(v, 300.0 + 4.0 * unit, 0.5));
-			// whereas a press that has only just begun is what it is: one frame of asking and
-			// 50 ms of the foot coming down
-			PushRun fresh;
-			float w = 300.0f;
-			for (int frame = 0; frame < 40; frame++) {
-				w += fresh.Step(1.0f / 60.0f, w, true, 100, soon);
-				fresh.Taken();
-			}
-			CHECK_EQ((int)fresh.Serial(), 1);
-			CHECK(near(fresh.HeldFor(), frame60 + 0.05, 1e-4));
-			CHECK(near(fresh.Asked(), at(kSkatePush, (frame60 + 0.05) / 0.25) * unit, 2.0));
-			CHECK(fresh.Asked() < 1.5 * unit);
-		}
-		// just under the limit a push starts, and adds only what is left to the top
-		const Press tap[] = { { 0.0, 0.5 } };
-		const PushLog close = runPush(60.0, 2.0, 8.25 * unit, tap, 1, 100, kTiming, 0, 0.0);
-		CHECK_EQ(close.pushes, 1);
-		CHECK(near(close.speed, 8.5 * unit, 0.01));
-	}
-
-	g_case = "rolling: the parts of a push";
-	{
-		// The push asks; the game takes it after the first frame. Then: into it for 0.3 s, the
-		// foot down for 0.25 s (the board is being pushed until here), back for the rest of the
-		// 0.9 s. The game is asked for its animation until a tenth of a second after it took it.
-		PushRun run;
-		const float dt = 1.0f / 200.0f;
-		float speed = 100.0f;
-		CHECK(!run.Active());
-		CHECK(!run.Animating());
-		for (int frame = 0; frame < 400; frame++) {
-			const double t = frame * (double)dt;   // the time into the animation this frame ends at
-			const float add = run.Step(dt, speed, frame < 4, 100, kTiming);
-			speed += add;
-			if (frame == 0) {
-				CHECK_EQ(run.Phase(), PUSH_ASKED);
-				CHECK(run.Animating());
-				CHECK(run.Active());
-				CHECK(add == 0.0f);
-				run.Taken();
-				CHECK_EQ(run.Phase(), PUSH_INTO);
-			}
-			else if (t < 0.295) {
-				CHECK_EQ(run.Phase(), PUSH_INTO);
-				CHECK(run.Active());
-				CHECK(add == 0.0f);
-				if (t < 0.095) CHECK(run.Animating());
-				if (t > 0.105) CHECK(!run.Animating());
-			}
-			else if (t > 0.305 && t < 0.545) {
-				CHECK_EQ(run.Phase(), PUSH_CONTACT);
-				CHECK(!run.Animating());
-				CHECK(run.Active());
-				CHECK(add > 0.0f);
-			}
-			else if (t > 0.555 && t < 0.895) {
-				CHECK_EQ(run.Phase(), PUSH_RECOVER);
-				CHECK(!run.Animating());
-				CHECK(!run.Active());
-				CHECK(add == 0.0f);
-			}
-			else if (t > 0.905) {
-				CHECK_EQ(run.Phase(), PUSH_NONE);
-				CHECK(!run.Animating());
-				CHECK(!run.Active());
-				CHECK(add == 0.0f);
-			}
-			// the game saying "taken" again changes nothing
-			if (frame == 20 || frame == 80 || frame == 150 || frame == 300) {
-				const int phase = run.Phase();
-				run.Taken();
-				CHECK_EQ(run.Phase(), phase);
-			}
-		}
-		CHECK_EQ((int)run.Serial(), 1);
-		CHECK(near(run.From(), 100.0, 1e-3));
-		CHECK(near(run.HeldFor(), 4 * dt, 1e-4));
-		CHECK(near(run.Added(), speed - 100.0, 1e-2));
-		CHECK(near(run.Asked(), run.Added(), 1e-2));
-		// A push nobody takes: it asks for a tenth of a second, and goes on asking for a tenth
-		// more while the foot is already on its way
-		PushRun alone;
-		float v = 0.0f, half = 0.0f;
-		for (int frame = 0; frame < 400; frame++) {
-			const double t = (frame + 1) * (double)dt;
-			v += alone.Step(dt, v, true, 100, kTiming);
-			if (t < 0.095) CHECK_EQ(alone.Phase(), PUSH_ASKED);
-			if (t > 0.105 && t < 0.395) CHECK_EQ(alone.Phase(), PUSH_INTO);
-			if (t < 0.195) CHECK(alone.Animating());
-			if (t > 0.205 && t < 0.995) CHECK(!alone.Animating());
-			if (t > 0.405 && t < 0.645) CHECK_EQ(alone.Phase(), PUSH_CONTACT);
-			// the speed comes in evenly: half of it by the middle of the contact
-			if (frame == 105 - 1) half = v;   // 0.525 s
-		}
-		CHECK(near(half, 0.5 * 4.0 * unit, 4.0));
-		// with no delay the foot is down the moment the game takes the push, and the game is
-		// still asked for a tenth of a second
-		const PushTiming now = { 0.0f, 0.25f, 0.9f };
-		PushRun direct;
-		CHECK(direct.Step(dt, 0.0f, true, 100, now) == 0.0f);
-		direct.Taken();
-		CHECK(direct.Step(dt, 0.0f, true, 100, now) > 0.0f);
-		CHECK_EQ(direct.Phase(), PUSH_CONTACT);
-		CHECK(direct.Animating());
-		for (int frame = 0; frame < 30; frame++) direct.Step(dt, 50.0f, true, 100, now);
-		CHECK_EQ(direct.Phase(), PUSH_CONTACT);
-		CHECK(!direct.Animating());
-		// With the foot down for a twentieth of a second and no delay the push is over before the
-		// game has had its tenth of a second: it is asked for the animation all the same
-		const PushTiming brief = { 0.0f, 0.05f, 0.9f };
-		PushRun shortest;
-		for (int frame = 0; frame < 100; frame++) {
-			const double t = (frame + 1) * (double)dt;   // 0.1 s of asking, then the push
-			shortest.Step(dt, 0.0f, true, 100, brief);
-			if (t > 0.155 && t < 0.195) {
-				CHECK_EQ(shortest.Phase(), PUSH_RECOVER);
-				CHECK(shortest.Animating());
-				CHECK(!shortest.Active());
-			}
-			if (t > 0.205) {
-				CHECK_EQ(shortest.Phase(), PUSH_RECOVER);
-				CHECK(!shortest.Animating());
-			}
-		}
-		// nothing asks, nothing is taken
-		PushRun idle;
-		idle.Taken();
-		CHECK_EQ(idle.Phase(), PUSH_NONE);
-		CHECK(idle.Step(dt, 100.0f, false, 100, kTiming) == 0.0f);
-		CHECK_EQ(idle.Phase(), PUSH_NONE);
-	}
-
-	g_case = "rolling: a press while a push is under way";
-	{
-		// A second tap during the first push: the next push follows when the first is over, 0.9 s
-		// after it began, and its strength is the second tap's
-		const Press two[] = { { 0.0, 0.05 }, { 0.6, 0.7 } };
-		const PushLog log = runPush(200.0, 4.0, 0.0, two, 2, 100, kTiming, 0, 0.0);
-		CHECK_EQ(log.pushes, 2);
-		CHECK(near(log.took[1] - log.took[0], 0.9, 0.011));
-		CHECK(near(log.start[1], log.took[1] + 0.3, 0.006));
-		CHECK(near(log.added[0], at(kSkatePush, 0.05 / 0.226785704) * unit, 1.5));
-		CHECK(near(log.added[1], at(kSkatePush, 0.1 / 0.25) * unit, 3.0));
-		// pressed during the first push and kept down: by the time the foot is down again the
-		// button has been held long enough for all there is
-		const Press kept[] = { { 0.0, 0.05 }, { 0.6, 1.3 } };
-		const PushLog strong = runPush(200.0, 4.0, 0.0, kept, 2, 100, kTiming, 0, 0.0);
-		CHECK_EQ(strong.pushes, 2);
-		CHECK(near(strong.added[1], 4.0 * unit, 1.0));
-		// the first push is not made stronger by a press that came after its own was let go
-		CHECK(near(strong.added[0], log.added[0], 0.01));
-		// three quick taps while one push runs are one more push, not three
-		const Press mash[] = { { 0.0, 0.03 }, { 0.1, 0.13 }, { 0.2, 0.23 }, { 0.4, 0.43 } };
-		const PushLog mashed = runPush(200.0, 4.0, 0.0, mash, 4, 100, kTiming, 0, 0.0);
-		CHECK_EQ(mashed.pushes, 2);
-		// A push is as strong as the press it came from, also when the button goes down again
-		// before the foot does: a tap of 30 ms, then the button held from 0.1 s on
-		const Press again[] = { { 0.0, 0.03 }, { 0.1, 0.5 } };
-		const double scripts[] = { 0.0, kNobody };
-		for (int k = 0; k < 2; k++) {
-			const PushLog first = runPush(200.0, 4.0, 0.0, again, 2, 100, kTiming, 0, scripts[k]);
-			CHECK_EQ(first.pushes, 2);
-			CHECK(near(first.asked[0], at(kSkatePush, 0.03 / 0.226785704) * unit, 3.0));
-			CHECK(first.asked[0] < 1.0 * unit);
-			CHECK(near(first.asked[1], 4.0 * unit, 1.0));
-			// the same for a push that was waiting its turn: a tap, a second tap while the first
-			// push runs, and the button held once the second push has started
-			const Press queue[] = { { 0.0, 0.05 }, { 0.6, 0.65 }, { 1.05, 1.5 } };
-			const PushLog queued = runPush(200.0, 5.0, 0.0, queue, 3, 100, kTiming, 0, scripts[k]);
-			CHECK_EQ(queued.pushes, 3);
-			CHECK(near(queued.asked[1], at(kSkatePush, 0.05 / 0.25) * unit, 3.0));
-			CHECK(queued.asked[1] < 1.1 * unit);
-			CHECK(near(queued.asked[2], 4.0 * unit, 1.0));
-		}
-	}
-
-	g_case = "rolling: the push as a share of Skate's";
-	{
-		const Press hold[] = { { 0.0, 30.0 } };
-		const PushLog half = runPush(60.0, 12.0, 0.0, hold, 1, 50, kTiming, 0, 0.0);
-		CHECK(near(half.added[0], 2.0 * unit, 0.5));
-		CHECK(near(half.speed, 4.25 * unit, 0.01));
-		const PushLog twice = runPush(60.0, 12.0, 0.0, hold, 1, 200, kTiming, 0, 0.0);
-		CHECK(near(twice.added[0], 8.0 * unit, 1.0));
-		CHECK(near(twice.speed, 17.0 * unit, 0.01));
-		// off: nothing, whatever the button does
-		PushRun off;
-		for (int frame = 0; frame < 200; frame++) {
-			CHECK(off.Step(1.0f / 60.0f, 100.0f, true, 0, kTiming) == 0.0f);
-			CHECK_EQ(off.Phase(), PUSH_NONE);
-		}
+		CHECK_EQ((int)run.Serial(), 0);
 	}
 
 	g_case = "rolling: no faster than Skate lets a push come in";
 	{
-		// With the foot on the ground for only 50 ms a full push would have to add 4 m/s in three
-		// ticks. Skate allows 0.6 m/s a tick: what comes of it is under half of what was asked.
-		const PushTiming quick = { 0.3f, 0.05f, 0.9f };
-		const Press hold[] = { { 0.0, 0.4 } };
-		const PushLog log = runPush(240.0, 3.0, 0.0, hold, 1, 100, quick, 0, 0.0);
+		// A foot that would push within a 60th of a second: the board still gets no more than
+		// 0.6 m/s in a 60th at a standstill and 0.5 at full speed
+		PushProfile snap;
+		SmoothPushProfile(snap, 0.30f, 0.32f);
+		const Press once[] = { { 0.0, 0.5 } };
+		PushLog log = runPush(60.0, 3.0, 0.0, once, 1, 100, snap, 0, kGame);
 		CHECK_EQ(log.pushes, 1);
-		CHECK(near(log.asked[0], 4.0 * unit, 0.5));
-		CHECK(log.added[0] < 0.5 * log.asked[0]);
-		// three ticks at 0.6 to 0.58 m/s
-		CHECK(near(log.added[0], 3.0 * 0.59 * unit, 6.0));
-		// the usual quarter of a second is slow enough for the whole push
-		const PushLog whole = runPush(240.0, 3.0, 0.0, hold, 1, 100, kTiming, 0, 0.0);
-		CHECK(near(whole.added[0], 4.0 * unit, 0.5));
+		CHECK(log.biggest[0] <= 0.6 * unit + 0.01);
+		CHECK(log.biggest[0] > 0.59 * unit);
+		CHECK(log.added[0] <= 2.0 * 0.6 * unit + 0.01);
+		CHECK(log.added[0] > 0.6 * unit);
+		CHECK(near(log.asked[0], 320.0, 0.01));
+		// at 240 frames a second a frame is a quarter of that, at 30 twice
+		log = runPush(240.0, 3.0, 0.0, once, 1, 100, snap, 0, kGame);
+		CHECK(log.biggest[0] <= 0.6 * unit / 4.0 + 0.01);
+		CHECK(log.biggest[0] > 0.59 * unit / 4.0);
+		log = runPush(30.0, 3.0, 0.0, once, 1, 100, snap, 0, kGame);
+		CHECK(log.biggest[0] <= 2.0 * 0.6 * unit + 0.01);
+		CHECK(log.biggest[0] > 2.0 * 0.59 * unit);
+		// near the top speed it is less
+		log = runPush(60.0, 3.0, 600.0, once, 1, 100, snap, 0, kGame);
+		CHECK(log.biggest[0] <= (0.6 - 0.1 * 600.0 / 680.0) * unit + 0.01);
+		CHECK(log.biggest[0] > 0.5 * unit);
+		// and with half of Skate's push half as much
+		log = runPush(60.0, 3.0, 0.0, once, 1, 50, snap, 0, kGame);
+		CHECK(log.biggest[0] <= 0.6 * unit / 2.0 + 0.01);
+		CHECK(log.biggest[0] > 0.59 * unit / 2.0);
+		// (300 units/s is then as far up the board's range as 600 is with all of it)
+		log = runPush(60.0, 3.0, 300.0, once, 1, 50, snap, 0, kGame);
+		CHECK(log.biggest[0] <= (0.6 - 0.1 * 300.0 / 340.0) * unit / 2.0 + 0.01);
+		CHECK(log.biggest[0] > 0.5 * unit / 2.0);
 	}
 
-	g_case = "rolling: odd frames and odd timings";
+	g_case = "rolling: what else pulls at the board is made up for";
+	{
+		// The board rolls out while the foot is on its way down. From where it is when the
+		// foot starts, the push takes it up by what was asked: what the wheels take meanwhile
+		// is added on top.
+		const Press once[] = { { 0.0, 0.5 } };
+		const PushLog log = runPush(60.0, 3.0, 300.0, once, 1, 100, foot, 100, kGame);
+		CHECK_EQ(log.pushes, 1);
+		CHECK(log.from[0] < 300.0 - 3.0 && log.from[0] > 300.0 - 12.0);
+		CHECK(near(log.asked[0], 320.0, 0.01));
+		CHECK(log.added[0] > 320.0 + 5.0 && log.added[0] < 320.0 + 12.0);
+		CHECK(log.most > log.from[0] + 320.0 - 1.0 && log.most <= log.from[0] + 320.0 + 0.01);
+	}
+
+	g_case = "rolling: a board that is ahead of the foot";
+	{
+		// Downhill the board picks up speed by itself. Where it is already faster than the
+		// push would have it by now, the push adds nothing. It never takes speed away.
+		PushRun run;
+		PushAnim anim = { true, true, 1, 0.0f, 0.8f };
+		double speed = 100.0;
+		for (int k = 0; k <= 48; k++) {
+			anim.time = (float)(k * frame60);
+			if (k == 18) speed += 200.0;
+			const float add = run.Step(f60, (float)speed, true, 100, anim, foot);
+			CHECK(add >= 0.0f);
+			const double share = k * frame60 / 0.8;
+			const double wanted = 100.0 + 320.0 * smooth((share - 0.30) / 0.32);
+			if (k >= 18 && wanted < speed - 1.0) CHECK(add == 0.0f);
+			speed += add;
+		}
+		// When the foot has pushed the board is where the push would have had it, no further:
+		// the push gave it 24 units/s before the slope gave it 200, and the last 96 after
+		CHECK(near(speed, 420.0, 0.01));
+		CHECK(near(run.Added(), 120.0, 1.0));
+		// faster than the whole push would have made it: nothing at all
+		PushRun none;
+		speed = 100.0;
+		for (int k = 0; k <= 48; k++) {
+			anim.time = (float)(k * frame60);
+			if (k == 16) speed = 500.0;
+			const float add = none.Step(f60, (float)speed, true, 100, anim, foot);
+			if (k >= 16) CHECK(add == 0.0f);
+			speed += add;
+		}
+		CHECK_EQ((int)none.Serial(), 1);
+		CHECK(none.Added() < 3.0f);
+		CHECK(near(speed, 500.0, 1e-6));
+	}
+
+	g_case = "rolling: the end of the animation";
+	{
+		// The animation stops at its end and stays the skater's (the game has nothing else to
+		// play yet): a foot that was still pushing has finished its stroke
+		PushProfile late;
+		SmoothPushProfile(late, 0.60f, 1.0f);
+		PushRun stop;
+		PushAnim anim = { true, true, 1, 0.0f, 0.8f };
+		double speed = 100.0;
+		for (int k = 0; k <= 47; k++) {
+			anim.time = (float)(k * frame60);
+			speed += stop.Step(f60, (float)speed, k < 30, 100, anim, late);
+		}
+		CHECK_EQ(stop.Phase(), PUSH_CONTACT);
+		CHECK(speed < 419.9);
+		anim.running = false;
+		anim.time = 0.8f;
+		speed += stop.Step(f60, (float)speed, false, 100, anim, late);
+		CHECK_EQ(stop.Phase(), PUSH_RECOVER);
+		CHECK_EQ((int)stop.Serial(), 1);
+		CHECK(near(speed, 420.0, 0.01));
+		CHECK(stop.Step(f60, (float)speed, false, 100, anim, late) == 0.0f);
+		// An animation that is no push animation any more, whatever else is said of it: the
+		// push is over where it was
+		PushRun gone;
+		anim.running = true;
+		speed = 100.0;
+		for (int k = 0; k <= 22; k++) {
+			anim.time = (float)(k * frame60);
+			speed += gone.Step(f60, (float)speed, k < 20, 100, anim, foot);
+		}
+		CHECK_EQ(gone.Phase(), PUSH_CONTACT);
+		PushAnim other = { false, false, 1, 0.5f, 0.8f };
+		CHECK(gone.Step(f60, (float)speed, false, 100, other, foot) == 0.0f);
+		CHECK_EQ(gone.Phase(), PUSH_NONE);
+		CHECK_EQ((int)gone.Serial(), 1);
+		// What the button does after the foot has pushed is nothing to that push
+		PushRun after;
+		speed = 100.0;
+		for (int k = 0; k <= 32; k++) {
+			anim.time = (float)(k * frame60);
+			speed += after.Step(f60, (float)speed, true, 100, anim, foot);
+		}
+		CHECK_EQ(after.Phase(), PUSH_RECOVER);
+		const float heldFor = after.HeldFor();
+		CHECK(near(heldFor, 31.0 * frame60, 1e-4));
+		for (int k = 33; k <= 47; k++) {
+			anim.time = (float)(k * frame60);
+			after.Step(f60, (float)speed, true, 100, anim, foot);
+			CHECK(after.HeldFor() == heldFor);
+		}
+		// nor after its animation was cut off in mid-stroke (the board is too fast for another push by then)
+		PushRun cut;
+		speed = 650.0;
+		for (int k = 0; k <= 24; k++) {
+			anim.time = (float)(k * frame60);
+			speed += cut.Step(f60, (float)speed, true, 100, anim, foot);
+		}
+		CHECK_EQ(cut.Phase(), PUSH_CONTACT);
+		CHECK(speed > 664.0);
+		PushAnim idle = { false, false, 2, 0.0f, 0.0f };
+		cut.Step(f60, (float)speed, true, 100, idle, foot);
+		CHECK_EQ(cut.Phase(), PUSH_NONE);
+		const float was = cut.HeldFor();
+		for (int k = 0; k < 10; k++) {
+			cut.Step(f60, (float)speed, true, 100, idle, foot);
+			CHECK_EQ(cut.Phase(), PUSH_NONE);
+			CHECK(cut.HeldFor() == was);
+		}
+	}
+
+	g_case = "rolling: asking the game for the animation";
 	{
 		PushRun run;
-		// no time, time backwards, not a number: nothing happens, nothing breaks
-		CHECK(run.Step(0.0f, 100.0f, true, 100, kTiming) == 0.0f);
-		CHECK(run.Step(-1.0f, 100.0f, true, 100, kTiming) == 0.0f);
-		const float nan = (float)sqrt(-1.0);
-		CHECK(run.Step(nan, 100.0f, true, 100, kTiming) == 0.0f);
+		PushAnim idle = { false, false, 5, 0.0f, 0.0f };
+		CHECK(!run.Animating());
+		CHECK(!run.HideTurn());
+		CHECK(!run.Active());
+		CHECK(!run.AnimCurrent());
 		CHECK_EQ(run.Phase(), PUSH_NONE);
-		// a frame that took seconds counts as a tenth of one: a push does not happen all at once
-		PushRun hitch;
-		float v = 0.0f;
-		v += hitch.Step(5.0f, v, true, 100, kTiming);
-		CHECK(v == 0.0f);
-		CHECK_EQ(hitch.Phase(), PUSH_INTO);
-		float most = 0.0f;
-		for (int frame = 0; frame < 200; frame++) {
-			const float add = hitch.Step(5.0f, v, true, 100, kTiming);
-			if (add > most) most = add;
-			v += add;
-			CHECK(v <= 8.5f * (float)unit + 0.01f);
+		// The button goes down: the game is asked. Its scripts do not see Left and Right for a
+		// fifth of a second, then they do for three fifths, and so on for as long as it asks.
+		int hidden = 0;
+		for (int frame = 0; frame < 150; frame++) {
+			CHECK(run.Step(f60, 200.0f, true, 100, idle, foot) == 0.0f);
+			CHECK_EQ(run.Phase(), PUSH_ASKED);
+			CHECK(run.Animating());
+			CHECK(run.Active());
+			const double into = fmod((frame + 1) * frame60, 0.8);
+			if (into > 0.001 && into < 0.199) CHECK(run.HideTurn());
+			if (into > 0.201 && into < 0.799) CHECK(!run.HideTurn());
+			if (run.HideTurn()) hidden++;
 		}
-		CHECK(most <= 4.0f * (float)unit * 0.1f / 0.25f + 0.5f);
-		// A time that makes no sense counts as none. No delay: the foot is down at once, and the
-		// next push still follows 0.9 s after this one.
-		{
-			const Press hold[] = { { 0.0, 30.0 } };
-			const PushTiming early = { -1.0f, 0.25f, 0.9f };
-			const PushLog log = runPush(200.0, 2.5, 0.0, hold, 1, 100, early, 0, 0.0);
-			CHECK_EQ(log.pushes, 3);
-			CHECK(near(log.start[0], log.took[0], 0.006));
-			CHECK(near(log.took[1] - log.took[0], 0.9, 0.011));
-			// the button had been down for a frame or two when the foot came down: a tap's push.
-			// By the second push it has been down all the while.
-			CHECK(log.added[0] >= 0.75 * 80.0 && log.added[0] < 0.85 * 80.0);
-			CHECK(near(log.added[1], 4.0 * 80.0, 1.0));
-			// No time on the ground: nothing is pushed, and the pushes still come 0.9 s apart
-			const PushTiming none = { 0.3f, -1.0f, 0.9f };
-			const PushLog air = runPush(200.0, 2.5, 0.0, hold, 1, 100, none, 0, 0.0);
-			CHECK_EQ(air.pushes, 3);
-			CHECK(air.speed == 0.0);
-			CHECK(near(air.took[1] - air.took[0], 0.9, 0.011));
-			const PushTiming zero = { 0.3f, 0.0f, 0.9f };
-			const PushLog flat = runPush(200.0, 2.5, 0.0, hold, 1, 100, zero, 0, 0.0);
-			CHECK_EQ(flat.pushes, 3);
-			CHECK(flat.speed == 0.0);
+		CHECK(hidden >= 40 && hidden <= 44);    // 2.5 s: three times a fifth of a second, and the first tenth of the fourth
+		// A push animation that was running before the button went down, and has its foot
+		// down already: the game is busy with it and is not asked. The push waits for the next one.
+		PushRun waits;
+		PushAnim busy = { true, true, 6, 0.38f, 0.8f };
+		CHECK(waits.Step(f60, 200.0f, false, 100, busy, foot) == 0.0f);
+		CHECK_EQ(waits.Phase(), PUSH_NONE);
+		CHECK(waits.AnimCurrent());
+		busy.time = 0.4f;
+		CHECK(waits.Step(f60, 200.0f, true, 100, busy, foot) == 0.0f);
+		CHECK_EQ(waits.Phase(), PUSH_ASKED);
+		CHECK(!waits.Animating());
+		CHECK(!waits.HideTurn());
+		CHECK(waits.AnimCurrent());
+		CHECK(waits.Active());
+		// One that has stopped at its end is still the skater's animation. The game is asked
+		// again. (The loop of a skater who rides nollie has to hear a no first; it gets that
+		// from the hook, which asks AnimCurrent.)
+		PushAnim ended = { true, false, 6, 0.8f, 0.8f };
+		CHECK(waits.Step(f60, 200.0f, true, 100, ended, foot) == 0.0f);
+		CHECK_EQ(waits.Phase(), PUSH_ASKED);
+		CHECK(waits.Animating());
+		CHECK(waits.HideTurn());
+		CHECK(waits.AnimCurrent());
+		// The game starts a push: the push takes up with it and asks no more
+		PushAnim fresh = { true, true, 7, 0.0f, 0.8f };
+		CHECK(run.Step(f60, 200.0f, true, 100, fresh, foot) == 0.0f);
+		CHECK_EQ(run.Phase(), PUSH_INTO);
+		CHECK(!run.Animating());
+		CHECK(!run.HideTurn());
+		CHECK(run.Active());
+		CHECK(run.AnimCurrent());
+		CHECK_EQ((int)run.Play(), 7);
+		CHECK(near(run.Down(), 0.30, 1e-6));
+		CHECK(near(run.Up(), 0.62, 1e-6));
+		// through the foot's stroke the board is being pushed; after it, not
+		fresh.time = 0.4f;
+		CHECK(run.Step(f60, 200.0f, true, 100, fresh, foot) > 0.0f);
+		CHECK_EQ(run.Phase(), PUSH_CONTACT);
+		CHECK(run.Active());
+		CHECK(!run.Animating());
+		fresh.time = 0.6f;
+		run.Step(f60, 200.0f, true, 100, fresh, foot);
+		CHECK_EQ(run.Phase(), PUSH_RECOVER);
+		CHECK(!run.Active());
+		CHECK(!run.Animating());
+		// the animation over, the button still down: the next one is asked for, with a new fifth of a second
+		idle.play = 8;
+		CHECK(run.Step(f60, 200.0f, true, 100, idle, foot) == 0.0f);
+		CHECK_EQ(run.Phase(), PUSH_ASKED);
+		CHECK(run.Animating());
+		CHECK(run.HideTurn());
+		CHECK(!run.AnimCurrent());
+		// an animation of no length is no animation
+		PushRun other;
+		PushAnim empty = { true, true, 9, 0.0f, 0.0f };
+		CHECK(other.Step(f60, 200.0f, true, 100, empty, foot) == 0.0f);
+		CHECK_EQ(other.Phase(), PUSH_ASKED);
+		CHECK(other.Animating());
+		// and "running" says nothing of an animation that is not a push animation
+		PushRun odd;
+		PushAnim walk = { false, true, 9, 0.1f, 0.8f };
+		CHECK(odd.Step(f60, 200.0f, true, 100, walk, foot) == 0.0f);
+		CHECK_EQ(odd.Phase(), PUSH_ASKED);
+		CHECK(odd.Animating());
+		CHECK(!odd.AnimCurrent());
+		// Frames that are no frames still see what the animation does: a push animation that
+		// ran through one was running before the button went down
+		PushRun blink;
+		PushAnim going = { true, true, 4, 0.4f, 0.8f };
+		blink.Step(0.0f, 100.0f, false, 100, going, foot);
+		going.time = 0.42f;
+		CHECK(blink.Step(f60, 100.0f, true, 100, going, foot) == 0.0f);
+		CHECK_EQ(blink.Phase(), PUSH_ASKED);
+		// Every push asks anew. This one has to ask for 0.6 s before the game plays it; the
+		// tap after it still has its three quarters of a second.
+		PushRun twice;
+		PushAnim nothing = { false, false, 1, 0.0f, 0.0f };
+		for (int k = 0; k < 36; k++) twice.Step(f60, 100.0f, true, 100, nothing, foot);
+		CHECK(twice.Animating());
+		PushAnim played = { true, true, 2, 0.0f, 0.8f };
+		for (int k = 0; k <= 47; k++) {
+			played.time = (float)(k * frame60);
+			twice.Step(f60, 100.0f, false, 100, played, foot);
 		}
-		// a speed that makes no sense with the push off: still nothing
-		{
-			PushRun off;
-			for (int frame = 0; frame < 60; frame++) {
-				CHECK(off.Step(1.0f / 60.0f, -1.0f, true, 0, kTiming) == 0.0f);
-				CHECK(off.Step(1.0f / 60.0f, -1.0f, frame % 2 == 0, -100, kTiming) == 0.0f);
-				CHECK_EQ(off.Phase(), PUSH_NONE);
+		CHECK_EQ(twice.Phase(), PUSH_RECOVER);
+		nothing.play = 3;
+		int asking = 0;
+		for (int k = 0; k < 120; k++) {
+			twice.Step(f60, 100.0f, k < 2, 100, nothing, foot);
+			if (twice.Animating()) asking++;
+		}
+		CHECK(asking >= 44 && asking <= 46);
+		// A tap during a push animation that is not its own waits for that to end, however
+		// long it takes: the three quarters of a second are for a game that has nothing to show
+		PushRun patient;
+		PushAnim slow = { true, true, 1, 0.7f, 2.0f };
+		patient.Step(f60, 100.0f, false, 100, slow, foot);
+		for (int k = 1; k <= 76; k++) {
+			slow.time = (float)(0.7 + k * frame60);
+			CHECK(patient.Step(f60, 100.0f, k < 3, 100, slow, foot) == 0.0f);
+			CHECK_EQ(patient.Phase(), PUSH_ASKED);
+			CHECK(!patient.Animating());
+		}
+		nothing.play = 2;
+		patient.Step(f60, 100.0f, false, 100, nothing, foot);
+		CHECK_EQ(patient.Phase(), PUSH_ASKED);
+		CHECK(patient.Animating());
+	}
+
+	g_case = "rolling: a push for an animation that is already running";
+	{
+		// The game is in a push animation nobody asked for, and its foot is not down yet: a
+		// press takes it. Two frames of a press: a tap's push.
+		PushRun run;
+		PushAnim anim = { true, true, 3, 0.1f, 0.8f };
+		double speed = 100.0;
+		speed += run.Step(f60, (float)speed, false, 100, anim, foot);
+		CHECK_EQ(run.Phase(), PUSH_NONE);
+		CHECK(!run.Animating());
+		for (int k = 12; k <= 48; k++) {
+			anim.time = (float)(k * frame60);
+			speed += run.Step(f60, (float)speed, k < 14, 100, anim, foot);
+			if (k == 12) CHECK_EQ(run.Phase(), PUSH_INTO);
+		}
+		CHECK_EQ(run.Phase(), PUSH_RECOVER);
+		CHECK_EQ((int)run.Serial(), 1);
+		CHECK(near(run.HeldFor(), 2.0 * frame60, 1e-4));
+		CHECK(near(run.Added(), askedFor(2.0 * frame60, false), 0.5));
+		CHECK(near(speed, 100.0 + run.Added(), 1e-3));
+		// With its foot down already it is too late: the push waits, and nothing is added for
+		// the rest of that animation. The next one is its own.
+		PushRun late;
+		speed = 100.0;
+		anim.time = (float)(18 * frame60);
+		CHECK(late.Step(f60, (float)speed, false, 100, anim, foot) == 0.0f);
+		for (int k = 19; k <= 48; k++) {
+			anim.time = (float)(k * frame60);
+			CHECK(late.Step(f60, (float)speed, true, 100, anim, foot) == 0.0f);
+			CHECK_EQ(late.Phase(), PUSH_ASKED);
+			CHECK(!late.Animating());
+		}
+		PushAnim idle = { false, false, 4, 0.0f, 0.0f };
+		CHECK(late.Step(f60, (float)speed, true, 100, idle, foot) == 0.0f);
+		CHECK(late.Animating());
+		anim.play = 5;
+		for (int k = 0; k <= 48; k++) {
+			anim.time = (float)(k * frame60);
+			speed += late.Step(f60, (float)speed, true, 100, anim, foot);
+		}
+		CHECK_EQ((int)late.Serial(), 1);
+		CHECK(near(speed, 420.0, 0.05));
+		// a hair after the foot starts is too late, a hair before is not
+		PushRun edge;
+		anim.play = 6;
+		anim.time = 0.2f;
+		edge.Step(f60, 100.0f, false, 100, anim, foot);
+		anim.time = 0.2404f;
+		CHECK(edge.Step(f60, 100.0f, true, 100, anim, foot) == 0.0f);
+		CHECK_EQ(edge.Phase(), PUSH_ASKED);
+		PushRun before;
+		anim.time = 0.2f;
+		before.Step(f60, 100.0f, false, 100, anim, foot);
+		anim.time = 0.2396f;
+		CHECK(before.Step(f60, 100.0f, true, 100, anim, foot) == 0.0f);
+		CHECK_EQ(before.Phase(), PUSH_INTO);
+	}
+
+	g_case = "rolling: an animation the game started for the push is the push's";
+	{
+		// The push was wanted, the game has started its animation since, and the first frame
+		// that sees it is late: a hitch. The foot is in its stroke already. It is this push's
+		// foot all the same, and the board catches up with it as fast as Skate lets it.
+		PushAnim idle = { false, false, 1, 0.0f, 0.0f };
+		PushRun run;
+		double speed = 100.0;
+		for (int k = 0; k < 30; k++) {
+			CHECK(run.Step(f60, (float)speed, true, 100, idle, foot) == 0.0f);
+		}
+		CHECK_EQ(run.Phase(), PUSH_ASKED);
+		PushAnim anim = { true, true, 2, 0.0f, 0.8f };
+		double biggest = 0.0;
+		for (int k = 24; k <= 48; k++) {
+			anim.time = (float)(k * frame60);
+			const float add = run.Step(f60, (float)speed, true, 100, anim, foot);
+			if (k == 24) {
+				CHECK_EQ(run.Phase(), PUSH_CONTACT);
+				CHECK(add > 0.58f * 80.0f);
 			}
+			if (add > biggest) biggest = add;
+			speed += add;
 		}
-		// A board that is faster than pushing gets by the time the foot comes down (a hill): the
-		// push adds nothing, and takes nothing away
-		{
-			PushRun run;
-			float v = 600.0f;
-			float added = 0.0f;
-			for (int frame = 0; frame < 60; frame++) {
-				const float add = run.Step(1.0f / 60.0f, v, frame < 30, 100, kTiming);
-				CHECK(add >= 0.0f);
-				added += add;
-				if (frame == 0) run.Taken();
-				if (frame == 5) v = 800.0f;
-			}
-			CHECK_EQ((int)run.Serial(), 1);
-			CHECK(added == 0.0f);
-			CHECK(run.Added() == 0.0f);
-			CHECK(near(run.From(), 800.0, 1e-3));
-		}
-		// a cycle shorter than the push itself: the next push follows straight on the last
-		const PushTiming tight = { 0.1f, 0.2f, 0.05f };
-		const Press hold[] = { { 0.0, 30.0 } };
-		const PushLog log = runPush(200.0, 0.95, 0.0, hold, 1, 100, tight, 0, 0.0);
+		CHECK_EQ(run.Phase(), PUSH_RECOVER);
+		CHECK_EQ((int)run.Serial(), 1);
+		CHECK(biggest <= 0.6 * 80.0 + 0.01);
+		CHECK(speed > 100.0 + 300.0 && speed <= 420.01);
+		// seen for the first time after the stroke: one frame's worth, and that is all
+		PushRun missed;
+		missed.Step(f60, 100.0f, true, 100, idle, foot);
+		anim.play = 3;
+		anim.time = 0.7f;
+		const float once = missed.Step(f60, 100.0f, true, 100, anim, foot);
+		CHECK(once > 0.0f && once <= 0.6f * 80.0f + 0.01f);
+		CHECK_EQ(missed.Phase(), PUSH_RECOVER);
+		anim.time = 0.72f;
+		CHECK(missed.Step(f60, 100.0f + once, true, 100, anim, foot) == 0.0f);
+		// An animation that was running before the push was wanted is another matter: see above.
+		// And one that starts over by itself is a new animation every round.
+		PushRun round;
+		anim.play = 4;
+		anim.time = 0.7f;
+		round.Step(f60, 100.0f, false, 100, anim, foot);
+		anim.play = 5;
+		anim.time = 0.4f;       // a round later, the look is late again
+		CHECK(round.Step(f60, 100.0f, true, 100, anim, foot) > 0.0f);
+		CHECK_EQ(round.Phase(), PUSH_CONTACT);
+		// A foot that pushes from the very start of its animation: the push can only take up
+		// with it because the game has just started it
+		PushProfile first;
+		SmoothPushProfile(first, 0.0f, 0.4f);
+		CHECK(first.down == 0.0f);
+		const Press hold[] = { { 0.0, 0.5 } };
+		const PushLog log = runPush(60.0, 3.0, 100.0, hold, 1, 100, first, 0, kGame);
+		CHECK_EQ(log.plays, 1);
+		CHECK_EQ(log.pushes, 1);
+		CHECK(log.firstShare[0] > 0.0 && log.firstShare[0] < 0.05);
+		CHECK(near(log.asked[0], 320.0, 0.01));
+		CHECK(log.added[0] > 0.9 * 320.0 && log.added[0] <= 320.01);
+	}
+
+	g_case = "rolling: an animation that starts over by itself";
+	{
+		// The push with the front foot runs as a loop. With the button down every round of it
+		// is a push; let go, the rounds go on and push nothing.
+		Game loop = kGame;
+		loop.loops = true;
+		const Press hold[] = { { 0.0, 2.2 } };
+		const PushLog log = runPush(60.0, 6.0, 0.0, hold, 1, 100, foot, 0, loop);
 		CHECK_EQ(log.pushes, 3);
-		// Reset: what was under way is gone
-		PushRun gone;
-		float w = 0.0f;
-		for (int frame = 0; frame < 27; frame++) w += gone.Step(1.0f / 60.0f, w, frame < 3, 100, kTiming);
-		CHECK_EQ(gone.Phase(), PUSH_CONTACT);
-		gone.Reset();
-		CHECK_EQ(gone.Phase(), PUSH_NONE);
-		CHECK(!gone.Active());
-		CHECK(!gone.Animating());
-		for (int frame = 0; frame < 120; frame++) CHECK(gone.Step(1.0f / 60.0f, w, false, 100, kTiming) == 0.0f);
-		// so is a press that was waiting for its turn
+		CHECK(log.plays >= 7);
+		CHECK(near(log.added[0], 320.0, 0.05));
+		CHECK(near(log.added[1], 320.0, 0.05));
+		CHECK(near(log.added[2], 40.0, 0.05));
+		for (int i = 3; i < log.plays && i < 16; i++) CHECK(log.added[i] == 0.0);
+		for (int i = 0; i < 3; i++) CHECK(near(log.firstAt[i], log.took[i] + 0.24, frame60 + 1e-6));
+		CHECK(near(log.took[1] - log.took[0], 0.8, 1e-6));
+		CHECK(near(log.speed, 680.0, 0.01));
+		// A foot that pushes through the whole of every round: where one round's push ends
+		// the next one's starts, on the same frame, and nothing is counted twice or lost
 		{
-			PushRun queued;
-			float q = 0.0f;
-			for (int frame = 0; frame < 20; frame++) {
-				q += queued.Step(1.0f / 60.0f, q, frame < 3 || (frame >= 10 && frame < 13), 100, kTiming);
-				if (frame == 0) queued.Taken();
+			PushProfile whole;
+			SmoothPushProfile(whole, 0.0f, 1.0f);
+			PushRun both;
+			PushAnim round = { true, true, 1, 0.0f, 0.8f };
+			double fast = 0.0;
+			for (int lap = 0; lap < 2; lap++) {
+				for (int k = 0; k <= 47; k++) {
+					round.time = (float)(k * frame60);
+					fast += both.Step(f60, (float)fast, true, 100, round, whole);
+					if (lap == 1 && k == 0) CHECK(near(fast, 320.0, 0.01));
+				}
+				CHECK(fast < (lap + 1) * 320.0 - 0.2);
+				round.play++;
 			}
-			CHECK_EQ(queued.Phase(), PUSH_CONTACT);
-			queued.Reset();
-			for (int frame = 0; frame < 240; frame++) {
-				CHECK(queued.Step(1.0f / 60.0f, q, false, 100, kTiming) == 0.0f);
-				CHECK_EQ(queued.Phase(), PUSH_NONE);
-			}
-			CHECK_EQ((int)queued.Serial(), 0);
+			round.time = 0.0f;
+			fast += both.Step(f60, (float)fast, false, 100, round, whole);
+			CHECK(near(fast, 640.0, 0.01));
+			CHECK_EQ((int)both.Serial(), 2);
 		}
-		// and a push that was only asking is gone as well
+		// a tap in one round is a push in the next
+		const Press tap[] = { { 0.5, 0.55 } };
+		PushRun run;
+		PushAnim anim = { true, true, 1, 0.0f, 0.8f };
+		double speed = 100.0;
+		int rounds = 0;
+		double clock = 0.0;
+		double addedIn[4] = { 0.0, 0.0, 0.0, 0.0 };
+		for (int frame = 0; frame < 180; frame++) {
+			const double t = frame * frame60;
+			anim.time = (float)clock;
+			const float add = run.Step(f60, (float)speed, t >= tap[0].down - 1e-9 && t < tap[0].up - 1e-9, 100, anim, foot);
+			speed += add;
+			if (rounds < 4) addedIn[rounds] += add;
+			clock += frame60;
+			if (clock >= 0.8 - 1e-9) {
+				clock -= 0.8;
+				anim.play++;
+				rounds++;
+			}
+		}
+		CHECK(addedIn[0] == 0.0);
+		CHECK(near(addedIn[1], askedFor(0.05, false), 0.5));
+		CHECK(addedIn[2] == 0.0);
+	}
+
+	g_case = "rolling: the push keeps the foot it started with";
+	{
+		// Where the foot pushes is settled when the push takes up with the animation. What is
+		// said of the animation's foot afterwards (it has been watched meanwhile, say) is for
+		// the next push.
+		PushProfile other;
+		SmoothPushProfile(other, 0.05f, 0.15f);
+		PushRun run;
+		PushAnim anim = { true, true, 1, 0.0f, 0.8f };
+		double speed = 100.0;
+		for (int k = 0; k <= 48; k++) {
+			anim.time = (float)(k * frame60);
+			const float add = run.Step(f60, (float)speed, true, 100, anim, k == 0 ? foot : other);
+			speed += add;
+			const double share = k * frame60 / 0.8;
+			if (share < 0.30) CHECK(add == 0.0f);
+			CHECK(near(speed, 100.0 + 320.0 * smooth((share - 0.30) / 0.32), 320.0 * 0.004 + 0.01));
+			CHECK(near(run.Down(), 0.30, 1e-6));
+			CHECK(near(run.Up(), 0.62, 1e-6));
+		}
+		// the next animation: the other foot
+		PushAnim idle = { false, false, 2, 0.0f, 0.0f };
+		run.Step(f60, (float)speed, true, 100, idle, other);
+		anim.play = 3;
+		anim.time = 0.0f;
+		run.Step(f60, (float)speed, true, 100, anim, other);
+		CHECK_EQ(run.Phase(), PUSH_INTO);
+		CHECK(near(run.Down(), 0.05, 1e-6));
+		CHECK(near(run.Up(), 0.15, 1e-6));
+	}
+
+	g_case = "rolling: a push that is called off";
+	{
+		// Reset (a bail, Down, the board off the ground) at any point of a push: nothing more
+		// comes of it, whatever the animation goes on to do
+		const int at[] = { 6, 20, 40 };     // on the way down, in the stroke, after it
+		for (int i = 0; i < 3; i++) {
+			PushRun run;
+			PushAnim anim = { true, true, 1, 0.0f, 0.8f };
+			double speed = 100.0;
+			for (int k = 0; k <= at[i]; k++) {
+				anim.time = (float)(k * frame60);
+				speed += run.Step(f60, (float)speed, k < 30, 100, anim, foot);
+			}
+			CHECK_EQ(run.Phase(), i == 0 ? PUSH_INTO : (i == 1 ? PUSH_CONTACT : PUSH_RECOVER));
+			const uint32_t serial = run.Serial();
+			const double was = speed;
+			run.Reset();
+			CHECK_EQ(run.Phase(), PUSH_NONE);
+			CHECK(!run.Active());
+			CHECK(!run.Animating());
+			CHECK(!run.HideTurn());
+			for (int k = at[i] + 1; k <= 48; k++) {
+				anim.time = (float)(k * frame60);
+				CHECK(run.Step(f60, (float)speed, false, 100, anim, foot) == 0.0f);
+				CHECK_EQ(run.Phase(), PUSH_NONE);
+			}
+			CHECK_EQ((int)run.Serial(), (int)serial);
+			CHECK(speed == was);
+		}
+		// a press that was being kept is forgotten as well
+		PushRun run;
+		PushAnim anim = { true, true, 1, 0.0f, 0.8f };
+		for (int k = 0; k <= 20; k++) {
+			anim.time = (float)(k * frame60);
+			run.Step(f60, 100.0f, k < 2 || (k >= 10 && k < 12), 100, anim, foot);
+		}
+		run.Reset();
+		PushAnim idle = { false, false, 2, 0.0f, 0.0f };
+		for (int k = 0; k < 60; k++) {
+			CHECK(run.Step(f60, 100.0f, false, 100, idle, foot) == 0.0f);
+			CHECK_EQ(run.Phase(), PUSH_NONE);
+			CHECK(!run.Animating());
+		}
+		// and a push that was only asking
 		PushRun asked;
-		asked.Step(1.0f / 60.0f, 0.0f, true, 100, kTiming);
+		asked.Step(f60, 0.0f, true, 100, idle, foot);
 		CHECK_EQ(asked.Phase(), PUSH_ASKED);
+		CHECK(asked.HideTurn());
 		asked.Reset();
 		CHECK_EQ(asked.Phase(), PUSH_NONE);
-		asked.Taken();
-		CHECK_EQ(asked.Phase(), PUSH_NONE);
+		CHECK(!asked.Animating());
+		CHECK(!asked.HideTurn());
+		// With the button still down after it (Down let go again): the game is asked anew, and
+		// a foot that is in its stroke already is not this push's foot
+		PushRun again;
+		double speed = 100.0;
+		for (int k = 0; k <= 48; k++) {
+			anim.time = (float)(k * frame60);
+			if (k == 20) again.Reset();
+			const float add = again.Step(f60, (float)speed, true, 100, anim, foot);
+			if (k >= 20) {
+				CHECK(add == 0.0f);
+				CHECK_EQ(again.Phase(), PUSH_ASKED);
+			}
+			speed += add;
+		}
+	}
+
+	g_case = "rolling: frames that are no frames";
+	{
+		PushRun run;
+		PushAnim idle = { false, false, 1, 0.0f, 0.0f };
+		CHECK(run.Step(0.0f, 100.0f, true, 100, idle, foot) == 0.0f);
+		CHECK_EQ(run.Phase(), PUSH_NONE);
+		CHECK(run.Step(-1.0f, 100.0f, true, 100, idle, foot) == 0.0f);
+		CHECK_EQ(run.Phase(), PUSH_NONE);
+		CHECK(run.Step(nan, 100.0f, true, 100, idle, foot) == 0.0f);
+		CHECK_EQ(run.Phase(), PUSH_NONE);
+		// with the push the game's own (0) nothing is asked either
+		CHECK(run.Step(f60, 100.0f, true, 0, idle, foot) == 0.0f);
+		CHECK_EQ(run.Phase(), PUSH_NONE);
+		CHECK(run.Step(f60, 100.0f, true, -5, idle, foot) == 0.0f);
+		CHECK_EQ(run.Phase(), PUSH_NONE);
+		// the press is not lost over it, and what the animation does is seen
+		PushAnim ended = { true, false, 1, 0.8f, 0.8f };
+		run.Step(0.0f, 100.0f, true, 100, ended, foot);
+		CHECK(run.AnimCurrent());
+		CHECK(run.Step(f60, 100.0f, true, 100, idle, foot) == 0.0f);
+		CHECK_EQ(run.Phase(), PUSH_ASKED);
+		CHECK(!run.AnimCurrent());
+		// a frame that took a second counts as a tenth: a tap gives up after eight of them, not after one
+		PushRun slow;
+		slow.Step(f60, 100.0f, true, 100, idle, foot);
+		for (int k = 0; k < 7; k++) {
+			slow.Step(1.0f, 100.0f, false, 100, idle, foot);
+			CHECK_EQ(slow.Phase(), PUSH_ASKED);
+		}
+		slow.Step(1.0f, 100.0f, false, 100, idle, foot);
+		CHECK_EQ(slow.Phase(), PUSH_NONE);
+		// and in the stroke it adds what six of Skate's ticks may, no more
+		PushRun hitch;
+		PushAnim anim = { true, true, 2, 0.0f, 0.8f };
+		for (int k = 0; k < 14; k++) {
+			anim.time = (float)(k * frame60);
+			CHECK(hitch.Step(f60, 0.0f, true, 100, anim, foot) == 0.0f);
+		}
+		anim.time = 0.7f;
+		const float add = hitch.Step(1.0f, 0.0f, true, 100, anim, foot);
+		CHECK(add > 0.0f);
+		CHECK(add <= 6.0f * 0.6f * 80.0f + 0.01f);
+		CHECK(add > 5.9f * 0.6f * 80.0f);
+		CHECK_EQ(hitch.Phase(), PUSH_RECOVER);
+	}
+
+	g_case = "rolling: the game's other scripts that play the push";
+	{
+		// The loop of a skater who rides nollie, and the crouch: neither waits for the
+		// animation, and both leave it standing at its end until they have something else to
+		// play. With the button down the pushes follow each other all the same.
+		const Press hold[] = { { 0.0, 30.0 } };
+		const int scripts[] = { SCRIPT_NOLLIE, SCRIPT_CROUCH };
+		for (int i = 0; i < 2; i++) {
+			Game g = kGame;
+			g.script = scripts[i];
+			const PushLog log = runPush(60.0, 12.0, 0.0, hold, 1, 100, foot, 0, g);
+			CHECK_EQ(log.pushes, 3);
+			CHECK_EQ(log.plays, 3);
+			CHECK(near(log.speed, 680.0, 0.01));
+			CHECK(near(log.took[1] - log.took[0], 0.8 + frame60, 1e-6));
+			// and taps
+			const Press taps[] = { { 0.0, 0.05 }, { 0.4, 0.45 }, { 2.5, 2.55 } };
+			const PushLog tapped = runPush(60.0, 5.0, 0.0, taps, 3, 100, foot, 0, g);
+			CHECK_EQ(tapped.pushes, 3);
+			CHECK_EQ(tapped.plays, 3);
+			CHECK(near(tapped.took[2], 2.5 + frame60, 1e-6));
+		}
+	}
+}
+
+// The pushes of a game whose push animation the mod does not get to see: the game's scripts are
+// told to play the push, and what comes back is "he is in no push animation". From some frame on
+// it is seen after all (never, if that is less than 0).
+struct BlindLog {
+	double speed;
+	int pushes;
+	int took;               // the times the clock took over
+	double tookAt;          // when it first did
+	double firstAdd;        // when speed first came
+	double starts[8];       // when each push by the clock started adding
+	double told[8];         // and when the game had been told to play it
+	int clockPushes;
+	int seenPushes;
+	bool blindAtEnd;
+};
+
+static BlindLog runBlind(double seconds, double seenFrom, bool held, const PushProfile& profile) {
+	const double dt = 1.0 / 60.0;
+	PushRun run;
+	PushClock clock;
+	BlindLog log;
+	memset(&log, 0, sizeof(log));
+	log.tookAt = -1.0;
+	log.firstAdd = -1.0;
+	double speed = 0.0;
+	double game = -1.0;         // how far the game's own animation is; less than 0: it plays none
+	uint32_t play = 0;
+	uint32_t serial = run.Serial();
+	uint32_t clockSerial = clock.Serial();
+	double lastTold = -1.0;
+	bool adding = false;
+	const int frames = (int)(seconds * 60.0 + 0.5);
+	for (int frame = 0; frame < frames; frame++) {
+		const double t = frame * dt;
+		// the game's scripts: told to play the push, they play it, and wait for it to end
+		if (game < 0.0 && run.Animating()) {
+			clock.Told();
+			lastTold = t;
+			game = 0.0;
+			play++;
+		}
+		else if (game >= 0.8) {
+			game = -1.0;
+			play++;
+		}
+		// the look at the skater's animation
+		const bool seen = seenFrom >= 0.0 && t >= seenFrom && game >= 0.0;
+		PushAnim anim = { seen, seen, play, (float)(game > 0.0 ? game : 0.0), 0.8f };
+		const bool byClock = clock.Step(seen, (float)dt, anim);
+		CHECK(!(seen && byClock));
+		const float add = run.Step((float)dt, (float)speed, held || t < 0.05, 100, anim, profile);
+		CHECK(add >= 0.0f);
+		if (add > 0.0f) {
+			CHECK(seen || byClock);
+			if (log.firstAdd < 0.0) log.firstAdd = t;
+			if (!adding && byClock && log.clockPushes < 8) {
+				log.starts[log.clockPushes] = t;
+				log.told[log.clockPushes] = lastTold;
+			}
+			adding = true;
+		}
+		speed += add;
+		if (run.Serial() != serial) {
+			serial = run.Serial();
+			log.pushes++;
+			if (byClock) log.clockPushes++; else log.seenPushes++;
+			adding = false;
+		}
+		if (clock.Serial() != clockSerial) {
+			clockSerial = clock.Serial();
+			log.took++;
+			if (log.tookAt < 0.0) log.tookAt = t;
+		}
+		if (game >= 0.0) game += dt;
+	}
+	log.speed = speed;
+	log.blindAtEnd = clock.Blind();
+	return log;
+}
+
+static void testPushClock() {
+	const double frame60 = 1.0 / 60.0;
+	PushProfile foot;
+	SmoothPushProfile(foot, 0.30f, 0.62f);
+
+	g_case = "rolling: a game whose push animation is seen";
+	{
+		// As it should be: the clock never takes over
+		const BlindLog log = runBlind(12.0, 0.0, true, foot);
+		CHECK_EQ(log.took, 0);
+		CHECK_EQ(log.pushes, 3);
+		CHECK_EQ(log.seenPushes, 3);
+		CHECK_EQ(log.clockPushes, 0);
+		CHECK(near(log.speed, 680.0, 0.01));
+		CHECK(!log.blindAtEnd);
+		CHECK_EQ(kPushClockAfter, 3);
+		CHECK(near(kPushClockLength, 0.8, 1e-6));
+	}
+
+	g_case = "rolling: a game whose push animation is not seen";
+	{
+		// The game is told to play the push, plays it, is told again when it is over, and the
+		// look at the skater never shows a push animation. After the third time the pushes go
+		// by the clock: each one from the frame the game is told, and the speed comes where
+		// the settings say the foot pushes. Two animations' worth of time is lost, no more.
+		const BlindLog log = runBlind(12.0, -1.0, true, foot);
+		CHECK_EQ(log.took, 1);
+		CHECK(log.blindAtEnd);
+		CHECK(log.tookAt > 1.6 && log.tookAt < 1.8);
+		CHECK(log.firstAdd > 2.4 && log.firstAdd < 2.9);
+		CHECK_EQ(log.pushes, 3);
+		CHECK_EQ(log.clockPushes, 3);
+		CHECK(near(log.speed, 680.0, 0.01));
+		for (int i = 0; i < 3; i++) {
+			CHECK(near(log.starts[i] - log.told[i], 0.30 * 0.8, 2.0 * frame60));
+		}
+		// one push for every 0.8 s by the clock and the frames around it, as with the animation
+		CHECK(near(log.starts[1] - log.starts[0], 0.8 + 3.0 * frame60, 2.0 * frame60));
+		// one tap is not enough to tell: it is lost, and the clock does not take over for it
+		const BlindLog tap = runBlind(5.0, -1.0, false, foot);
+		CHECK_EQ(tap.took, 0);
+		CHECK_EQ(tap.pushes, 0);
+		CHECK(tap.speed == 0.0);
+	}
+
+	g_case = "rolling: a push animation that is seen after all";
+	{
+		// From the fourth second on the look at the skater shows the animation: the clock
+		// steps back at once and the pushes are the animation's again
+		const BlindLog log = runBlind(12.0, 4.0, true, foot);
+		CHECK_EQ(log.took, 1);
+		CHECK(!log.blindAtEnd);
+		CHECK(log.clockPushes >= 1);
+		CHECK(log.seenPushes >= 1);
+		CHECK(near(log.speed, 680.0, 0.01));
+	}
+
+	g_case = "rolling: the clock by itself";
+	{
+		PushClock clock;
+		PushAnim anim = { false, false, 7, 0.0f, 0.0f };
+		CHECK(!clock.Blind());
+		CHECK_EQ((int)clock.Serial(), 0);
+		// told twice and nothing seen: not yet
+		for (int k = 0; k < 2; k++) {
+			clock.Told();
+			for (int f = 0; f < 50; f++) {
+				CHECK(!clock.Step(false, (float)frame60, anim));
+				CHECK(!clock.Blind());
+			}
+		}
+		CHECK(!anim.current);
+		CHECK_EQ((int)anim.play, 7);
+		// the third time: it takes over, and the next time the game is told a push starts
+		clock.Told();
+		CHECK(!clock.Step(false, (float)frame60, anim));
+		CHECK(clock.Blind());
+		CHECK_EQ((int)clock.Serial(), 1);
+		CHECK(!clock.Step(false, (float)frame60, anim));
+		clock.Told();
+		uint32_t play = 0;
+		int ran = 0;
+		for (int k = 0; k < 60; k++) {
+			PushAnim now = { false, false, 7, 0.0f, 0.0f };
+			CHECK(clock.Step(false, (float)frame60, now));
+			CHECK(now.current);
+			CHECK(near(now.length, 0.8, 1e-6));
+			if (k == 0) play = now.play;
+			CHECK_EQ((int)now.play, (int)play);
+			CHECK(now.play > 0x80000000u);      // far from the numbers of the game's animations
+			if (!now.running) {
+				CHECK(near(now.time, 0.8, 1e-6));
+				break;
+			}
+			CHECK(near(now.time, k * frame60, 1e-4));
+			ran++;
+			if (k == 20) clock.Told();      // told again while one is under way: it is the same push
+		}
+		CHECK(ran == 48 || ran == 49);
+		// it has stood at its end for a frame: now there is none, until the game is told again
+		CHECK(!clock.Step(false, (float)frame60, anim));
+		CHECK(!anim.current);
+		clock.Told();
+		PushAnim next = { false, false, 7, 0.0f, 0.0f };
+		CHECK(clock.Step(false, (float)frame60, next));
+		CHECK(next.play != play);
+		CHECK(next.time == 0.0f);
+		// a frame that is no frame does not move it, a long one moves it a tenth of a second
+		CHECK(clock.Step(false, 0.0f, next));
+		CHECK(near(next.time, frame60, 1e-5));
+		CHECK(clock.Step(false, -1.0f, next));
+		CHECK(near(next.time, frame60, 1e-5));
+		CHECK(clock.Step(false, nanf(""), next));
+		CHECK(near(next.time, frame60, 1e-5));
+		CHECK(clock.Step(false, 5.0f, next));
+		CHECK(near(next.time, frame60, 1e-5));
+		CHECK(clock.Step(false, (float)frame60, next));
+		CHECK(near(next.time, frame60 + 0.1, 1e-5));
+		// a push animation is seen: the clock is not needed, and what is handed in stays as it is
+		PushAnim real = { true, true, 9, 0.3f, 0.7f };
+		CHECK(!clock.Step(true, (float)frame60, real));
+		CHECK(!clock.Blind());
+		CHECK_EQ((int)real.play, 9);
+		CHECK(near(real.time, 0.3, 1e-6));
+		CHECK_EQ((int)clock.Serial(), 1);
+		// and it starts counting from nothing again
+		for (int k = 0; k < 2; k++) clock.Told();
+		CHECK(!clock.Step(false, (float)frame60, anim));
+		CHECK(!clock.Blind());
+		// seeing one in between starts the count over
+		CHECK(!clock.Step(true, (float)frame60, real));
+		for (int k = 0; k < 2; k++) clock.Told();
+		CHECK(!clock.Step(false, (float)frame60, anim));
+		CHECK(!clock.Blind());
+		clock.Told();
+		// it takes over again, and the push it was in the middle of last time is not taken up again
+		PushAnim none = { false, false, 7, 0.0f, 0.0f };
+		CHECK(!clock.Step(false, (float)frame60, none));
+		CHECK(clock.Blind());
+		CHECK_EQ((int)clock.Serial(), 2);
+		CHECK(!clock.Step(false, (float)frame60, none));
+		CHECK(!none.current);
+		// Reset: back to seeing
+		clock.Reset();
+		CHECK(!clock.Blind());
+		clock.Told();
+		CHECK(!clock.Step(false, (float)frame60, anim));
+		CHECK_EQ((int)clock.Serial(), 2);
+	}
+}
+
+static void testFeet() {
+	const float nan = nanf("");
+
+	g_case = "feet: a push animation watched";
+	{
+		// The foot leaves the board at 12% of the animation, is on the ground at 30%, travels
+		// 28 units back along it until 60%, leaves it at 66% and is on the board again at 88%
+		int looks = 0;
+		const FootResult r = watchClip(kClip, 60.0, 0.0, 1.0, &looks);
+		CHECK_EQ(r.why, FOOT_OK);
+		CHECK_EQ(looks, 48);
+		CHECK_EQ(r.samples, 48);
+		CHECK(!r.left);
+		CHECK(near(r.drop, 4.5, 0.1));
+		CHECK(near(r.sweep, 28.0, 0.2));
+		// it is down from a little before it has landed until a little after it has lifted
+		CHECK(r.lowFrom > 0.20 && r.lowFrom < 0.26);
+		CHECK(r.lowTo > 0.66 && r.lowTo < 0.71);
+		// its stroke is the time it travels, less the first and the last fiftieth of the way
+		CHECK(near(r.profile.down, 0.3125, 1e-4));
+		CHECK(near(r.profile.up, 0.5833, 1e-4));
+		// and how it travels: gently off, gently in, half way at half time
+		CHECK(r.profile.done[0] == 0.0f);
+		CHECK(r.profile.done[PUSH_KNOTS - 1] == 1.0f);
+		for (int k = 0; k + 1 < PUSH_KNOTS; k++) CHECK(r.profile.done[k + 1] >= r.profile.done[k]);
+		CHECK(near(PushDone(r.profile, 0.45f), 0.5, 0.02));
+		for (int i = 30; i <= 60; i++) {
+			CHECK(near(PushDone(r.profile, i * 0.01f), smooth((i * 0.01 - 0.30) / 0.30), 0.03));
+		}
+		// A push that goes by it: on every frame the board has as much of the push as the
+		// foot has of its way
+		PushRun run;
+		PushAnim anim = { true, true, 1, 0.0f, 0.8f };
+		double speed = 100.0;
+		for (int k = 0; k <= 48; k++) {
+			anim.time = (float)(k / 60.0);
+			speed += run.Step(1.0f / 60.0f, (float)speed, true, 100, anim, r.profile);
+			const double share = k / 60.0 / 0.8;
+			CHECK(near((speed - 100.0) / 320.0, smooth((share - 0.30) / 0.30), 0.03));
+		}
+		CHECK(near(speed, 420.0, 0.01));
+	}
+
+	g_case = "feet: at any frame rate";
+	{
+		const double rates[] = { 25.0, 30.0, 50.0, 60.0, 90.0, 144.0, 240.0, 500.0 };
+		for (int i = 0; i < 8; i++) {
+			int looks = 0;
+			const FootResult r = watchClip(kClip, rates[i], 0.0, 1.0, &looks);
+			const double step = 1.0 / rates[i] / 0.8;
+			CHECK_EQ(r.why, FOOT_OK);
+			// one look is kept for every 128th of the animation
+			CHECK(r.samples <= 128);
+			if (looks <= 100) CHECK_EQ(r.samples, looks);
+			if (looks > 200) CHECK(r.samples > 120);
+			CHECK(!r.left);
+			CHECK(near(r.drop, 4.5, 0.1));
+			CHECK(near(r.sweep, 28.0, 0.3));
+			CHECK(near(r.profile.down, 0.325, 0.006 + step));
+			CHECK(near(r.profile.up, 0.575, 0.006 + step));
+			CHECK(near(PushDone(r.profile, 0.45f), 0.5, 0.03));
+		}
+	}
+
+	g_case = "feet: whichever foot, whichever way";
+	{
+		const FootResult right = watchClip(kClip, 60.0, 0.0, 1.0, 0);
+		Clip c = kClip;
+		c.leftPushes = true;
+		FootResult r = watchClip(c, 60.0, 0.0, 1.0, 0);
+		CHECK_EQ(r.why, FOOT_OK);
+		CHECK(r.left);
+		CHECK(near(r.drop, right.drop, 1e-4));
+		CHECK(near(r.sweep, right.sweep, 1e-4));
+		CHECK(near(r.profile.down, right.profile.down, 1e-6));
+		CHECK(near(r.profile.up, right.profile.up, 1e-6));
+		for (int k = 0; k < PUSH_KNOTS; k++) CHECK(near(r.profile.done[k], right.profile.done[k], 1e-5));
+		// the board along the other axis
+		c = kClip;
+		c.sideways = true;
+		r = watchClip(c, 60.0, 0.0, 1.0, 0);
+		CHECK_EQ(r.why, FOOT_OK);
+		CHECK(!r.left);
+		CHECK(near(r.sweep, right.sweep, 1e-4));
+		CHECK(near(r.profile.down, right.profile.down, 1e-6));
+		CHECK(near(r.profile.up, right.profile.up, 1e-6));
+		for (int k = 0; k < PUSH_KNOTS; k++) CHECK(near(r.profile.done[k], right.profile.done[k], 1e-5));
+		// a stroke that goes forward instead of back
+		c = kClip;
+		c.ahead = -14.0;
+		c.behind = -14.0;
+		r = watchClip(c, 60.0, 0.0, 1.0, 0);
+		CHECK_EQ(r.why, FOOT_OK);
+		CHECK(near(r.sweep, right.sweep, 1e-3));
+		CHECK(near(r.profile.down, right.profile.down, 1e-6));
+		CHECK(near(r.profile.up, right.profile.up, 1e-6));
+		// numbers that jitter by a twentieth of a unit
+		c = kClip;
+		c.noise = 0.05;
+		r = watchClip(c, 60.0, 0.0, 1.0, 0);
+		CHECK_EQ(r.why, FOOT_OK);
+		CHECK(near(r.drop, right.drop, 0.15));
+		CHECK(near(r.sweep, right.sweep, 0.3));
+		CHECK(near(r.profile.down, right.profile.down, 0.025));
+		CHECK(near(r.profile.up, right.profile.up, 0.025));
+		for (int k = 0; k + 1 < PUSH_KNOTS; k++) CHECK(r.profile.done[k + 1] >= r.profile.done[k]);
+		CHECK(near(PushDone(r.profile, 0.45f), 0.5, 0.04));
+	}
+
+	g_case = "feet: the stroke is where the foot travels";
+	{
+		// On the ground from 25% to 66%, travelling from 35% to 55%: before and after it stands
+		Clip c = kClip;
+		c.down = 0.25;
+		c.go = 0.35;
+		c.stop = 0.55;
+		FootResult r = watchClip(c, 60.0, 0.0, 1.0, 0);
+		CHECK_EQ(r.why, FOOT_OK);
+		CHECK(r.lowFrom < 0.23);
+		CHECK(r.lowTo > 0.66);
+		CHECK(near(r.profile.down, 0.35 + 0.017, 0.022));
+		CHECK(near(r.profile.up, 0.55 - 0.017, 0.022));
+		CHECK(r.profile.down >= 0.35 - 1e-6);
+		CHECK(r.profile.up <= 0.55 + 1e-6);
+		CHECK(near(r.sweep, 28.0, 0.2));
+		// It comes down 8 units behind where its stroke starts and reaches ahead along the
+		// ground first, until 35%: the stroke is the way back, all 28 units of it
+		c = kClip;
+		c.down = 0.25;
+		c.go = 0.35;
+		c.start = 8.0;
+		r = watchClip(c, 60.0, 0.0, 1.0, 0);
+		CHECK_EQ(r.why, FOOT_OK);
+		CHECK(near(r.sweep, 28.0, 0.2));
+		CHECK(near(r.profile.down, 0.35 + 0.021, 0.022));
+		CHECK(r.profile.down >= 0.35 - 1e-6);
+		CHECK(near(r.profile.up, 0.60 - 0.021, 0.022));
+		CHECK(r.profile.done[0] == 0.0f);
+		CHECK(near(PushDone(r.profile, 0.475f), 0.5, 0.03));
+	}
+
+	g_case = "feet: a foot that goes back on itself";
+	{
+		// Half way through its stroke the foot comes 2 units back before it goes on. What it
+		// has behind it does not get less for that: it stands at a half until the foot has
+		// made up the 2 units.
+		FootWatch w;
+		for (int k = 0; k < 48; k++) {
+			const double share = k / 48.0;
+			float left[3], right[3];
+			clipFeet(kClip, share, left, right, 0);
+			const double u = (share - 0.30) / 0.30;
+			if (u > 0.0 && u < 1.0) {
+				const double gone = u < 0.4 ? 14.0 * u / 0.4 : (u < 0.55 ? 14.0 - 2.0 * (u - 0.4) / 0.15 : 12.0 + 16.0 * (u - 0.55) / 0.45);
+				right[2] = (float)(5.0 - gone);
+			}
+			w.Sample((float)share, left, right);
+		}
+		FootResult r;
+		w.End(0.8f, r);
+		CHECK_EQ(r.why, FOOT_OK);
+		CHECK(near(r.sweep, 28.0, 0.2));
+		for (int k = 0; k + 1 < PUSH_KNOTS; k++) CHECK(r.profile.done[k + 1] >= r.profile.done[k]);
+		const float standing = PushDone(r.profile, 0.30f + 0.30f * 0.50f);
+		CHECK(near(standing, 0.5, 0.03));
+		CHECK(near(PushDone(r.profile, 0.30f + 0.30f * 0.47f), standing, 0.005));
+		CHECK(near(PushDone(r.profile, 0.30f + 0.30f * 0.55f), standing, 0.005));
+		CHECK(PushDone(r.profile, 0.30f + 0.30f * 0.30f) < standing - 0.1f);
+		CHECK(PushDone(r.profile, 0.30f + 0.30f * 0.75f) > standing + 0.1f);
+	}
+
+	g_case = "feet: what the game shows is what is watched";
+	{
+		// The game blends into the animation over 0.3 s. For that long the skater's foot is
+		// not where the animation has it: it comes down a little later and not as far ahead.
+		// That is the foot the player sees, and the one that pushes.
+		const FootResult plain = watchClip(kClip, 60.0, 0.0, 1.0, 0);
+		Clip c = kClip;
+		c.blend = 0.3;
+		const FootResult r = watchClip(c, 60.0, 0.0, 1.0, 0);
+		CHECK_EQ(r.why, FOOT_OK);
+		CHECK(r.profile.down > plain.profile.down);
+		CHECK(r.profile.down < 0.375);
+		CHECK(near(r.profile.up, plain.profile.up, 1e-6));
+		CHECK(r.sweep < plain.sweep - 1.0);
+		CHECK(r.sweep > 24.0);
+		CHECK(near(r.drop, 4.5, 0.1));
+	}
+
+	g_case = "feet: animations that say nothing";
+	{
+		// both feet stay on the board
+		Clip c = kClip;
+		c.off = 2.0;
+		FootResult r = watchClip(c, 60.0, 0.0, 1.0, 0);
+		CHECK_EQ(r.why, FOOT_NO_DROP);
+		CHECK(r.drop < 0.5);
+		// a foot that only dips: a unit below the other is no foot on the ground
+		// (a board is 4 to 5 units high)
+		FootWatch dip;
+		for (int k = 0; k < 48; k++) {
+			const float y = 5.7f - (k >= 15 && k < 30 ? 1.0f : 0.0f);
+			const float left[3] = { -3.0f, 5.7f, 9.0f };
+			const float right[3] = { 3.0f, y, -9.0f + (k >= 15 && k < 30 ? (float)(k - 15) : 0.0f) };
+			dip.Sample((float)(k / 48.0), left, right);
+		}
+		dip.End(0.8f, r);
+		CHECK_EQ(r.why, FOOT_NO_DROP);
+		CHECK(near(r.drop, 1.0, 0.01));
+		// a foot that is put down and lifted again where it was
+		c = kClip;
+		c.ahead = 0.0;
+		c.behind = 0.0;
+		r = watchClip(c, 60.0, 0.0, 1.0, 0);
+		CHECK_EQ(r.why, FOOT_NO_SWEEP);
+		CHECK(near(r.drop, 4.5, 0.1));
+		CHECK(r.sweep < 4.0);
+		// one that travels 3 units down there, and one that travels 5
+		c.ahead = 1.5;
+		c.behind = 1.5;
+		r = watchClip(c, 60.0, 0.0, 1.0, 0);
+		CHECK_EQ(r.why, FOOT_NO_SWEEP);
+		c.ahead = 2.5;
+		c.behind = 2.5;
+		r = watchClip(c, 60.0, 0.0, 1.0, 0);
+		CHECK_EQ(r.why, FOOT_OK);
+		CHECK(near(r.sweep, 5.0, 0.3));
+		// too few looks
+		int looks = 0;
+		r = watchClip(kClip, 10.0, 0.0, 1.0, &looks);
+		CHECK_EQ(looks, 8);
+		CHECK_EQ(r.why, FOOT_FEW);
+		CHECK_EQ(r.samples, 8);
+		r = watchClip(kClip, 12.5, 0.0, 1.0, &looks);
+		CHECK_EQ(looks, 10);
+		CHECK_EQ(r.why, FOOT_OK);
+		// not seen from the start, not seen to the end, a hole in the middle
+		r = watchClip(kClip, 60.0, 0.22, 1.0, 0);
+		CHECK_EQ(r.why, FOOT_PART);
+		r = watchClip(kClip, 60.0, 0.18, 1.0, 0);
+		CHECK_EQ(r.why, FOOT_OK);
+		r = watchClip(kClip, 60.0, 0.0, 0.84, 0);
+		CHECK_EQ(r.why, FOOT_PART);
+		r = watchClip(kClip, 60.0, 0.0, 0.86, 0);
+		CHECK_EQ(r.why, FOOT_OK);
+		for (int hole = 0; hole < 2; hole++) {
+			FootWatch w;
+			for (int k = 0; k < 48; k++) {
+				const double share = k / 48.0;
+				if (share > 0.4 && share < (hole ? 0.63 : 0.57)) continue;
+				float left[3], right[3];
+				clipFeet(kClip, share, left, right, 0);
+				w.Sample((float)share, left, right);
+			}
+			w.End(0.8f, r);
+			CHECK_EQ(r.why, hole ? FOOT_PART : FOOT_OK);
+		}
+		// a foot that is at one end of its way on one look and at the other on the next
+		c = kClip;
+		c.go = 0.45;
+		c.stop = 0.4501;
+		r = watchClip(c, 60.0, 0.0, 1.0, 0);
+		CHECK_EQ(r.why, FOOT_SHORT);
+		CHECK(near(r.sweep, 28.0, 0.2));
+		// and one that travels for 6% of an animation of half a second: three hundredths of a second
+		c = kClip;
+		c.length = 0.5;
+		c.go = 0.40;
+		c.stop = 0.46;
+		r = watchClip(c, 240.0, 0.0, 1.0, 0);
+		CHECK_EQ(r.why, FOOT_SHORT);
+		c.length = 1.2;
+		r = watchClip(c, 240.0, 0.0, 1.0, 0);
+		CHECK_EQ(r.why, FOOT_OK);
+		// nothing that was found wanting leaves a foot behind that pushes at once
+		CHECK(near(r.profile.up - r.profile.down, 0.05, 0.012));
+		// Nor is a fortieth of an animation a stroke, however long the animation is said to be
+		c = kClip;
+		c.length = 4.0;
+		c.go = 0.45;
+		c.stop = 0.48;
+		r = watchClip(c, 240.0, 0.0, 1.0, 0);
+		CHECK_EQ(r.why, FOOT_SHORT);
+		c.stop = 0.52;
+		r = watchClip(c, 240.0, 0.0, 1.0, 0);
+		CHECK_EQ(r.why, FOOT_OK);
+		CHECK(r.profile.up - r.profile.down >= 0.04);
+	}
+
+	g_case = "feet: looks that are no looks";
+	{
+		FootWatch w;
+		CHECK_EQ(w.Samples(), 0);
+		const float l[3] = { -3.0f, 5.7f, 9.0f };
+		const float r[3] = { 3.0f, 5.7f, -9.0f };
+		w.Sample(0.5f, l, r);
+		CHECK_EQ(w.Samples(), 1);
+		w.Sample(0.5f, l, r);
+		w.Sample(0.501f, l, r);
+		CHECK_EQ(w.Samples(), 1);       // the same 128th of the animation: one look
+		w.Sample(-0.1f, l, r);
+		w.Sample(1.1f, l, r);
+		w.Sample(nan, l, r);
+		w.Sample(0.6f, 0, r);
+		w.Sample(0.6f, l, 0);
+		const float bad[3] = { 1.0f, nan, 2.0f };
+		const float worse[3] = { 1.0f, 2.0f, HUGE_VALF };
+		w.Sample(0.6f, bad, r);
+		w.Sample(0.6f, l, bad);
+		w.Sample(0.6f, worse, r);
+		w.Sample(0.6f, l, worse);
+		CHECK_EQ(w.Samples(), 1);
+		w.Sample(1.0f, l, r);           // the very end is a look, and so is the very start
+		w.Sample(0.0f, l, r);
+		CHECK_EQ(w.Samples(), 3);
+		FootResult out;
+		w.End(0.8f, out);
+		CHECK_EQ(out.why, FOOT_FEW);
+		CHECK_EQ(out.samples, 3);
+		w.Begin();
+		CHECK_EQ(w.Samples(), 0);
+		w.End(0.8f, out);
+		CHECK_EQ(out.why, FOOT_FEW);
+		CHECK_EQ(out.samples, 0);
+		// Of two looks in the same 128th the later one counts: an animation whose feet never
+		// leave the board, and then the real one over it
+		Clip still = kClip;
+		still.off = 2.0;
+		FootWatch twice;
+		for (int pass = 0; pass < 2; pass++) {
+			for (int k = 0; k < 48; k++) {
+				float left[3], right[3];
+				clipFeet(pass ? kClip : still, k / 48.0, left, right, 0);
+				twice.Sample((float)(k / 48.0), left, right);
+			}
+		}
+		twice.End(0.8f, out);
+		const FootResult plain = watchClip(kClip, 60.0, 0.0, 1.0, 0);
+		CHECK_EQ(out.why, FOOT_OK);
+		CHECK(near(out.profile.down, plain.profile.down, 1e-6));
+		CHECK(near(out.sweep, plain.sweep, 1e-5));
+		// and after Begin nothing of the last animation is left
+		twice.Begin();
+		for (int k = 0; k < 48; k += 4) {
+			float left[3], right[3];
+			clipFeet(kClip, k / 48.0, left, right, 0);
+			twice.Sample((float)(k / 48.0), left, right);
+		}
+		CHECK_EQ(twice.Samples(), 12);
+	}
+
+	g_case = "feet: watched, then pushed with";
+	{
+		// The whole of it: the game blends into its animation, the feet are watched through
+		// one play, and the next push goes by what they did. The speed comes while the foot
+		// the player sees travels.
+		Clip c = kClip;
+		c.blend = 0.3;
+		const FootResult r = watchClip(c, 60.0, 0.0, 1.0, 0);
+		const Press once[] = { { 0.0, 0.5 } };
+		const PushLog log = runPush(60.0, 3.0, 100.0, once, 1, 100, r.profile, 0, kGame);
+		CHECK_EQ(log.pushes, 1);
+		CHECK(near(log.added[0], 320.0, 0.05));
+		CHECK(log.firstShare[0] > r.profile.down && log.firstShare[0] <= r.profile.down + 1.0 / 48.0 + 1e-6);
+		CHECK(log.lastShare[0] >= r.profile.up - 1e-6 && log.lastShare[0] < r.profile.up + 1.0 / 48.0);
+		CHECK(log.worst < 0.01);
 	}
 }
 
@@ -1943,6 +3436,8 @@ int main(int argc, char** argv) {
 	testAgainstTheScripts(scriptDir);
 	testJumps();
 	testPushing();
+	testPushClock();
+	testFeet();
 	testCoasting();
 	testSteering();
 	testSpinning();

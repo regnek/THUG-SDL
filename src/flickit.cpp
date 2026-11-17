@@ -104,9 +104,9 @@ namespace Flickit {
 		s.push = 100;
 		s.pushOnOllie = 1;
 		s.pushOverTurn = 1;
-		s.pushDelay = 300;
-		s.pushContact = 250;
-		s.pushCycle = 900;
+		s.pushMeasure = 1;
+		s.pushFootDown = 30;
+		s.pushFootUp = 62;
 		s.coast = 100;
 		s.steering = 100;
 
@@ -162,9 +162,9 @@ namespace Flickit {
 		s.push = s.push <= 0 ? 0 : Clamp(s.push, kRollLeastPercent, kRollMostPercent);
 		s.pushOnOllie = s.pushOnOllie ? 1 : 0;
 		s.pushOverTurn = s.pushOverTurn ? 1 : 0;
-		s.pushDelay = Clamp(s.pushDelay, 0, 1000);
-		s.pushContact = Clamp(s.pushContact, 50, 1000);
-		s.pushCycle = Clamp(s.pushCycle, 200, 3000);
+		s.pushMeasure = s.pushMeasure ? 1 : 0;
+		s.pushFootDown = Clamp(s.pushFootDown, 0, 90);
+		s.pushFootUp = Clamp(s.pushFootUp, s.pushFootDown + 5, 100);
 		s.coast = Clamp(s.coast, 0, 1000);
 		s.steering = s.steering <= 0 ? 0 : Clamp(s.steering, kRollLeastPercent, kRollMostPercent);
 
@@ -1403,14 +1403,34 @@ namespace Flickit {
 	static const float kPivotSpeed = 100.0f;
 	// A frame longer than this is a hitch, not a frame
 	static const float kLongFrame = 0.1f;
-	// Once the game has said it started the animation of a push, it is asked for it this much longer (s)
-	static const float kAnimateLeast = 0.1f;
-	// How long a push waits for the game to take it (s), at the least
-	static const float kAskWait = 0.1f;
-	// For this long (s) after the game has started the animation of a push its scripts are taken
-	// to be busy with it: they look for the next push when the animation is over. A push that
-	// is wanted meanwhile waits for them.
-	static const float kBusyMost = 1.5f;
+	// A tap gives up when the game has shown no push animation for it in this long (s)
+	static const float kWishMost = 0.75f;
+	// While a push asks for its animation the game's scripts are kept from seeing Left and Right
+	// for this long (s) out of every ...
+	static const float kHideFor = 0.2f;
+	static const float kHidePeriod = 0.8f;
+	// An animation that was within this many frames of its end when it was last seen ran out
+	static const float kRanOutSteps = 1.5f;
+	// A foot starts to push in the first 95 hundredths of its animation, and pushes for 2 at least
+	static const float kPushDownMost = 0.95f;
+	static const float kPushSpanLeast = 0.02f;
+	// The feet in a push animation. At least this many looks at them, ...
+	static const int kFootSamplesLeast = 10;
+	// ... the first this early in the animation, the last this late, no two further apart than this
+	static const float kFootFirstBy = 0.2f;
+	static const float kFootLastFrom = 0.85f;
+	static const float kFootGapMost = 0.2f;
+	// The foot that pushes gets at least this far below where the other stands (the game's units; a board is 4 to 5 high)
+	static const float kFootDropLeast = 1.5f;
+	// It is down while it is within this share of that drop from its lowest point
+	static const float kFootLowShare = 0.4f;
+	// Down there it travels at least this far (units)
+	static const float kFootSweepLeast = 4.0f;
+	// Its stroke starts when it has left the first fiftieth of that way behind, and ends when the last is ahead
+	static const float kFootEdge = 0.02f;
+	// The stroke takes at least this share of the animation, and this long (s)
+	static const float kFootSpanLeast = 0.04f;
+	static const float kFootSecondsLeast = 0.05f;
 
 	static inline float Clampf(float v, float lo, float hi) {
 		return v < lo ? lo : (v > hi ? hi : v);
@@ -1443,6 +1463,42 @@ namespace Flickit {
 		return loss >= speed ? 0.0f : speed - loss;
 	}
 
+	void SmoothPushProfile(PushProfile& out, float down, float up) {
+		if (!(down > 0.0f)) {
+			down = 0.0f;
+		}
+		if (down > kPushDownMost) {
+			down = kPushDownMost;
+		}
+		if (!(up > down + kPushSpanLeast)) {
+			up = down + kPushSpanLeast;
+		}
+		if (up > 1.0f) {
+			up = 1.0f;
+		}
+		out.down = down;
+		out.up = up;
+		for (int k = 0; k < PUSH_KNOTS; k++) {
+			const float t = (float)k / (float)(PUSH_KNOTS - 1);
+			out.done[k] = t * t * (3.0f - 2.0f * t);
+		}
+	}
+
+	float PushDone(const PushProfile& profile, float share) {
+		if (!(share > profile.down)) {
+			return 0.0f;
+		}
+		if (!(share < profile.up)) {
+			return 1.0f;
+		}
+		const float at = (share - profile.down) / (profile.up - profile.down) * (float)(PUSH_KNOTS - 1);
+		int i = (int)at;
+		if (i > PUSH_KNOTS - 2) {
+			i = PUSH_KNOTS - 2;
+		}
+		return profile.done[i] + (profile.done[i + 1] - profile.done[i]) * (at - (float)i);
+	}
+
 	PushRun::PushRun() {
 		m_held = false;
 		m_hold = 0.0f;
@@ -1451,15 +1507,20 @@ namespace Flickit {
 		m_asked = 0.0f;
 		m_added = 0.0f;
 		m_from = 0.0f;
+		m_play = 0;
+		m_seenPlay = 0;
+		m_askPlay = 0;
+		m_animCurrent = false;
+		m_animRunning = false;
+		SmoothPushProfile(m_profile, 0.0f, 1.0f);
 		Reset();
 	}
 
 	void PushRun::Reset() {
 		m_phase = PUSH_NONE;
-		m_time = 0.0f;
-		m_since = 0.0f;
-		m_wait = kAskWait;
-		m_busy = kBusyMost;
+		m_share = 0.0f;
+		m_shareStep = 0.0f;
+		m_askTime = 0.0f;
 		m_asking = false;
 		m_tracking = false;
 		m_target = 0.0f;
@@ -1470,19 +1531,29 @@ namespace Flickit {
 	}
 
 	bool PushRun::Animating() const {
-		// m_since stands at nothing for as long as the push asks
-		return m_phase != PUSH_NONE && m_since < kAnimateLeast;
+		// While a push animation runs the game's scripts are busy with it
+		return m_phase == PUSH_ASKED && !m_animRunning;
 	}
 
-	void PushRun::Taken() {
-		if (m_phase == PUSH_ASKED) {
-			m_phase = PUSH_INTO;
-			m_time = 0.0f;
-			m_busy = 0.0f;
+	bool PushRun::HideTurn() const {
+		return Animating() && std::fmod(m_askTime, kHidePeriod) < kHideFor;
+	}
+
+	// While the foot pushes the board is taken up to the speed the push is for, by as much of
+	// its stroke as the foot has behind it (done, 0 to 1). Whatever else pulls at the board
+	// meanwhile is made up for. But no faster than Skate lets a push come in.
+	float PushRun::Pull(float speed, float dt, float units, float done) {
+		const float want = m_from + (m_target - m_from) * done - speed;
+		const float most = PushStep(speed / units) * (dt / kSkateTick) * units;
+		const float add = want > most ? most : want;
+		if (!(add > 0.0f)) {
+			return 0.0f;
 		}
+		m_added += add;
+		return add;
 	}
 
-	float PushRun::Step(float dt, float speed, bool held, int percent, const PushTiming& timing) {
+	float PushRun::Step(float dt, float speed, bool held, int percent, const PushAnim& anim, const PushProfile& profile) {
 		// The button. A press asks for a push; how long it stays down is what makes the push strong.
 		const bool pressed = held && !m_held;
 		const bool released = !held && m_held;
@@ -1494,123 +1565,359 @@ namespace Flickit {
 		if (released) {
 			m_tracking = false;
 		}
+		const bool running = anim.current && anim.running && anim.length > 0.0f;
+		m_animCurrent = anim.current;
+		m_animRunning = running;
+		const uint32_t seen = m_seenPlay;   // the play of an animation the frame before was in
+		m_seenPlay = anim.play;
 		if (percent <= 0 || !(dt > 0.0f)) {
 			return 0.0f;
 		}
 		if (dt > kLongFrame) {
 			dt = kLongFrame;
 		}
+		if (held) {
+			m_hold += dt;
+		}
+		if (m_tracking) {
+			m_pushHold = m_hold;
+		}
 
 		const float units = kUnitsPerMetre * (float)percent * 0.01f;   // the game's units for one of Skate's m/s
 		const float top = kPushTopSpeed * units;
 		const float last = kPushLastSpeed * units;
-		const float delay = timing.delay > 0.0f ? timing.delay : 0.0f;
-		const float contact = timing.contact > 0.0f ? timing.contact : 0.0f;
-		const float period = timing.cycle > delay + contact ? timing.cycle : delay + contact;
+		// How far into its animation the skater is. One that has stopped at its end is at its end.
+		const float share = running ? Clampf(anim.time / anim.length, 0.0f, 1.0f) : 1.0f;
 
 		float add = 0.0f;
-		float left = dt;
-		while (left > 0.0f) {
-			if (m_phase == PUSH_NONE) {
-				if (!(m_asking || held)) {
-					break;
+		if (m_phase >= PUSH_INTO && (!anim.current || anim.play != m_play)) {
+			// The play of the animation this push went with is gone, and the push with it
+			if (m_phase == PUSH_CONTACT) {
+				if (m_share + kRanOutSteps * m_shareStep >= 1.0f) {
+					// It ran to its end between two frames: the foot has finished its stroke
+					add += Pull(speed, dt, units, 1.0f);
 				}
-				if (speed + add >= last) {
-					// As fast as pushing gets. A press is not kept for later; a button that stays
-					// down pushes again when the board has slowed.
-					m_asking = false;
-					break;
-				}
+				m_serial++;
+			}
+			m_tracking = false;
+			m_phase = PUSH_NONE;
+		}
+
+		if (m_phase == PUSH_NONE && (m_asking || held)) {
+			m_asking = false;
+			// From the speed pushing gets to on, no push starts. A press is not kept for later;
+			// a button that stays down pushes again when the board has slowed.
+			if (speed + add < last) {
 				m_phase = PUSH_ASKED;
-				m_since = 0.0f;
-				// It waits for the game's scripts for as long as they may be busy with the last push
-				m_wait = kBusyMost - m_busy > kAskWait ? kBusyMost - m_busy : kAskWait;
+				m_askTime = 0.0f;
+				m_askPlay = seen;
 				// The press this push comes from: the one that is down, or a tap that is over
 				m_tracking = held;
 				m_pushHold = m_hold;
-				m_asking = false;
 			}
+		}
 
-			const float span = m_phase == PUSH_ASKED ? m_wait
-				: (m_phase == PUSH_INTO ? delay : (m_phase == PUSH_CONTACT ? contact : period - delay - contact));
-			float step = span - m_time;
-			if (step > left) {
-				step = left;
-			}
-			if (step < 0.0f) {
-				step = 0.0f;
-			}
-
-			if (m_phase == PUSH_CONTACT) {
-				// While the foot is on the ground the board is taken up to the speed the push is
-				// for: what is still missing is spread over the time that is left, so whatever
-				// else pulls at the board meanwhile is made up for. But no faster than Skate lets
-				// a push come in.
-				const float missing = m_target - (speed + add);
-				const float remains = contact - m_time;
-				float want = step >= remains ? missing : missing * step / remains;
-				const float most = PushStep((speed + add) / units) * (step / kSkateTick) * units;
-				if (want > most) {
-					want = most;
-				}
-				if (want > 0.0f) {
-					add += want;
-					m_added += want;
-				}
-			}
-
-			m_time += step;
-			if (m_phase != PUSH_ASKED) {
-				m_since += step;
-			}
-			if (m_busy < kBusyMost) {
-				m_busy += step;
-			}
-			left -= step;
-			if (held) {
-				m_hold += step;
-			}
-			if (m_tracking) {
-				m_pushHold = m_hold;
-			}
-
-			if (m_time >= span - 1.0e-6f) {
-				m_time = 0.0f;
-				if (m_phase == PUSH_ASKED) {
-					// Nobody took it: the push goes ahead without the game's animation
+		if (m_phase == PUSH_ASKED) {
+			if (running && (share < profile.down || anim.play != m_askPlay)) {
+				// The game plays a push animation that it has started since the push was
+				// wanted, or one whose foot is not down yet: that is this push
+				if (speed + add < last) {
 					m_phase = PUSH_INTO;
-				}
-				else if (m_phase == PUSH_INTO) {
-					// The foot is down: how long the button was held is settled now
-					m_tracking = false;
-					m_from = speed + add;
-					m_asked = PushStrength(m_pushHold, m_from / units) * units;
-					// never past the top speed
-					m_target = m_from + m_asked;
-					if (m_target > top) {
-						m_target = top;
-					}
-					m_added = 0.0f;
-					m_phase = PUSH_CONTACT;
-				}
-				else if (m_phase == PUSH_CONTACT) {
-					m_phase = PUSH_RECOVER;
-					m_serial++;
+					m_play = anim.play;
+					m_profile = profile;
+					m_share = share;
+					m_shareStep = 0.0f;
 				}
 				else {
+					m_phase = PUSH_NONE;    // the board has got as fast as pushing gets meanwhile
+				}
+			}
+			else if (!running) {
+				// The game could show the push now. A tap does not wait for that for long.
+				m_askTime += dt;
+				if (!held && m_askTime > kWishMost) {
 					m_phase = PUSH_NONE;
 				}
 			}
 		}
-		if (m_phase == PUSH_NONE && left > 0.0f) {
-			if (held) {
-				m_hold += left;
+
+		if (m_phase >= PUSH_INTO) {
+			if (m_phase == PUSH_INTO && share >= m_profile.down) {
+				// The foot starts to push
+				m_from = speed + add;
+				m_added = 0.0f;
+				m_phase = PUSH_CONTACT;
 			}
-			if (m_busy < kBusyMost) {
-				m_busy += left;
+			if (m_phase == PUSH_CONTACT) {
+				// How long the button has been down says how strong the push is. A button
+				// that is still down counts for more as the foot pushes on, until it is let
+				// go or the foot has pushed.
+				m_asked = PushStrength(m_pushHold, m_from / units) * units;
+				// never past the top speed
+				m_target = m_from + m_asked;
+				if (m_target > top) {
+					m_target = top;
+				}
+				add += Pull(speed + add, dt, units, PushDone(m_profile, share));
+				if (share >= m_profile.up) {
+					m_tracking = false;
+					m_phase = PUSH_RECOVER;
+					m_serial++;
+				}
 			}
+			if (share > m_share) {
+				m_shareStep = share - m_share;
+			}
+			m_share = share;
 		}
 		return add;
+	}
+
+	const int kPushClockAfter = 3;
+	const float kPushClockLength = 0.8f;
+
+	PushClock::PushClock() {
+		m_play = 0x80000000u;
+		m_serial = 0;
+		Reset();
+	}
+
+	void PushClock::Reset() {
+		m_told = 0;
+		m_blind = false;
+		m_running = false;
+		m_time = 0.0f;
+	}
+
+	void PushClock::Told() {
+		if (m_told < kPushClockAfter) {
+			m_told++;
+		}
+		if (m_blind && !m_running) {
+			// by the clock: this is the moment the push starts
+			m_running = true;
+			m_time = 0.0f;
+			m_play++;
+		}
+	}
+
+	bool PushClock::Step(bool seen, float dt, PushAnim& anim) {
+		if (seen) {
+			// he is in a push animation: what the game plays is seen
+			Reset();
+			return false;
+		}
+		if (!m_blind && m_told >= kPushClockAfter) {
+			m_blind = true;
+			m_serial++;
+		}
+		if (!m_blind || !m_running) {
+			return false;
+		}
+		anim.current = true;
+		anim.running = m_time < kPushClockLength;
+		anim.time = anim.running ? m_time : kPushClockLength;
+		anim.length = kPushClockLength;
+		anim.play = m_play;
+		if (!anim.running) {
+			m_running = false;      // it stands at its end for this one frame
+		}
+		else if (dt > 0.0f) {
+			m_time += dt > kLongFrame ? kLongFrame : dt;
+		}
+		return true;
+	}
+
+	FootWatch::FootWatch() {
+		Begin();
+	}
+
+	void FootWatch::Begin() {
+		for (int b = 0; b < BINS; b++) {
+			m_have[b] = false;
+		}
+	}
+
+	int FootWatch::Samples() const {
+		int n = 0;
+		for (int b = 0; b < BINS; b++) {
+			if (m_have[b]) {
+				n++;
+			}
+		}
+		return n;
+	}
+
+	void FootWatch::Sample(float share, const float* left, const float* right) {
+		if (!left || !right || !(share >= 0.0f) || !(share <= 1.0f) || !Finite3(left) || !Finite3(right)) {
+			return;
+		}
+		// One look is kept for every 128th of the animation: the last one
+		int bin = (int)(share * (float)BINS);
+		if (bin > BINS - 1) {
+			bin = BINS - 1;
+		}
+		m_have[bin] = true;
+		m_share[bin] = share;
+		for (int i = 0; i < 3; i++) {
+			m_left[bin][i] = left[i];
+			m_right[bin][i] = right[i];
+		}
+	}
+
+	void FootWatch::End(float seconds, FootResult& out) const {
+		out.why = FOOT_FEW;
+		out.left = false;
+		out.drop = 0.0f;
+		out.sweep = 0.0f;
+		out.lowFrom = 0.0f;
+		out.lowTo = 0.0f;
+		SmoothPushProfile(out.profile, 0.0f, 1.0f);
+		int at[BINS];
+		int n = 0;
+		for (int b = 0; b < BINS; b++) {
+			if (m_have[b]) {
+				at[n++] = b;
+			}
+		}
+		out.samples = n;
+		if (n < kFootSamplesLeast) {
+			return;
+		}
+		out.why = FOOT_PART;
+		if (m_share[at[0]] > kFootFirstBy || m_share[at[n - 1]] < kFootLastFrom) {
+			return;
+		}
+		for (int i = 1; i < n; i++) {
+			if (m_share[at[i]] - m_share[at[i - 1]] > kFootGapMost) {
+				return;
+			}
+		}
+
+		// The foot that pushes: the one that gets further below where the other stands
+		float lowLeft = m_left[at[0]][1];
+		float lowRight = m_right[at[0]][1];
+		float sumLeft = 0.0f;
+		float sumRight = 0.0f;
+		for (int i = 0; i < n; i++) {
+			const float l = m_left[at[i]][1];
+			const float r = m_right[at[i]][1];
+			if (l < lowLeft) {
+				lowLeft = l;
+			}
+			if (r < lowRight) {
+				lowRight = r;
+			}
+			sumLeft += l;
+			sumRight += r;
+		}
+		const float dropLeft = sumRight / (float)n - lowLeft;
+		const float dropRight = sumLeft / (float)n - lowRight;
+		out.left = dropLeft >= dropRight;
+		const float (*foot)[3] = out.left ? m_left : m_right;
+		const float low = out.left ? lowLeft : lowRight;
+		out.drop = out.left ? dropLeft : dropRight;
+		out.why = FOOT_NO_DROP;
+		if (!(out.drop >= kFootDropLeast)) {
+			return;
+		}
+
+		// It is down around its lowest point, for as long as it stays near that
+		const float line = low + kFootLowShare * out.drop;
+		int lowest = 0;
+		for (int i = 1; i < n; i++) {
+			if (foot[at[i]][1] < foot[at[lowest]][1]) {
+				lowest = i;
+			}
+		}
+		int first = lowest;
+		int last = lowest;
+		while (first > 0 && foot[at[first - 1]][1] < line) {
+			first--;
+		}
+		while (last < n - 1 && foot[at[last + 1]][1] < line) {
+			last++;
+		}
+		out.lowFrom = m_share[at[first]];
+		out.lowTo = m_share[at[last]];
+
+		// Its stroke: between the two points down there that are farthest apart along the ground
+		out.why = FOOT_NO_SWEEP;
+		int a = first;
+		int b = first;
+		float far = 0.0f;
+		for (int i = first; i <= last; i++) {
+			for (int j = i + 1; j <= last; j++) {
+				const float dx = foot[at[j]][0] - foot[at[i]][0];
+				const float dz = foot[at[j]][2] - foot[at[i]][2];
+				const float d = dx * dx + dz * dz;
+				if (d > far) {
+					far = d;
+					a = i;
+					b = j;
+				}
+			}
+		}
+		const float way = std::sqrt(far);
+		out.sweep = way;
+		if (!(way >= kFootSweepLeast)) {
+			return;
+		}
+		// How far along that way it is at every look: nothing at the one point, all of it at the other
+		const float ux = (foot[at[b]][0] - foot[at[a]][0]) / way;
+		const float uz = (foot[at[b]][2] - foot[at[a]][2]) / way;
+		float along[BINS];
+		for (int i = a; i <= b; i++) {
+			along[i] = (foot[at[i]][0] - foot[at[a]][0]) * ux + (foot[at[i]][2] - foot[at[a]][2]) * uz;
+		}
+		// Trimmed to where the foot is on its way: from the last look at which it has not left
+		// yet to the first at which it has arrived
+		const float edge = kFootEdge * way;
+		int from = a;
+		for (int i = a; i <= b; i++) {
+			if (along[i] <= edge) {
+				from = i;
+			}
+		}
+		int to = b;
+		for (int i = b; i > from; i--) {
+			if (along[i] >= way - edge) {
+				to = i;
+			}
+		}
+		const float down = m_share[at[from]];
+		const float up = m_share[at[to]];
+		out.why = FOOT_SHORT;
+		if (!(up - down >= kFootSpanLeast) || !((up - down) * seconds >= kFootSecondsLeast)) {
+			return;
+		}
+
+		// How much of the stroke is behind the foot at every look, never falling ...
+		out.profile.down = down;
+		out.profile.up = up;
+		const float span = along[to] - along[from];
+		float done[BINS];
+		float best = 0.0f;
+		for (int i = from; i <= to; i++) {
+			const float d = Clamp01((along[i] - along[from]) / span);
+			if (d > best) {
+				best = d;
+			}
+			done[i] = best;
+		}
+		// ... and at even steps between its start and its end
+		int i = from;
+		for (int k = 0; k < PUSH_KNOTS; k++) {
+			const float share = down + (up - down) * (float)k / (float)(PUSH_KNOTS - 1);
+			while (i < to - 1 && m_share[at[i + 1]] <= share) {
+				i++;
+			}
+			const float t = Clamp01((share - m_share[at[i]]) / (m_share[at[i + 1]] - m_share[at[i]]));
+			out.profile.done[k] = done[i] + (done[i + 1] - done[i]) * t;
+		}
+		out.profile.done[0] = 0.0f;
+		out.profile.done[PUSH_KNOTS - 1] = 1.0f;
+		out.why = FOOT_OK;
 	}
 
 	// The trucks' angle that the stick asks for at this speed, 0 or more. stick: 0 to 1.

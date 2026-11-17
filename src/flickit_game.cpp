@@ -117,6 +117,12 @@ namespace FlickitGame {
 	// of its name. this = the skater.
 	typedef float(__thiscall* ScriptedStat_t)(void* skater, uint32_t name);
 	static const ScriptedStat_t ScriptedStat = (ScriptedStat_t)0x00516AD0;
+	// Gfx::CSkeleton: where a bone is, in the frame of the object the skeleton belongs to (left,
+	// up, forward). The bone goes in by the checksum of its name, the answer comes out as four
+	// numbers. False if the skeleton has no such bone. The script command Obj_GetBonePosition
+	// goes through it. It only reads.
+	typedef bool(__thiscall* BonePosition_t)(void* skeleton, uint32_t bone, float* out);
+	static const BonePosition_t BonePosition = (BonePosition_t)0x00487100;
 
 	enum {
 		// any component
@@ -129,6 +135,20 @@ namespace FlickitGame {
 		OBJECT_FORWARD = 0x80,          // the way it faces (the third row)
 		OBJECT_VELOCITY = 0xA0,
 		OBJECT_PLAYER = 0x2BC,          // which player's skater it is
+
+		// CAnimationComponent
+		ANIM_FIRST = 0x24,              // the first of its blend channels: the animation the object is in.
+		                                // With no animation it is the head of that list itself.
+		// a blend channel
+		CHANNEL_SELF = 0x04,            // itself. The head of the list has -1 here.
+		CHANNEL_START = 0x14,           // seconds: where its animation starts,
+		CHANNEL_TIME = 0x18,            // where it is,
+		CHANNEL_END = 0x1C,             // and where it ends
+		CHANNEL_BACKWARDS = 0x24,       // not 0: it runs from the end to the start
+		CHANNEL_NAME = 0x30,            // the checksum of the animation's name
+
+		// CSkeletonComponent
+		SKELETON_SKELETON = 0x18,       // its Gfx::CSkeleton
 
 		// Script::CScript
 		SCRIPT_PARAMS = 0x14,           // the parameters of the script that is running
@@ -211,6 +231,31 @@ namespace FlickitGame {
 	static const uint32_t kRollingFriction = 0x78F80EC4;      // Physics_Rolling_Friction
 	static const uint32_t kNollieLoop = 0xF8D9EFB4;           // OnGroundNollieAI
 	static const uint32_t kAirRotation = 0x4957DB43;          // Physics_Air_Rotation_stat
+	static const uint32_t kAnimation = 0x72AD7B23;            // Animation: the component that plays an object's animations
+	static const uint32_t kSkeleton = 0x222756D5;             // Skeleton: the component that has its bones
+	static const uint32_t kToeLeft = 0xF3A6A221;              // Bone_Toe_L
+	static const uint32_t kToeRight = 0x09A99F42;             // Bone_Toe_R
+
+	// The game's push animations. The six of a skater who stands on his board differ in what
+	// the arms do; the other two are the push with the front foot and the push out of a crouch.
+	// What the feet did in one animation stands in for another of its kind until that one has
+	// been watched itself.
+	struct PushClip {
+		uint32_t name;
+		int kind;
+		const char* text;
+	};
+	static const PushClip kPushClips[] = {
+		{ 0x4266D67F, 0, "PushCycle" },
+		{ 0x860F4FD8, 0, "PushCycleArms1" },
+		{ 0x1F061E62, 0, "PushCycleArms2" },
+		{ 0x68012EF4, 0, "PushCycleArms3" },
+		{ 0xF665BB57, 0, "PushCycleArms4" },
+		{ 0x81628BC1, 0, "PushCycleArms5" },
+		{ 0xFF10285F, 1, "MongoPushCycle" },
+		{ 0x991F66BC, 2, "CrouchPush1" },
+	};
+	enum { PUSH_CLIPS = sizeof(kPushClips) / sizeof(kPushClips[0]) };
 
 	// Where the game's code is changed
 	static uint8_t* const kCatchTest1 = (uint8_t*)0x0056CB60;   // cmp byte ptr [eax+1A0h], 0   in maybe_stick_to_rail
@@ -396,6 +441,30 @@ namespace FlickitGame {
 		// the script command RestoreAutoKick: where the option is kept, and where it goes
 		{ 0x0056871A, 18, { 0x8B, 0x56, 0x0C, 0x8B, 0x82, 0xBC, 0x02, 0x00, 0x00, 0x8B, 0x0D, 0x88, 0xA7, 0x76, 0x00, 0x8A, 0x94, 0xC1 }, "auto kick: the player" },
 		{ 0x00568729, 13, { 0x8A, 0x94, 0xC1, 0xB1, 0x03, 0x00, 0x00, 0x88, 0x96, 0xD0, 0x02, 0x00, 0x00 }, "auto kick: the option" },
+		// the animation an object is in: its animation component keeps a list of blend channels
+		// (the head of the list is in the component and says -1 where a channel has itself),
+		// the newest goes first, and that one is "the" animation for the script commands
+		{ 0x004328DE, 3, { 0x8D, 0x4E, 0x18 }, "animation: the list of channels" },
+		{ 0x004328ED, 7, { 0xC7, 0x41, 0x04, 0xFF, 0xFF, 0xFF, 0xFF }, "animation: the head of the list" },
+		{ 0x00432908, 7, { 0xC7, 0x46, 0x04, 0x23, 0x7B, 0xAD, 0x72 }, "animation: the component's name" },
+		{ 0x004706DC, 3, { 0x89, 0x40, 0x04 }, "animation: a channel has itself" },
+		{ 0x00431080, 18, { 0x89, 0x68, 0x10, 0x8B, 0x55, 0x0C, 0x89, 0x50, 0x0C, 0x8B, 0x4D, 0x0C, 0x89, 0x41, 0x10, 0x89, 0x45, 0x0C }, "animation: a new channel goes first" },
+		{ 0x00431DE0, 7, { 0x8B, 0x41, 0x24, 0x83, 0x78, 0x04, 0xFF }, "animation: the one AnimEquals asks about" },
+		// what a channel keeps of its animation: the name, where it starts, is and ends
+		// (seconds), which way it runs, and when it counts as over
+		{ 0x00470350, 4, { 0x8B, 0x41, 0x30, 0xC3 }, "animation: its name" },
+		{ 0x00470360, 4, { 0xD9, 0x41, 0x18, 0xC3 }, "animation: its time" },
+		{ 0x0047045F, 18, { 0xD9, 0x44, 0x24, 0x08, 0xD9, 0x59, 0x14, 0xD9, 0x51, 0x18, 0xD8, 0xD1, 0xDF, 0xE0, 0xF6, 0xC4, 0x05, 0x7A }, "animation: start and time are set" },
+		{ 0x00470484, 16, { 0xD9, 0x59, 0x1C, 0xD9, 0x44, 0x24, 0x18, 0xDC, 0x35, 0xA8, 0xEE, 0x62, 0x00, 0xD9, 0x59, 0x20 }, "animation: end and speed are set" },
+		{ 0x004704A4, 18, { 0x8B, 0x54, 0x24, 0x04, 0x89, 0x41, 0x24, 0x8B, 0x44, 0x24, 0x10, 0x89, 0x41, 0x28, 0xC6, 0x41, 0x2C, 0x00 }, "animation: direction and loop are set" },
+		{ 0x004704B6, 6, { 0x89, 0x51, 0x30, 0xC2, 0x18, 0x00 }, "animation: the name is set" },
+		{ 0x004703B0, 18, { 0x83, 0x79, 0x28, 0x00, 0x75, 0x23, 0x83, 0x79, 0x24, 0x00, 0xD9, 0x41, 0x18, 0x75, 0x15, 0xD9, 0x41, 0x1C }, "animation: is it over" },
+		// the bones: the skeleton component, its skeleton, and the game's "where is this bone"
+		// the way the script command Obj_GetBonePosition calls it
+		{ 0x0044D81B, 14, { 0xC7, 0x46, 0x04, 0xD5, 0x56, 0x27, 0x22, 0xC7, 0x46, 0x18, 0x00, 0x00, 0x00, 0x00 }, "skeleton: the component's name" },
+		{ 0x0044D41F, 10, { 0x8B, 0x4F, 0x18, 0x56, 0x50, 0xE8, 0xD7, 0x9C, 0x03, 0x00 }, "skeleton: the command's way to a bone" },
+		{ 0x00487100, 16, { 0x81, 0xEC, 0xC0, 0x00, 0x00, 0x00, 0x53, 0x8B, 0x9C, 0x24, 0xC8, 0x00, 0x00, 0x00, 0x56, 0x57 }, "bone position" },
+		{ 0x004871F6, 10, { 0xB0, 0x01, 0x81, 0xC4, 0xC0, 0x00, 0x00, 0x00, 0xC2, 0x08 }, "bone position: its answer" },
 		// the game's own "is he skating" test: the two offsets ReadSkater uses for it
 		{ 0x0044F8A0, 18, { 0x8B, 0x41, 0x2C, 0x80, 0xB8, 0x14, 0x01, 0x00, 0x00, 0x00, 0x75, 0x0C, 0x83, 0x78, 0x1C, 0x00, 0x75, 0x06 }, "skating test" },
 	};
@@ -421,8 +490,15 @@ namespace FlickitGame {
 			|| Flickit::NameChecksum("SkaterCorePhysics") != kSkaterCorePhysics || Flickit::NameChecksum("slide") != kSlideBalance
 			|| Flickit::NameChecksum("Trick") != kTrick || Flickit::NameChecksum("Square") != kSquare
 			|| Flickit::NameChecksum("Physics_Rolling_Friction") != kRollingFriction
-			|| Flickit::NameChecksum("OnGroundNollieAI") != kNollieLoop || Flickit::NameChecksum("Physics_Air_Rotation_stat") != kAirRotation) {
+			|| Flickit::NameChecksum("OnGroundNollieAI") != kNollieLoop || Flickit::NameChecksum("Physics_Air_Rotation_stat") != kAirRotation
+			|| Flickit::NameChecksum("Animation") != kAnimation || Flickit::NameChecksum("Skeleton") != kSkeleton
+			|| Flickit::NameChecksum("Bone_Toe_L") != kToeLeft || Flickit::NameChecksum("Bone_Toe_R") != kToeRight) {
 			s_available = false;
+		}
+		for (int i = 0; i < PUSH_CLIPS; i++) {
+			if (Flickit::NameChecksum(kPushClips[i].text) != kPushClips[i].name) {
+				s_available = false;
+			}
 		}
 		if (!s_available) {
 			Log::TypedLog(CHN_SDL, "Flickit: this is not the game the grind hooks were made for. They stay off, grinds work with the timed Grind hold\n");
@@ -538,6 +614,48 @@ namespace FlickitGame {
 	static const int kPushIdleMost = 3;
 	static bool s_groundSeen = false;    // since the last look the game's ground physics have run for him at all
 	static int s_groundIdle = kPushIdleMost + 1;   // looks in a row without that
+	// The animation the skater was in when the ground physics last looked, for telling when the
+	// game starts one. The channel is only ever compared, never followed.
+	static const uint8_t* s_animChannel = 0;
+	static uint32_t s_animName = 0;
+	static float s_animTime = 0.0f;
+	static uint32_t s_animPlay = 0;      // goes up with every animation the game is seen to start
+	// The push that is under way, or the last one: the play of the animation it goes with,
+	// which animation that is, how long, and where the word on its foot came from
+	static uint32_t s_pushPlay = 0;
+	static int s_pushClip = 0;
+	static float s_pushLength = 0.0f;
+	static int s_pushSource = PUSH_AS_SET;
+	// What the feet did in each push animation, once a play of it has been watched to its end
+	struct FootKnown {
+		bool have;
+		Flickit::PushProfile profile;
+		uint32_t stamp;                  // the later it was watched, the bigger
+		int told;                        // what the log was last told about it: a Flickit::FootWhy plus one, 0 nothing yet
+	};
+	static FootKnown s_footKnown[PUSH_CLIPS];
+	static uint32_t s_footStamp = 0;
+	// The play that is being watched
+	static Flickit::FootWatch s_foot;
+	static bool s_footWatching = false;
+	static uint32_t s_footPlay = 0;
+	static int s_footClip = 0;
+	static float s_footLength = 0.0f;
+	static float s_footFirst = 0.0f;     // how far into the animation the first frame of the watch was, and the last
+	static float s_footLast = 0.0f;
+	// For the log: goes up when a play has told something new, and what
+	static uint32_t s_footSerial = 0;
+	static int s_footToldClip = 0;
+	static float s_footToldLength = 0.0f;
+	static Flickit::FootResult s_footTold;
+	// A foot that pushes this much earlier or later than last time (as a share of the animation) is news
+	static const float kFootNews = 0.03f;
+	// The clock that stands in where the game is told to play a push and no push animation is
+	// seen on the skater (Flickit::PushClock), and for the log the animation he was in instead
+	// when it took over
+	static Flickit::PushClock s_clock;
+	static uint32_t s_clockSerial = 0;
+	static uint32_t s_clockAnim = 0;
 	// Spinning: the turning in the air of the skater Flickit drives
 	static Flickit::Spin s_spin;
 	static bool s_airSeen = false;       // since the last look the game's physics of the air have turned him
@@ -646,6 +764,8 @@ namespace FlickitGame {
 			// Flickit did not drive the skater on the last frame: the kick is the game's again
 			HoldAutoKick(false);
 			s_push.Reset();
+			s_footWatching = false;
+			s_clock.Reset();
 			s_steer.Reset();
 			s_spin.Reset();
 			s_airSeen = false;
@@ -838,6 +958,17 @@ namespace FlickitGame {
 		out.pushAsked = s_push.Asked();
 		out.pushAdded = s_push.Added();
 		out.pushFrom = s_push.From();
+		out.pushAnim = s_pushClip >= 0 ? kPushClips[s_pushClip].text : "the clock";
+		out.pushLength = s_pushLength;
+		out.pushDown = s_push.Down();
+		out.pushUp = s_push.Up();
+		out.pushSource = s_pushSource;
+		out.footSerial = s_footSerial;
+		out.footAnim = kPushClips[s_footToldClip].text;
+		out.footLength = s_footToldLength;
+		out.foot = s_footTold;
+		out.blindSerial = s_clock.Serial();
+		out.blindAnim = s_clockAnim;
 		out.spinSerial = s_spinSerial;
 		out.spinTurned = s_spinTurned;
 		out.spinFlick = s_spinFlick;
@@ -1259,15 +1390,16 @@ namespace FlickitGame {
 	//
 	// The game's ground scripts look at Left and Right first, and play the turn for them; only
 	// when neither is down do they get as far as the push. In Skate the board is pushed in a turn
-	// like anywhere else. So for the frame in which a push of Flickit's asks for its animation,
-	// the scripts see neither Left nor Right. They run before the physics do: the physics get
-	// both back (GiveBackTurn) and turn the board as if nothing had happened.
+	// like anywhere else. So while a push of Flickit's asks for its animation, the scripts see
+	// neither Left nor Right (not for long at a time: a push the game does not show must not
+	// keep the turn from being shown). They run before the physics do: the physics get both
+	// back (GiveBackTurn) and turn the board as if nothing had happened.
 	static void __fastcall PadUpdateHook(uint8_t* pad, void* /*edx*/, void* data) {
 		PadUpdate(pad, data);
 		if (s_turnKept && s_turnKept + INPUT_PAD == pad) {
 			s_turnKept = 0;     // the game has just written both anew
 		}
-		if (!s_active || s_frame.push <= 0 || !s_frame.pushOverTurn || s_push.Phase() != Flickit::PUSH_ASKED) {
+		if (!s_active || s_frame.push <= 0 || !s_frame.pushOverTurn || !s_push.HideTurn()) {
 			return;
 		}
 		uint8_t* skater = LocalSkater();
@@ -1317,10 +1449,160 @@ namespace FlickitGame {
 		return brake;
 	}
 
+	static int PushClipOf(uint32_t name) {
+		for (int i = 0; i < PUSH_CLIPS; i++) {
+			if (kPushClips[i].name == name) {
+				return i;
+			}
+		}
+		return -1;
+	}
+
+	// The animation the skater is in, and how far into it. Returns which of the push animations
+	// it is, -1 for any other. Nothing is changed in the game.
+	static int ReadPushAnim(const uint8_t* skater, Flickit::PushAnim& out) {
+		out.current = false;
+		out.running = false;
+		out.time = 0.0f;
+		out.length = 0.0f;
+		const uint8_t* anim = (const uint8_t*)GetComponent((void*)skater, kAnimation);
+		const uint8_t* channel = anim ? *(const uint8_t* const*)(anim + ANIM_FIRST) : 0;
+		if (channel && *(const int32_t*)(channel + CHANNEL_SELF) == -1) {
+			channel = 0;    // the head of an empty list: he is in no animation
+		}
+		const uint32_t name = channel ? *(const uint32_t*)(channel + CHANNEL_NAME) : 0;
+		const float time = channel ? *(const float*)(channel + CHANNEL_TIME) : 0.0f;
+		// The game has started an animation: there is another channel, or another name, or the
+		// same animation is at an earlier point than it was
+		if (channel != s_animChannel || name != s_animName || time < s_animTime) {
+			s_animPlay++;
+		}
+		s_animChannel = channel;
+		s_animName = name;
+		s_animTime = time;
+		out.play = s_animPlay;
+		const int clip = channel ? PushClipOf(name) : -1;
+		if (clip < 0) {
+			return -1;
+		}
+		const float start = *(const float*)(channel + CHANNEL_START);
+		const float end = *(const float*)(channel + CHANNEL_END);
+		if (*(const int32_t*)(channel + CHANNEL_BACKWARDS) != 0 || !(end > start)) {
+			return -1;      // run backwards, or of no length: nobody pushes in that
+		}
+		out.current = true;
+		out.running = time < end;
+		out.time = time - start;
+		out.length = end - start;
+		return clip;
+	}
+
+	// Where the skater's two feet are, in his own frame: three numbers each, the second the
+	// height. The ball of each foot, as the game last posed the skeleton.
+	static bool ReadToes(const uint8_t* skater, float* left, float* right) {
+		const uint8_t* component = (const uint8_t*)GetComponent((void*)skater, kSkeleton);
+		void* skeleton = component ? *(void* const*)(component + SKELETON_SKELETON) : 0;
+		if (!skeleton) {
+			return false;
+		}
+		float l[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+		float r[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+		if (!BonePosition(skeleton, kToeLeft, l) || !BonePosition(skeleton, kToeRight, r)) {
+			return false;
+		}
+		for (int i = 0; i < 3; i++) {
+			left[i] = l[i];
+			right[i] = r[i];
+		}
+		return true;
+	}
+
+	// A play of a push animation whose feet were watched is over: what they did. A play that
+	// was seen whole and showed a foot pushing is what pushes go by from now on.
+	static void FeetWatched() {
+		s_footWatching = false;
+		Flickit::FootResult result;
+		s_foot.End(s_footLength, result);
+		FootKnown& known = s_footKnown[s_footClip];
+		bool news = false;
+		if (result.why == Flickit::FOOT_OK) {
+			news = !known.have || std::fabs(result.profile.down - known.profile.down) > kFootNews
+				|| std::fabs(result.profile.up - known.profile.up) > kFootNews;
+			known.have = true;
+			known.profile = result.profile;
+			known.stamp = ++s_footStamp;
+		}
+		else if ((s_footFirst <= 0.2f && s_footLast >= 0.85f) || (result.why != Flickit::FOOT_FEW && result.why != Flickit::FOOT_PART)) {
+			// The animation ran from start to end under the watch, and no foot was found
+			// pushing, or the feet could not be read. (A play that was cut short says nothing.)
+			news = known.told != result.why + 1;
+		}
+		if (news) {
+			known.told = result.why + 1;
+			s_footToldClip = s_footClip;
+			s_footToldLength = s_footLength;
+			s_footTold = result;
+			s_footSerial++;
+		}
+	}
+
+	// Once on every frame of the ground physics: the feet are watched through every play of a
+	// push animation, whoever started it
+	static void WatchFeet(const uint8_t* skater, const Flickit::PushAnim& anim, int clip) {
+		if (s_footWatching && (clip < 0 || !anim.running || anim.play != s_footPlay)) {
+			FeetWatched();
+		}
+		if (!s_frame.pushMeasure || clip < 0 || !anim.running) {
+			s_footWatching = false;
+			return;
+		}
+		if (!s_footWatching) {
+			s_foot.Begin();
+			s_footWatching = true;
+			s_footPlay = anim.play;
+			s_footClip = clip;
+			s_footLength = anim.length;
+			s_footFirst = anim.time / anim.length;
+		}
+		s_footLast = anim.time / anim.length;
+		float left[3];
+		float right[3];
+		if (ReadToes(skater, left, right)) {
+			s_foot.Sample(s_footLast, left, right);
+		}
+	}
+
+	// Where the foot pushes in a push animation: what its own feet showed, or those of another
+	// push animation of its kind (the one watched last), or what the settings say
+	static int PushProfileFor(int clip, Flickit::PushProfile& out) {
+		if (s_frame.pushMeasure && clip >= 0) {
+			if (s_footKnown[clip].have) {
+				out = s_footKnown[clip].profile;
+				return PUSH_MEASURED;
+			}
+			int best = -1;
+			for (int i = 0; i < PUSH_CLIPS; i++) {
+				if (s_footKnown[i].have && kPushClips[i].kind == kPushClips[clip].kind
+					&& (best < 0 || s_footKnown[i].stamp > s_footKnown[best].stamp)) {
+					best = i;
+				}
+			}
+			if (best >= 0) {
+				out = s_footKnown[best].profile;
+				return PUSH_BORROWED;
+			}
+		}
+		Flickit::SmoothPushProfile(out, s_frame.pushFootDown, s_frame.pushFootUp);
+		return PUSH_AS_SET;
+	}
+
 	// Stands where the physics of the ground ask "may he kick?", which they do on every frame the
 	// skater is not braking and balances nothing. Same convention: this in ecx, no arguments, the
 	// answer in al. With Flickit's push the answer is always no, and the push is given here: the
 	// game's own kick, which would follow a yes, pushes for as long as it is allowed to.
+	//
+	// A push of Flickit's goes with the game's push animation. So this is also where the
+	// skater's animation is looked at, and his feet while he is in a push animation.
 	static bool __fastcall KickTestHook(uint8_t* core) {
 		if (!Drives(core) || s_frame.push <= 0) {
 			return ShouldKick(core);
@@ -1341,9 +1623,27 @@ namespace FlickitGame {
 			s_push.Reset();
 			return false;
 		}
+		const float dt = *(const float*)(core + CORE_FRAME_LENGTH);
+		Flickit::PushAnim anim;
+		const int clip = ReadPushAnim(skater, anim);
+		WatchFeet(skater, anim, clip);
+		const bool byClock = s_clock.Step(clip >= 0, dt, anim);
+		if (s_clock.Serial() != s_clockSerial) {
+			s_clockSerial = s_clock.Serial();
+			s_clockAnim = s_animName;
+		}
+		Flickit::PushProfile profile;
+		const int source = PushProfileFor(clip, profile);
 		float* velocity = (float*)(skater + OBJECT_VELOCITY);
 		const float speed = Speed(skater);
-		const float add = s_push.Step(*(const float*)(core + CORE_FRAME_LENGTH), speed, s_frame.pushHeld, s_frame.push, s_frame.pushTiming);
+		const float add = s_push.Step(dt, speed, s_frame.pushHeld, s_frame.push, anim, profile);
+		if ((clip >= 0 || byClock) && s_push.Phase() >= Flickit::PUSH_INTO && s_push.Play() == anim.play && s_pushPlay != anim.play) {
+			// A push has taken up with this play of the animation: what the log says of it
+			s_pushPlay = anim.play;
+			s_pushClip = clip;
+			s_pushLength = anim.length;
+			s_pushSource = source;
+		}
 		if (add > 0.0f) {
 			// The way the game's own kick goes: the way the skater faces, or the way he travels
 			// when a script has locked that
@@ -1366,9 +1666,13 @@ namespace FlickitGame {
 	// yes: that is the one a push of Flickit's answers. The other, at the end of a change of
 	// stance on the ground, starts the push as a loop that the game's ground script then waits
 	// on for good if it happens to pick the same animation: it gets the game's own answer.
+	//
+	// The nollie loop starts the push only if it is not the skater's animation already, and
+	// puts another in its place only on a no. So while a push animation is his, running or
+	// stopped at its end, the answer is the game's own no.
 	static bool __fastcall CanKickHook(uint8_t* core) {
 		const bool can = ShouldKick(core);
-		if (!Drives(core) || s_frame.push <= 0 || !s_push.Animating()) {
+		if (!Drives(core) || s_frame.push <= 0 || !s_push.Animating() || s_push.AnimCurrent()) {
 			return can;
 		}
 		const uint8_t* skater = *(const uint8_t* const*)(core + COMPONENT_OBJECT);
@@ -1376,8 +1680,7 @@ namespace FlickitGame {
 		if (!script || *(const uint32_t*)(script + SCRIPT_NAME) != kNollieLoop) {
 			return can;
 		}
-		// The script that asked is about to play the push: its time starts now
-		s_push.Taken();
+		s_clock.Told();
 		return true;
 	}
 
@@ -1401,9 +1704,7 @@ namespace FlickitGame {
 		if (!state || *(const int32_t*)(state + STATE_STATE) != 0 || state[STATE_DRIVING] != 0 || *(const int32_t*)(state + STATE_PHYSICS) != 0) {
 			return held;    // in the air and off the board the button is what it always was
 		}
-		// The script that asked is about to play the push (or it is one that only wanted to
-		// know; then the one that plays it asks within the next frames): its time starts now
-		s_push.Taken();
+		s_clock.Told();
 		return true;
 	}
 

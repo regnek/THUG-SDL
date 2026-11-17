@@ -21,14 +21,16 @@
 // commands of the game's scripts, and the place where the game takes in the controller.
 //
 //   - the skater does not kick by himself: a push comes from Flickit, on a button (the game's own
-//     kick test; its switch for kicking unasked is held at "off" meanwhile)
+//     kick test; its switch for kicking unasked is held at "off" meanwhile). The push goes with
+//     the game's push animation: which animation the skater is in and how far into it is read
+//     from his animation component, and where his feet are from his skeleton. Both are only read.
 //   - below walking pace he is not stopped dead, the board rolls out (the game's brake test)
 //   - the board loses speed the way Skate's does (the game's friction on the ground)
 //   - it turns by the stick the way Skate's does (the game's turning on the ground)
 //   - the game's scripts are told when to play the push (the commands CanKick, where the loop
 //     of a skater riding nollie asks it, and Held for the Flip button, which is the game's own
 //     button for a kick)
-//   - they play it in a turn as well: on the frame a push asks for its animation they do not see
+//   - they play it in a turn as well: while a push asks for its animation they do not see
 //     Left and Right (the game's picture of the pad, between the look at the controller and the
 //     physics, which get both back)
 //
@@ -82,17 +84,37 @@ namespace FlickitGame {
 		// Rolling
 		bool rolling;           // on the board, on the ground, nothing balanced, not bailing: a push button pushes
 		float speed;            // the game's units per second
-		uint32_t pushSerial;    // goes up when the foot of a push leaves the ground
+		uint32_t pushSerial;    // goes up when the foot of a push has pushed
 		float pushHeld;         // that push: seconds the button had been down
 		float pushAsked;        // the speed it was asked to add
 		float pushAdded;        // the speed it added
 		float pushFrom;         // the speed it started at
+		const char* pushAnim;   // the game's animation it went with ("the clock" if none was seen)
+		float pushLength;       // how long that is, in seconds
+		float pushDown;         // the shares of it between which the foot pushed
+		float pushUp;
+		int pushSource;         // where those two came from: PushSource
+
+		// The feet in a push animation, for the log
+		uint32_t footSerial;    // goes up when a play of a push animation has told something new
+		const char* footAnim;   // the animation
+		float footLength;       // its length in seconds
+		Flickit::FootResult foot;   // what its feet did
+		uint32_t blindSerial;   // goes up when the game was told to play a push again and again and no push animation was seen
+		uint32_t blindAnim;     // the animation the skater was in instead (the checksum of its name)
 
 		// Spinning
 		uint32_t spinSerial;    // goes up when an air in which Flickit turned the skater is over
 		float spinTurned;       // that air: radians Flickit asked for, to the right when positive
 		float spinFlick;        // the flick of the stick that counted, 0 to 1
 		float spinSeconds;      // how long the air lasted
+	};
+
+	// Where a push had it from at which point of its animation the foot pushes
+	enum PushSource {
+		PUSH_AS_SET = 0,        // the settings
+		PUSH_MEASURED = 1,      // the feet were watched in that animation
+		PUSH_BORROWED = 2       // they were watched in another push animation of the same kind
 	};
 
 	// What the first local skater is doing. False while there is none or the game is not Available().
@@ -114,7 +136,9 @@ namespace FlickitGame {
 		int push;               // the push in percent of Skate's, 0: the game's own kick
 		bool pushHeld;          // a push button is down, and the press is a push
 		bool pushOverTurn;      // the game's scripts play a push in a turn as well
-		Flickit::PushTiming pushTiming;
+		bool pushMeasure;       // the feet are watched in the game's push animations
+		float pushFootDown;     // where the foot pushes in an animation that has not been measured:
+		float pushFootUp;       // from this share of it to this
 		int coast;              // rolling resistance in percent of Skate's, 0: the game's own friction
 		int steering;           // grip in a turn in percent of Skate's, 0: the game's own turning
 		float steer;            // the movement stick, -1 (left) to 1 (right)

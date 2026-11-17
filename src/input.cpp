@@ -329,6 +329,8 @@ bool flickitOlliePush = false;                           // the press of the Oll
 bool flickitFlipPush = false;                            // the Flip button is down and has been a push since the board last rolled under it
 bool flickitPushHeld = false;                            // a push button is down
 uint32_t flickitPushSerial = 0;                          // for the log: the last push
+uint32_t flickitFootSerial = 0;                          // for the log: the last word on the feet in a push animation
+uint32_t flickitBlindSerial = 0;                         // for the log: the last time the pushes went over to the clock
 uint32_t flickitSpinSerial = 0;                          // for the log: the last air Flickit turned the skater in
 uint32_t flickitFrameAt = 0;                             // SDL's clock at the last frame handed to the game hooks
 bool flickitFrameSeen = false;
@@ -429,9 +431,9 @@ void loadFlickitSettings() {
 	s.push = (int)GetPrivateProfileInt(FLICKIT_SECTION, "Push", s.push, configFile);
 	s.pushOnOllie = (int)GetPrivateProfileInt(FLICKIT_SECTION, "PushOnOllie", s.pushOnOllie, configFile);
 	s.pushOverTurn = (int)GetPrivateProfileInt(FLICKIT_SECTION, "PushOverTurn", s.pushOverTurn, configFile);
-	s.pushDelay = (int)GetPrivateProfileInt(FLICKIT_SECTION, "PushDelay", s.pushDelay, configFile);
-	s.pushContact = (int)GetPrivateProfileInt(FLICKIT_SECTION, "PushContact", s.pushContact, configFile);
-	s.pushCycle = (int)GetPrivateProfileInt(FLICKIT_SECTION, "PushCycle", s.pushCycle, configFile);
+	s.pushMeasure = (int)GetPrivateProfileInt(FLICKIT_SECTION, "PushMeasure", s.pushMeasure, configFile);
+	s.pushFootDown = (int)GetPrivateProfileInt(FLICKIT_SECTION, "PushFootDown", s.pushFootDown, configFile);
+	s.pushFootUp = (int)GetPrivateProfileInt(FLICKIT_SECTION, "PushFootUp", s.pushFootUp, configFile);
 	s.coast = (int)GetPrivateProfileInt(FLICKIT_SECTION, "Coast", s.coast, configFile);
 	s.steering = (int)GetPrivateProfileInt(FLICKIT_SECTION, "Steering", s.steering, configFile);
 	s.spin = (int)GetPrivateProfileInt(FLICKIT_SECTION, "Spin", s.spin, configFile);
@@ -486,10 +488,12 @@ void loadFlickitSettings() {
 			}
 			if (s.push > 0) {
 				const float units = Flickit::kUnitsPerMetre * (float)s.push * 0.01f;
-				Log::TypedLog(CHN_SDL, "Flickit rolling: a push adds %.0f (a tap) to %.0f units/s (the button held %.2f s) up to %.0f units/s, on the Flip button%s; the foot is down %d ms after the push starts for %d ms, the next push starts %d ms after this one at the earliest; %s (the game's own: he kicks by himself, up to 394 to 675)\n",
+				Log::TypedLog(CHN_SDL, "Flickit rolling: a push adds %.0f (a tap) to %.0f units/s (the button held %.2f s) up to %.0f units/s, on the Flip button%s. One push is one play of the game's push animation, and the speed comes in while its foot pushes: %s from %d%% to %d%% of the animation; %s (the game's own: he kicks by himself, up to 394 to 675)\n",
 					Flickit::kPushTap * units, Flickit::kPushMost * units, Flickit::kPushFullHold, Flickit::kPushTopSpeed * units,
-					s.pushOnOllie ? " and the Ollie button" : "", s.pushDelay, s.pushContact, s.pushCycle,
-					s.pushOverTurn ? "the game shows a push in a turn too" : "in a turn the game shows the turn, not the push");
+					s.pushOnOllie ? " and the Ollie button" : "",
+					s.pushMeasure ? "where the feet are is watched in every push animation, and until one has been watched its foot counts as pushing" : "its foot counts as pushing",
+					s.pushFootDown, s.pushFootUp,
+					s.pushOverTurn ? "the game shows a push in a turn too" : "in a turn the game shows the turn, and there is no push");
 			}
 			else {
 				Log::TypedLog(CHN_SDL, "Flickit rolling: the push is the game's own\n");
@@ -599,8 +603,30 @@ static void flickitLogGame(const FlickitGame::Skater& sk, uint32_t now) {
 
 	if (sk.pushSerial != flickitPushSerial) {
 		flickitPushSerial = sk.pushSerial;
-		Log::TypedLog(CHN_SDL, "Flickit: push, the button was down %.0f ms: %.0f units/s asked for, speed %.0f -> %.0f\n",
+		Log::TypedLog(CHN_SDL, "Flickit: push with %s (%.2f s), the foot pushed from %.0f%% to %.0f%% of it (%s); the button was down %.0f ms: %.0f units/s asked for, speed %.0f -> %.0f\n",
+			sk.pushAnim, sk.pushLength, sk.pushDown * 100.0f, sk.pushUp * 100.0f,
+			sk.pushSource == FlickitGame::PUSH_MEASURED ? "watched" : (sk.pushSource == FlickitGame::PUSH_BORROWED ? "watched in another push animation" : "as set"),
 			sk.pushHeld * 1000.0f, sk.pushAsked, sk.pushFrom, sk.pushFrom + sk.pushAdded);
+	}
+	if (sk.blindSerial != flickitBlindSerial) {
+		flickitBlindSerial = sk.blindSerial;
+		Log::TypedLog(CHN_SDL, "Flickit: the game was told to play a push three times and no push animation was seen on the skater (he is in animation %08X). Pushes go by the clock until one is seen\n", sk.blindAnim);
+	}
+	if (sk.footSerial != flickitFootSerial) {
+		flickitFootSerial = sk.footSerial;
+		if (sk.foot.why == Flickit::FOOT_OK) {
+			Log::TypedLog(CHN_SDL, "Flickit: watched the feet in %s (%.2f s, %d looks): the foot of %s gets %.1f units below the other from %.0f%% to %.0f%% of it, and down there travels %.1f units from %.0f%% to %.0f%%. Pushes with it go by that from now on\n",
+				sk.footAnim, sk.footLength, sk.foot.samples, sk.foot.left ? "Bone_Toe_L" : "Bone_Toe_R", sk.foot.drop,
+				sk.foot.lowFrom * 100.0f, sk.foot.lowTo * 100.0f, sk.foot.sweep, sk.foot.profile.down * 100.0f, sk.foot.profile.up * 100.0f);
+		}
+		else {
+			Log::TypedLog(CHN_SDL, "Flickit: watched the feet in %s (%.2f s, %d looks) and found no foot pushing: %s (the lower foot gets %.1f units below the other and travels %.1f units down there). Pushes with it go by another push animation or by PushFootDown and PushFootUp\n",
+				sk.footAnim, sk.footLength, sk.foot.samples,
+				sk.foot.why == Flickit::FOOT_NO_DROP ? "neither foot gets below the other"
+					: (sk.foot.why == Flickit::FOOT_NO_SWEEP ? "the foot that goes down does not travel"
+					: (sk.foot.why == Flickit::FOOT_SHORT ? "the foot travels for no time at all" : "the feet could not be read on enough frames")),
+				sk.foot.drop, sk.foot.sweep);
+		}
 	}
 	if (sk.spinSerial != flickitSpinSerial) {
 		flickitSpinSerial = sk.spinSerial;
@@ -775,9 +801,9 @@ void flickitGameFrame(device* dev) {
 	frame.push = flickitSettings.push;
 	frame.pushHeld = flickitPushHeld;
 	frame.pushOverTurn = flickitSettings.pushOverTurn != 0;
-	frame.pushTiming.delay = (float)flickitSettings.pushDelay * 0.001f;
-	frame.pushTiming.contact = (float)flickitSettings.pushContact * 0.001f;
-	frame.pushTiming.cycle = (float)flickitSettings.pushCycle * 0.001f;
+	frame.pushMeasure = flickitSettings.pushMeasure != 0;
+	frame.pushFootDown = (float)flickitSettings.pushFootDown * 0.01f;
+	frame.pushFootUp = (float)flickitSettings.pushFootUp * 0.01f;
 	frame.coast = flickitSettings.coast;
 	frame.steering = flickitSettings.steering;
 	frame.spin = flickitSettings.spin;

@@ -27,7 +27,8 @@ they have to keep to what the game's code expects there, whatever the compiler m
                 return is a plain ret
   kick test     two functions, in the place of the two calls to the game's "may he kick" (one in the
                 physics of the ground, one for the script command CanKick): no arguments, every
-                return is a plain ret
+                return is a plain ret. The first also reads the skater's animation and asks the
+                game where two of his bones are
   friction      takes the place of the call to the game's friction on the ground: no arguments,
                 every return is a plain ret
   turning       takes the place of the call to the game's turning on the ground: no arguments, every
@@ -41,6 +42,9 @@ they have to keep to what the game's code expects there, whatever the compiler m
   spin rate     takes the place of two calls to the game's "one of the skater's numbers that go by
                 his stats", which pops one argument and answers on the floating point stack: every
                 return is ret 4 (or a jump into the game's function) with the answer there
+  the feet      not a hook: the kick test hook in the physics of the ground, or a function it calls,
+                asks the game where two of the skater's bones are. The game's function takes its two
+                arguments off the stack itself. The code is printed, and it has to be there once
   rail boost    a bare function in the place of a call to GetPhysicsFloat: passes esi to a function
                 that answers with the address to go on at, and jumps there with the stack as it found
                 it. That address is the game's GetPhysicsFloat or a function of the DLL that returns
@@ -77,6 +81,7 @@ BUTTON_HELD = 0x00451A70
 PAD_UPDATE = 0x0051AEB0
 AIR_TURN = 0x0055F050
 SCRIPTED_STAT = 0x00516AD0
+BONE_POSITION = 0x00487100
 
 # push ecx / push edx / push esi / call ... / add esp, 4 / pop edx / pop ecx / ret
 RAIL_CATCH_PATTERN = bytes.fromhex("515256e8") + b"...." + bytes.fromhex("83c4045a59c3")
@@ -108,6 +113,7 @@ NAMES = {
     0x0040F0A0: "CScript::Update",
     0x00570560: "the flip / rotate afters",
     0x004133A0: "LookUpSymbol",
+    BONE_POSITION: "where a bone is",
 }
 
 
@@ -469,6 +475,38 @@ def check(path):
                     problems.append("the turning hook does not turn the skater with the game's own functions")
             if found is spin_rate and not answers_on_x87(insns):
                 problems.append("the spin rate hook has a return without its answer on the floating point stack")
+
+    # --- the feet: the kick test hook of the ground physics, or a function it calls (three calls deep
+    #     at the most), asks the game where a bone is
+    feet = []
+    seen = set(p for p, insns in kick)
+
+    def walk(start, insns, depth):
+        if BONE_POSITION in dll.game_refs(insns):
+            feet.append((start, insns))
+        if depth >= 3:
+            return
+        for ins in insns:
+            if ins.mnemonic == "call" and ins.operands and ins.operands[0].type == capstone.x86.X86_OP_IMM:
+                target = dll.entry(ins.operands[0].imm & 0xFFFFFFFF)
+                if dll.in_text(target) and target not in seen:
+                    seen.add(target)
+                    walk(target, dll.function(target), depth + 1)
+
+    for p, insns in kick:
+        walk(p, insns, 0)
+    if len(feet) != 1:
+        problems.append("the code that asks the game where a bone is was found %d times, not once" % len(feet))
+    for p, insns in feet:
+        if any(p == k for k, _ in kick):
+            print("  the feet are read in the kick test hook at %08X (above)" % p)
+        else:
+            show(dll, "the feet are read at %08X, which a kick test hook calls" % p, insns)
+        asked = sum(1 for ins in insns if BONE_POSITION in dll.game_refs([ins]))
+        calls = sum(1 for ins in insns if ins.mnemonic == "call")
+        print("    it names the game's function %d times and makes %d calls" % (asked, calls))
+        if calls < 2:
+            problems.append("the code that reads the feet makes %d calls: it has two bones to ask about" % calls)
 
     # --- grind pick
     if len(pick) != 1:

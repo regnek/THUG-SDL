@@ -111,9 +111,9 @@ namespace Flickit {
 		int push;             // percent of Skate's push: what one push adds and how fast pushing gets. 0: THUG's own kick
 		int pushOnOllie;      // 1: the Ollie button pushes as well while the board rolls on the ground
 		int pushOverTurn;     // 1: the game shows a push in a turn too; 0: its turn animation comes first, as in THUG
-		int pushDelay;        // ms from the start of the push animation to the foot reaching the ground
-		int pushContact;      // ms the foot is on the ground: the speed of a push comes in over this time
-		int pushCycle;        // ms at least from the start of one push to the start of the next
+		int pushMeasure;      // 1: the feet are watched in the game's push animations, and a push goes by what its foot does
+		int pushFootDown;     // where in a push animation the foot starts to push, in percent of its length, ...
+		int pushFootUp;       // ... and where it has pushed: for an animation the feet have not been measured in
 		int coast;            // percent of Skate's rolling resistance, 0: THUG's own friction
 		int steering;         // percent of Skate's grip in a turn, 0: THUG's own turning
 
@@ -501,8 +501,11 @@ namespace Flickit {
 	//     quarter of a second on. While the foot is on the ground the board is taken up to that
 	//     speed, by no more than 0.6 m/s in one tick near a standstill and 0.5 at full speed, and
 	//     never past 8.5 m/s. From 8.3 m/s on no push starts. A button that stays down pushes again
-	//     and again, each time with all it has. How long one push takes is in Skate's animations,
-	//     which were not looked at; here the game's own push animation sets the pace.
+	//     and again, each time with all it has. There is no clock in it and no easing curve: the
+	//     speed the board is taken up to is the speed the push animation itself moves at, and the
+	//     animation says when the foot is on the ground. So the board speeds up as the foot pushes.
+	//     Here the same is done with the game's own push animation: one push is one play of it,
+	//     its foot is watched, and the speed comes in as the foot travels back along the ground.
 	//   - On its four wheels the board loses 0.13 m/s2 at a crawl and 0.5 m/s2 from 8 m/s on, and
 	//     more above 8.1 m/s (1.1 m/s2 at 13 m/s). From 8 m/s it rolls for half a minute.
 	//   - The stick turns the trucks, by up to 0.5 radians at a walk and less the faster the board
@@ -535,70 +538,175 @@ namespace Flickit {
 	// seconds, percent: Settings::coast.
 	float Coast(float speed, float dt, int percent);
 
-	// When the parts of a push happen, in seconds
-	struct PushTiming {
-		float delay;      // from the start of its animation to the foot on the ground
-		float contact;    // the foot on the ground
-		float cycle;      // the least from the start of one push to the start of the next
+	// Where in a push animation the foot pushes, and how
+	enum { PUSH_KNOTS = 17 };
+	struct PushProfile {
+		float down;                 // the share of the animation (0 to 1) at which the foot starts to push
+		float up;                   // the share at which it has pushed
+		float done[PUSH_KNOTS];     // how much of its stroke the foot has behind it, at even steps from down
+		                            // to up: from 0 to 1, never falling
+	};
+	// A foot that pushes from one share of the animation to another, gently at both ends
+	void SmoothPushProfile(PushProfile& out, float down, float up);
+	// How much of its stroke the foot has behind it at a share of the animation: 0 before it pushes, 1 after
+	float PushDone(const PushProfile& profile, float share);
+
+	// What the game's animation of the skater is doing on one frame, as far as a push cares
+	struct PushAnim {
+		bool current;     // a push animation is the skater's animation, ...
+		bool running;     // ... and it has not reached its end
+		uint32_t play;    // changes whenever the game starts an animation
+		float time;       // seconds into it
+		float length;     // its length in seconds
 	};
 
 	enum PushPhase {
 		PUSH_NONE = 0,
-		PUSH_ASKED = 1,     // a push is wanted: the game is asked to start its animation
+		PUSH_ASKED = 1,     // a push is wanted: the game is asked to play its push animation
 		PUSH_INTO = 2,      // the animation runs, the foot is on its way down
-		PUSH_CONTACT = 3,   // it is on the ground and pushes
-		PUSH_RECOVER = 4    // it is on its way back to the board
+		PUSH_CONTACT = 3,   // the foot pushes
+		PUSH_RECOVER = 4    // it has pushed: the rest of the animation
 	};
 
 	// The pushes of one skater. Step is called once on every frame of the game's ground physics.
 	//
-	// The game plays the push, and its scripts decide when: they look for it only while no other
-	// animation has their attention, and while one push is playing they look for nothing. So a
-	// push first asks, and its time starts when the game says it has started the animation
-	// (Taken). A push that is wanted while the scripts may still be busy with the last one waits
-	// for them, until a second and a half after that one was taken: so with the button held
-	// the pushes follow the game's animation, whatever its length up to there. A push nobody
-	// takes starts by itself, without the animation: after a tenth of a second if the scripts
-	// are not busy with a push.
+	// One push is one play of the game's push animation, and the animation is its clock. The game
+	// plays it, and its scripts decide when: a push that is wanted asks them (Animating), and
+	// becomes a push when a push animation is seen to run, one the game has started since or one
+	// that was running already with its foot still in the air. While the foot pushes the board is
+	// taken up to the speed the push is for, by as much as the foot has travelled: its stroke
+	// half done, half the speed is there. How strong the push is, is how long the button was
+	// down: until it was let go, or until the foot has pushed. A push the game shows no animation
+	// for does not happen: a button that stays down keeps asking, a tap gives up after three
+	// quarters of a second.
 	class PushRun {
 	public:
 		PushRun();
 		// Nothing is under way, and no press is remembered
 		void Reset();
 		// dt: seconds. speed: the board's, in the game's units per second. held: a push button
-		// is down. percent: Settings::push, more than 0. Returns the speed to add on this frame.
-		float Step(float dt, float speed, bool held, int percent, const PushTiming& timing);
-		// The game has started the animation of the push that is asking
-		void Taken();
+		// is down. percent: Settings::push, more than 0. anim: the skater's animation on this
+		// frame. profile: where the foot pushes in that animation, if it is a push animation.
+		// Returns the speed to add on this frame.
+		float Step(float dt, float speed, bool held, int percent, const PushAnim& anim, const PushProfile& profile);
 		int Phase() const { return m_phase; }
-		// From the moment a push is wanted until the foot leaves the ground: the board is being pushed
+		// From the moment a push is wanted until its foot has pushed: the board is being pushed
 		bool Active() const;
-		// The game should start its animation now (also for a moment after it has said it did:
-		// the first to ask is not always the script that plays it)
+		// The game should start its push animation now
 		bool Animating() const;
-		// For the log. The serial goes up when the foot leaves the ground.
+		// A push animation was the skater's animation on the last frame, running or at its end
+		bool AnimCurrent() const { return m_animCurrent; }
+		// The play of the animation the push goes with (PushAnim::play), from PUSH_INTO on
+		uint32_t Play() const { return m_play; }
+		// The game's scripts should not see Left and Right now, so that they get as far as the
+		// push: for a fifth of a second, then not for the next three fifths, and so on
+		bool HideTurn() const;
+		// For the log. The serial goes up when a foot has pushed.
 		uint32_t Serial() const { return m_serial; }
-		float HeldFor() const { return m_pushHold; }   // seconds the button had been down
+		float HeldFor() const { return m_pushHold; }   // seconds the button was down for it
 		float Asked() const { return m_asked; }        // units/s the push was asked to add
 		float Added() const { return m_added; }        // units/s it did add
 		float From() const { return m_from; }          // the speed it started at
+		float Down() const { return m_profile.down; }  // the shares of the animation between which its foot pushed
+		float Up() const { return m_profile.up; }
 
 	private:
+		float Pull(float speed, float dt, float units, float done);
+
 		int m_phase;
-		float m_time;       // into the phase
-		float m_since;      // since the animation started
-		float m_wait;       // how long this push waits for the game to take it
-		float m_busy;       // since the game last took a push, as far as that matters
+		bool m_animCurrent; // the skater's animation on the last frame was a push animation, ...
+		bool m_animRunning; // ... and it had not reached its end
+		uint32_t m_play;    // the play of the animation this push goes with
+		uint32_t m_seenPlay;    // the play the last frame was in
+		uint32_t m_askPlay;     // the play the frame before the push was wanted was in
+		PushProfile m_profile;  // where its foot pushes
+		float m_share;      // how far into that play the last frame was (0 to 1), ...
+		float m_shareStep;  // ... and how far the frame before it was behind
+		float m_askTime;    // how long the push has been asking with no push animation running
 		bool m_held;        // the button on the frame before
 		float m_hold;       // how long the press that is down, or the last one, has lasted
 		bool m_asking;      // a press that no push has taken up yet
 		bool m_tracking;    // the press this push came from is still down
-		float m_pushHold;   // how long that press had lasted when the foot reached the ground
-		float m_target;     // the speed the board is taken up to while the foot is on the ground
+		float m_pushHold;   // how long that press has lasted, as far as it counts for this push
+		float m_target;     // the speed the board is taken up to while the foot pushes
 		float m_asked;
 		float m_added;
 		float m_from;
 		uint32_t m_serial;
+	};
+
+	// A clock that stands in for the game's push animation. The pushes go with an animation
+	// that is read off the skater. Should the game be told to play a push three times in a row
+	// with no push animation seen on him after any of them (other scripts than the ones this
+	// was written against, say), the pushes are not lost: from then on each goes by the clock,
+	// from the moment the game is told, until a push animation is seen after all. (The game's
+	// ground script waits for the push it plays, so three times is two pushes' worth of time.)
+	extern const int kPushClockAfter;       // told this many times in a row
+	extern const float kPushClockLength;    // seconds one push takes by the clock
+	class PushClock {
+	public:
+		PushClock();
+		void Reset();
+		// The game's scripts have just been told to play a push
+		void Told();
+		// Once on every frame of the ground physics, after the look at the skater's
+		// animation. seen: he is in a push animation. dt: seconds. Returns true while the
+		// clock stands in for an animation; anim is then what one of its length would be.
+		bool Step(bool seen, float dt, PushAnim& anim);
+		// The pushes go by the clock
+		bool Blind() const { return m_blind; }
+		// For the log: goes up when the clock takes over
+		uint32_t Serial() const { return m_serial; }
+
+	private:
+		int m_told;         // times in a row the game was told and nothing was seen
+		bool m_blind;
+		bool m_running;     // a push by the clock is under way
+		float m_time;       // and has been for so long
+		uint32_t m_play;    // its number, apart from the numbers of the game's animations
+		uint32_t m_serial;
+	};
+
+	// What one play of a push animation showed of the feet
+	enum FootWhy {
+		FOOT_OK = 0,
+		FOOT_FEW = 1,       // too few looks at the feet
+		FOOT_PART = 2,      // not the whole animation was seen
+		FOOT_NO_DROP = 3,   // neither foot gets below the other: both stay on the board
+		FOOT_NO_SWEEP = 4,  // the foot that goes down does not travel along the ground
+		FOOT_SHORT = 5      // it travels for no time at all
+	};
+	struct FootResult {
+		int why;                // FOOT_OK, or why nothing came of it
+		int samples;            // looks at the feet
+		bool left;              // the foot that pushes is the first of the two
+		float drop;             // how far below the other foot it gets, in the game's units
+		float sweep;            // how far it travels along the ground down there
+		float lowFrom, lowTo;   // the shares of the animation between which it is down
+		PushProfile profile;    // the shares between which it travels, and how
+	};
+
+	// Watches the two feet through one play of a push animation and works out where the foot
+	// pushes. The foot that pushes is the one that gets lower than the other stands. It is down
+	// while it is within two fifths of that drop from its lowest point; its stroke is the way it
+	// travels along the ground there, between the two points farthest apart.
+	class FootWatch {
+	public:
+		FootWatch();
+		void Begin();
+		// share: how far into the animation (0 to 1). left, right: where the two feet are in
+		// the skater's own frame, three numbers each, the second of them the height.
+		void Sample(float share, const float* left, const float* right);
+		// The play is over. seconds: the length of the animation.
+		void End(float seconds, FootResult& out) const;
+		int Samples() const;
+
+	private:
+		enum { BINS = 128 };
+		bool m_have[BINS];
+		float m_share[BINS];
+		float m_left[BINS][3];
+		float m_right[BINS][3];
 	};
 
 	// The turning of one skater. Step is called once on every frame of the game's ground physics.
