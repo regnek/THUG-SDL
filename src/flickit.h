@@ -68,8 +68,8 @@ namespace Flickit {
 		int reloadKey;        // SDL_Scancode that reloads this section while the game runs, 0 for none
 		int debug;            // 1: log every recognized gesture
 
-		int kickflipSide;     // 0: kickflip = flick up-right, heelflip = up-left. 1: mirrored
-		int switchMirror;     // 1: riding switch mirrors every flick once more (Input::switched), as in Skate
+		int kickflipSide;     // 0: kickflip = flick up-right, heelflip = up-left (with flicksByFeet: with the right foot forward). 1: mirrored
+		int flicksByFeet;     // 1: the flicks go by the foot he has forward (Input::leftFootForward), as in Skate
 		int nollie;           // 1: stick up = nollie stance, a flick down from there = nollie (and the nollie flips)
 		int nollieTaps;       // without the game hooks: presses of the Nollie button that get from regular into nollie stance
 		int triggerGrabs;     // 1: left / right trigger = grab
@@ -191,13 +191,15 @@ namespace Flickit {
 		// The game takes Output::stance and keeps the skater in it (StanceKeeper). Without that the
 		// Nollie button is tapped (Settings::nollieTaps) as a crouch up begins.
 		bool keepsStance;
-		// He rides switch, the other foot forward (the game's own Switched). Skate's flicks go by the
-		// rider's feet, so with Settings::switchMirror they are mirrored left / right then.
-		bool switched;
+		// His left foot is forward (the game's Flipped): a regular skater in his own stance, or a goofy
+		// one riding switch. Skate's flicks go by the feet, the kickflip toward the rider's heels: with
+		// Settings::flicksByFeet they are mirrored left / right then. False where it is not known,
+		// and then KickflipSide alone decides.
+		bool leftFootForward;
 
 		Input() : now(0), rx(0.0f), ry(0.0f), leftTrigger(false), rightTrigger(false),
 			state(STATE_UNKNOWN), railCatch(false), grind(GRIND_UNKNOWN), grindReady(false), grindSerial(0),
-			railOff(false), offSide(0), flipMore(false), flipLevel(0), keepsStance(false), switched(false) {}
+			railOff(false), offSide(0), flipMore(false), flipLevel(0), keepsStance(false), leftFootForward(false) {}
 	};
 
 	struct Output {
@@ -244,8 +246,9 @@ namespace Flickit {
 		// crouches up, regular while it crouches down and on the frame a crouch up ends without a
 		// pop; STANCE_ANY otherwise, a pop included (the game's jump from nollie is a nollie).
 		int stance;
-		// The flicks are read mirrored left / right on this frame (KickflipSide, and riding switch).
-		// A gesture keeps the side it began on: it changes between gestures only.
+		// The flicks are read mirrored left / right on this frame (KickflipSide, and the left foot
+		// forward): the kickflip is the flick up-left. A gesture keeps the side it began on: it
+		// changes between gestures only.
 		bool mirrored;
 	};
 

@@ -161,7 +161,7 @@ struct Sim {
 	int state;
 	bool railCatch;
 	bool keepsStance;      // the game keeps the stance the stick asks for
-	bool switched;         // the game says he rides switch
+	bool leftFoot;         // the game says his left foot is forward
 	bool railOff;          // the game says the board is out of speed on its rail
 	int offSide;
 	FakeGame game;
@@ -171,7 +171,7 @@ struct Sim {
 	std::vector<Tilt> tilts;
 
 	explicit Sim(double rate = 60.0, int startState = STATE_GROUND) : hz(rate), clock(0.0), epoch(5000), x(0), y(0), lt(false), rt(false), state(startState), railCatch(true),
-		keepsStance(false), switched(false), railOff(false), offSide(0) {
+		keepsStance(false), leftFoot(false), railOff(false), offSide(0) {
 		SetDefaults(cfg);
 		// a grind takes its switches about three quarters of a second in
 		game.settleFrames = (int)(0.75 * rate);
@@ -191,7 +191,7 @@ struct Sim {
 		in.state = state;
 		in.railCatch = railCatch;
 		in.keepsStance = keepsStance;
-		in.switched = switched;
+		in.leftFootForward = leftFoot;
 		in.grind = game.reportedKind;
 		in.grindReady = game.reportedReady;
 		in.grindSerial = game.serial;
@@ -1124,9 +1124,9 @@ static void testRailPop(double hz) {
 		expectRailPop(s, m, DIR_L);
 	}
 	{
-		// ... and riding switch the other way round: up, flick down-left
+		// ... and with the left foot forward the other way round: up, flick down-left
 		Sim s(hz);
-		s.switched = true;
+		s.leftFoot = true;
 		ollieIntoAir(s);
 		settleOnRail(s, GRIND_NOSEGRIND);
 		const size_t m = s.mark();

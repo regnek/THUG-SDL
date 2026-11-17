@@ -18,32 +18,38 @@ Right stick down           crouch, as deep as the stick goes (a third of the
                            way is enough; deeper = a higher ollie)
 Flick away from there      ollie
 Back to the centre         stand up, no ollie
-Flick up-right / up-left   kickflip / heelflip (keep the stick there:
+Flick up-left / up-right   kickflip / heelflip (keep the stick there:
                            double, triple, if there is air for it)
-Drag to the right          pop shove-it
+Drag to the left           pop shove-it
+                           (all of these with the left foot forward; with
+                           the right foot forward they are mirrored)
 Right stick up             crouch for a nollie, in THUG's nollie stance
 Flick away from up         nollie; the flicks above, upside down, are the
-                           nollie flips (up, flick down-right = nollie
+                           nollie flips (up, flick down-left = nollie
                            kickflip)
-Riding switch              every flick the other way round, left for right
 Triggers                   grabs
 Bumpers                    spin + nollie / spin + revert, both = get off the board
 Flip or Ollie, on the ground   push (tap = a little, hold = a lot)
 Right stick click          Flickit off / on (for looking around)
 
-New in this build: switch turns the flicks round
-------------------------------------------------
-  - As in Skate, the flicks go by the skater's feet: riding switch, every
-    flick is mirrored left / right. Switch, the kickflip is down, flick
-    up-left, the heelflip up-right, the pop shove-it a drag to the left,
-    and the nollie flicks swap sides the same way. Back in his own stance
-    they are as before.
+New in this build: the flicks go by his feet
+--------------------------------------------
+  - As in Skate, the kickflip goes toward the skater's heels. Left foot
+    forward (a regular skater in his own stance): the kickflip is down,
+    flick up-left, the heelflip up-right, the pop shove-it a drag to the
+    left. Right foot forward (a goofy skater, or a regular one riding
+    switch): all of it mirrored, the kickflip up-right. The varials and the
+    nollie flicks swap sides the same way.
+  - Which foot is forward is read from the game from the moment he is on
+    his board, so a level that starts with either foot forward is right
+    from the start, and riding switch turns the flicks round.
   - A flick keeps the side it began on: switching stance in a crouch
     changes the next flick, not that one.
-  - SwitchMirror=0 in the [Flickit] section keeps the flicks the same in
-    either stance (as THUG keeps its trick buttons).
-  - With the console on, the log says "Flickit: riding switch: the kickflip
-    is the flick up-left now", and the same when he rides regular again.
+  - FlicksByFeet=0 in the [Flickit] section keeps the flicks the same
+    whatever his feet (KickflipSide=0: kickflip up-right, 1: up-left).
+  - With the console on, the log says which foot is forward and where the
+    kickflip is ("Flickit: left foot forward (regular): the kickflip is the
+    flick up-left") when he is first seen and whenever it changes.
 
 Nollies (the last build)
 ------------------------

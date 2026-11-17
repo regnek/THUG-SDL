@@ -339,7 +339,8 @@ uint32_t flickitPoseLostSerial = 0;                      // for the log: the las
 uint32_t flickitPoseMissSerial = 0;                      // for the log: the last crouch that found no pose to stand in
 uint32_t flickitPoseUnderSerial = 0;                     // for the log: the last standing pose started under a crouch
 uint32_t flickitStanceSerial = 0;                        // for the log: the last change of stance the stick asked for
-bool flickitMirrored = false;                            // for the log: the flicks were read mirrored on the last frame
+bool flickitMirrored = false;                            // for the log: the flicks were read mirrored on the last frame,
+bool flickitMirrorTold = false;                          // and that was told since the skater was last seen
 FlickitGame::Skater flickitFlipSkater;                   // the skater as last read, for the log of a held flip trick
 uint32_t flickitFlipToldLevel = 0;                       // the last held flip trick the log said had no air for another rotation
 uint32_t flickitSpinSerial = 0;                          // for the log: the last air Flickit turned the skater in
@@ -398,7 +399,7 @@ void loadFlickitSettings() {
 	s.debug = (int)GetPrivateProfileInt(FLICKIT_SECTION, "Debug", s.debug, configFile);
 
 	s.kickflipSide = (int)GetPrivateProfileInt(FLICKIT_SECTION, "KickflipSide", s.kickflipSide, configFile);
-	s.switchMirror = (int)GetPrivateProfileInt(FLICKIT_SECTION, "SwitchMirror", s.switchMirror, configFile);
+	s.flicksByFeet = (int)GetPrivateProfileInt(FLICKIT_SECTION, "FlicksByFeet", s.flicksByFeet, configFile);
 	s.nollie = (int)GetPrivateProfileInt(FLICKIT_SECTION, "Nollie", s.nollie, configFile);
 	s.nollieTaps = (int)GetPrivateProfileInt(FLICKIT_SECTION, "NollieTaps", s.nollieTaps, configFile);
 	s.triggerGrabs = (int)GetPrivateProfileInt(FLICKIT_SECTION, "TriggerGrabs", s.triggerGrabs, configFile);
@@ -468,8 +469,8 @@ void loadFlickitSettings() {
 		flickitRecognizers[i].UsePatterns(flickitPatterns.Count() > 0 ? &flickitPatterns : nullptr);
 	}
 
-	Log::TypedLog(CHN_SDL, "Flickit %s: kickflip side %d, switch mirror %d, trigger grabs %d, auto grind %d, nollie %d, tricks from %s\n",
-		s.enabled ? "enabled" : "disabled", s.kickflipSide, s.switchMirror, s.triggerGrabs, s.autoGrind, s.nollie,
+	Log::TypedLog(CHN_SDL, "Flickit %s: kickflip side %d, flicks by the feet %d, trigger grabs %d, auto grind %d, nollie %d, tricks from %s\n",
+		s.enabled ? "enabled" : "disabled", s.kickflipSide, s.flicksByFeet, s.triggerGrabs, s.autoGrind, s.nollie,
 		flickitPatterns.Count() > 0 ? "stick patterns" : "built-in directions");
 	if (s.enabled) {
 		if (hooks) {
@@ -828,7 +829,7 @@ int flickitPoll(device* dev, SDL_GameController* controller, Flickit::Output* ou
 			in.state = skater.state;
 			in.railCatch = FlickitGame::Installed() && flickitSettings.grindCatch;
 			in.keepsStance = FlickitGame::Installed();
-			in.switched = skater.switched;
+			in.leftFootForward = skater.leftFootForward;
 			in.grind = skater.grind;
 			in.grindReady = skater.grindReady;
 			in.grindSerial = skater.grindSerial;
@@ -848,10 +849,17 @@ int flickitPoll(device* dev, SDL_GameController* controller, Flickit::Output* ou
 
 	flickitRecognizers[port].Update(in, flickitSettings, *out);
 
-	if (flickitSettings.debug && port == 0 && out->mirrored != flickitMirrored) {
-		// Riding switch turns the flicks round, as in Skate: the kickflip is on the other side
-		Log::TypedLog(CHN_SDL, "Flickit: %s: the kickflip is the flick up-%s now\n",
-			in.switched ? "riding switch" : "riding regular", out->mirrored ? "left" : "right");
+	if (port == 0 && !flickitSeesSkater) {
+		flickitMirrorTold = false;
+	}
+	if (flickitSettings.debug && port == 0 && flickitSeesSkater && (out->mirrored != flickitMirrored || !flickitMirrorTold)) {
+		// The flicks go by his feet, as in Skate: the kickflip toward his heels. Told as he is first
+		// seen (a level starts in either stance) and whenever the side changes.
+		const FlickitGame::Skater& sk = flickitFlipSkater;
+		Log::TypedLog(CHN_SDL, "Flickit: %s foot forward (%s%s): the kickflip is the flick up-%s\n",
+			sk.leftFootForward ? "left" : "right", sk.goofy ? "goofy" : "regular", sk.switched ? ", riding switch" : "",
+			out->mirrored ? "left" : "right");
+		flickitMirrorTold = true;
 	}
 	if (port == 0) {
 		flickitMirrored = out->mirrored;

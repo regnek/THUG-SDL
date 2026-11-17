@@ -81,6 +81,8 @@ namespace FlickitGame {
 	struct Skater {
 		int state;              // Flickit::SkaterState
 		bool skating;           // on the board: not on foot, not driving
+		bool leftFootForward;   // his left foot is forward (the game's Flipped)
+		bool goofy;             // his profile's stance is goofy: his right foot forward in his own stance
 		bool switched;          // he rides switch, the other foot forward (the game's Switched)
 		int grind;              // Flickit::Grind the grind script reported, GRIND_UNKNOWN if it has not yet
 		bool grindReady;        // that script takes a switch to another grind now

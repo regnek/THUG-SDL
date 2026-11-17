@@ -69,7 +69,7 @@ namespace Flickit {
 		s.debug = 1;
 
 		s.kickflipSide = 0;
-		s.switchMirror = 1;
+		s.flicksByFeet = 1;
 		s.nollie = 1;
 		s.nollieTaps = 2;
 		s.triggerGrabs = 1;
@@ -129,7 +129,7 @@ namespace Flickit {
 		s.enabled = s.enabled ? 1 : 0;
 		s.debug = s.debug ? 1 : 0;
 		s.kickflipSide = s.kickflipSide ? 1 : 0;
-		s.switchMirror = s.switchMirror ? 1 : 0;
+		s.flicksByFeet = s.flicksByFeet ? 1 : 0;
 		s.nollie = s.nollie ? 1 : 0;
 		s.nollieTaps = Clamp(s.nollieTaps, 1, 3);
 		s.triggerGrabs = s.triggerGrabs ? 1 : 0;
@@ -3354,11 +3354,12 @@ namespace Flickit {
 			Popped(now, cfg);
 		}
 
-		// Which way round the flicks are read: KickflipSide, and mirrored once more while he rides
-		// switch, since Skate's flicks go by the rider's feet (switch, the kickflip is on the other
-		// side). A gesture keeps the side it began on: the side is taken up between gestures only,
-		// and patterns half drawn the other way round start over.
-		const bool mirror = (cfg.kickflipSide != 0) != (cfg.switchMirror != 0 && in.switched);
+		// Which way round the flicks are read. Skate's go by the rider's feet: the kickflip toward his
+		// heels, up-right with the right foot forward (as the patterns are written), up-left with the
+		// left foot forward, so a regular rider's are mirrored, and riding switch turns them round
+		// again. KickflipSide mirrors all of it. A gesture keeps the side it began on: the side is
+		// taken up between gestures only, and patterns half drawn the other way round start over.
+		const bool mirror = (cfg.kickflipSide != 0) != (cfg.flicksByFeet != 0 && in.leftFootForward);
 		if (m_phase == PH_IDLE && mirror != m_mirror) {
 			m_mirror = mirror;
 			m_matcher.Reset();
@@ -3392,7 +3393,7 @@ namespace Flickit {
 				m_tickAccum = 0;
 			}
 			m_tickLast = now;
-			// KickflipSide mirrors the stick, and so does riding switch: every pattern is mirrored with it
+			// KickflipSide mirrors the stick, and so does the left foot forward: every pattern is mirrored with it
 			const float px = m_mirror ? -in.rx : in.rx;
 			// On a rail a flick pops in either direction, so the patterns that start at the top count there
 			const bool nolliePatterns = cfg.nollie != 0 || onRail;

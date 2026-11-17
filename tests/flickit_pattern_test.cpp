@@ -259,7 +259,7 @@ struct Step {
 	int hold;     // then stay this long
 };
 
-static Run play(Recognizer& rec, const Settings& cfg, const std::vector<Step>& steps, int hz, bool switched = false) {
+static Run play(Recognizer& rec, const Settings& cfg, const std::vector<Step>& steps, int hz, bool leftFoot = false) {
 	Run r;
 	r.pops = r.flipPresses = r.gestures = 0;
 	r.flipDir = DIR_NONE;
@@ -293,7 +293,7 @@ static Run play(Recognizer& rec, const Settings& cfg, const std::vector<Step>& s
 			in.ry = -cy;    // the recognizer takes y up
 			in.leftTrigger = false;
 			in.rightTrigger = false;
-			in.switched = switched;
+			in.leftFootForward = leftFoot;
 			Output out;
 			rec.Update(in, cfg, out);
 			if (out.ollie) {
@@ -394,8 +394,9 @@ static void testRecognizer(int hz) {
 		Run r = play(rec, mirrored, { at(6, 1.0, 60, 300), at(10, 1.0, 35, 120) }, hz);
 		CHECK(r.flipPresses == 1 && r.flipDir == DIR_L && r.lastPattern == "Kickflip");
 	}
-	{   // riding switch mirrors the patterns as KickflipSide does: the kickflip is at 10 o'clock,
-		// and drawn at 2 o'clock it is the heelflip. KickflipSide = 1 on top turns them back.
+	{   // the left foot forward mirrors the patterns as KickflipSide does (they are written for the
+		// right foot forward): the kickflip is at 10 o'clock, and drawn at 2 o'clock it is the
+		// heelflip. KickflipSide = 1 on top turns them back.
 		Recognizer rec;
 		rec.UsePatterns(&set);
 		Run r = play(rec, cfg, { at(6, 1.0, 60, 300), at(10, 1.0, 35, 120) }, hz, true);
@@ -480,10 +481,11 @@ static int drawFile(const char* path) {
 	cfg.nollie = 1;
 	Sanitize(cfg);
 
-	// Every pattern as it is, and mirrored left / right while riding switch: both come back as themselves
-	for (int switched = 0; switched < 2; switched++) {
+	// Every pattern as it is (the right foot forward), and mirrored left / right with the left foot
+	// forward: both come back as themselves
+	for (int leftFoot = 0; leftFoot < 2; leftFoot++) {
 		int same = 0, sameTrick = 0, other = 0, nothing = 0, unknown = 0;
-		std::printf("%s\n", switched ? "drawn mirrored, riding switch:" : "drawn as they are:");
+		std::printf("%s\n", leftFoot ? "drawn mirrored, the left foot forward:" : "drawn as they are, the right foot forward:");
 		for (int i = 0; i < n; i++) {
 			const Pattern& p = set.At(i);
 			if (!p.known) {
@@ -493,7 +495,7 @@ static int drawFile(const char* path) {
 			std::vector<Step> steps;
 			for (int k = 0; k < p.count; k++) {
 				Step s;
-				s.x = switched ? -p.x[k] : p.x[k];
+				s.x = leftFoot ? -p.x[k] : p.x[k];
 				s.y = p.y[k];
 				s.ms = (k == 0) ? 60 : 35;
 				s.hold = (k == 0) ? 250 : (k == p.count - 1 ? 120 : 0);
@@ -501,7 +503,7 @@ static int drawFile(const char* path) {
 			}
 			Recognizer rec;
 			rec.UsePatterns(&set);
-			Run r = play(rec, cfg, steps, 60, switched != 0);
+			Run r = play(rec, cfg, steps, 60, leftFoot != 0);
 			const Pattern* got = r.lastPattern.empty() ? 0 : Find(set, r.lastPattern.c_str());
 			const int wantPresses = p.slot == DIR_NONE ? 0 : p.taps;
 			if (got && std::strcmp(got->name, p.name) == 0 && r.flipPresses == wantPresses) {

@@ -715,7 +715,10 @@ namespace FlickitGame {
 		{ 0x00578C8C, 7, { 0x3D, 0x0B, 0x9D, 0xAB, 0x9F, 0x74, 0x34 }, "stance commands: InPressure" },
 		{ 0x00578CC7, 12, { 0x33, 0xC0, 0x38, 0x41, 0x1E, 0x5B, 0x0F, 0x95, 0xC0, 0xC2, 0x0C, 0x00 }, "InPressure" },
 		{ 0x00578D25, 13, { 0xC7, 0x06, 0x40, 0x72, 0x64, 0x00, 0xC7, 0x46, 0x04, 0x01, 0x33, 0xFC, 0x21 }, "stance component: its type" },
-		// riding switch: the game's own test, and the script command Switched that answers with it
+		// the foot forward: a skater starts flipped when his profile is regular, not when it is goofy;
+		// riding switch is the game's own test, which the script command Switched answers with
+		{ 0x00517122, 18, { 0x80, 0xBE, 0x34, 0x01, 0x00, 0x00, 0x00, 0x8B, 0x8E, 0x7C, 0x02, 0x00, 0x00, 0x8B, 0xB9, 0xD0, 0x04, 0x00 }, "a skater's start: goofy" },
+		{ 0x00517135, 12, { 0x0F, 0x94, 0xC0, 0x83, 0xC7, 0x28, 0x38, 0x07, 0x74, 0x0A, 0x88, 0x07 }, "a skater's start: flipped unless goofy" },
 		{ 0x00451FE0, 18, { 0x8B, 0x41, 0x0C, 0x80, 0xB8, 0x34, 0x01, 0x00, 0x00, 0x00, 0x74, 0x0B, 0x8B, 0x89, 0xD0, 0x04, 0x00, 0x00 }, "IsSwitched: goofy" },
 		{ 0x00451FF2, 18, { 0x0F, 0xB6, 0x41, 0x28, 0xC3, 0x8B, 0x91, 0xD0, 0x04, 0x00, 0x00, 0x33, 0xC0, 0x38, 0x42, 0x28, 0x0F, 0x94 }, "IsSwitched: flipped" },
 		{ 0x00568248, 17, { 0x81, 0xFF, 0x0B, 0xB8, 0x66, 0x8F, 0x0F, 0x85, 0xA4, 0x09, 0x00, 0x00, 0xE8, 0x87, 0x9D, 0xEE, 0xFF }, "Switched" },
@@ -1338,9 +1341,13 @@ namespace FlickitGame {
 		}
 		// The game's own test (Skating): not driving, and the physics are the board's
 		out.skating = state[STATE_DRIVING] == 0 && *(const int32_t*)(state + STATE_PHYSICS) == 0;
-		// Riding switch, the other foot forward: the game's own test (IsSwitched, which the script
-		// command Switched answers): flipped for a goofy skater, not flipped for a regular one
-		out.switched = skater[OBJECT_GOOFY] != 0 ? state[STATE_FLIPPED] != 0 : state[STATE_FLIPPED] == 0;
+		// Which foot is forward: the game's Flipped. A skater starts flipped when his profile is
+		// regular and not when it is goofy (0x00517122): flipped, his left foot is forward. Riding
+		// switch is the other way round from his profile: the game's own test (IsSwitched, which the
+		// script command Switched answers), here for the log.
+		out.leftFootForward = state[STATE_FLIPPED] != 0;
+		out.goofy = skater[OBJECT_GOOFY] != 0;
+		out.switched = out.goofy ? out.leftFootForward : !out.leftFootForward;
 
 		out.flipMore = false;
 		out.flipDecide = false;

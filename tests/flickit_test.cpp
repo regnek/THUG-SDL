@@ -41,13 +41,13 @@ struct Sim {
 	float x, y;
 	bool lt, rt;
 	int state;            // what the game says the skater is doing (STATE_UNKNOWN: nothing)
-	bool switched;        // the game says he rides switch
+	bool leftFoot;        // the game says his left foot is forward
 	bool flipMore;        // the game has one more rotation of the flip trick to give
 	uint32_t flipLevel;
 	std::vector<Output> outs;
 	std::vector<uint32_t> times;
 
-	explicit Sim(double rate = 60.0, uint32_t start = 1000, bool centered = true) : hz(rate), clock(0.0), epoch(start), x(0), y(0), lt(false), rt(false), state(STATE_UNKNOWN), switched(false), flipMore(false), flipLevel(0) {
+	explicit Sim(double rate = 60.0, uint32_t start = 1000, bool centered = true) : hz(rate), clock(0.0), epoch(start), x(0), y(0), lt(false), rt(false), state(STATE_UNKNOWN), leftFoot(false), flipMore(false), flipLevel(0) {
 		SetDefaults(cfg);
 		if (centered) {
 			hold(50);     // the stick rests at the center before anything happens, as it does in play
@@ -64,7 +64,7 @@ struct Sim {
 		in.leftTrigger = lt;
 		in.rightTrigger = rt;
 		in.state = state;
-		in.switched = switched;
+		in.leftFootForward = leftFoot;
 		in.flipMore = flipMore;
 		in.flipLevel = flipLevel;
 		Output o;
@@ -365,34 +365,36 @@ static void testMirror() {
 	expectFlip(s, DIR_L, DIR_D, DIR_UL);
 }
 
-// Riding switch the flicks go the other way round, as in Skate, whose flicks go by the rider's feet
-static void testSwitch(double hz) {
-	g_case = "switch: the kickflip is on the other side";
+// The flicks go by the foot he has forward, as in Skate: the kickflip toward his heels. The flicks
+// as written (and as the default Sim has them) are a rider's with the right foot forward: a goofy
+// one in his own stance, or a regular one riding switch. The left foot forward mirrors them.
+static void testFeet(double hz) {
+	g_case = "left foot forward: the kickflip is down, flick up-left";
 	{
 		Sim s(hz);
-		s.switched = true;
+		s.leftFoot = true;
 		flick(s, D, UL);
 		expectFlip(s, DIR_L, DIR_D, DIR_UL);
 		CHECK(s.outs.back().mirrored);
 	}
-	g_case = "switch: and up-right is the heelflip";
+	g_case = "left foot forward: and up-right is the heelflip";
 	{
 		Sim s(hz);
-		s.switched = true;
+		s.leftFoot = true;
 		flick(s, D, UR);
 		expectFlip(s, DIR_R, DIR_D, DIR_UR);
 	}
-	g_case = "switch: the varial kickflip from down-right";
+	g_case = "left foot forward: the varial kickflip from down-right";
 	{
 		Sim s(hz);
-		s.switched = true;
+		s.leftFoot = true;
 		flick(s, DR, UL);
 		expectFlip(s, DIR_DL, DIR_DR, DIR_UL);
 	}
-	g_case = "switch: the pop shove-it is a drag to the left";
+	g_case = "left foot forward: the pop shove-it is a drag to the left";
 	{
 		Sim s(hz);
-		s.switched = true;
+		s.leftFoot = true;
 		s.moveTo(0, -1, 60);
 		s.hold(250);
 		s.arcTo(L, 90);
@@ -401,39 +403,60 @@ static void testSwitch(double hz) {
 		s.hold(400);
 		expectFlip(s, DIR_D, DIR_D, DIR_L);
 	}
-	g_case = "switch: the nollie kickflip, up and down-left";
+	g_case = "left foot forward: the nollie kickflip, up and down-left";
 	{
 		Sim s(hz);
-		s.switched = true;
+		s.leftFoot = true;
 		flick(s, U, DL);
 		expectFlip(s, DIR_L, DIR_U, DIR_DL);
 	}
-	g_case = "switch with KickflipSide=1: back the first way round";
+	g_case = "right foot forward: the kickflip is up-right";
+	{
+		Sim s(hz);
+		flick(s, D, UR);
+		expectFlip(s, DIR_L, DIR_D, DIR_UR);
+		CHECK(!s.outs.back().mirrored);
+	}
+	g_case = "the left foot forward from the very first frame";
+	{
+		// A level can start with either foot forward: the side is there from the start
+		Sim s(hz, 1000, false);
+		s.leftFoot = true;
+		s.hold(50);
+		CHECK(s.outs.front().mirrored);
+		flick(s, D, UL);
+		expectFlip(s, DIR_L, DIR_D, DIR_UL);
+	}
+	g_case = "KickflipSide=1 turns it all round";
 	{
 		Sim s(hz);
 		s.cfg.kickflipSide = 1;
-		s.switched = true;
+		s.leftFoot = true;
 		flick(s, D, UR);
 		expectFlip(s, DIR_L, DIR_D, DIR_UR);
 		CHECK(!s.outs.back().mirrored);
+		Sim t(hz);
+		t.cfg.kickflipSide = 1;
+		flick(t, D, UL);
+		expectFlip(t, DIR_L, DIR_D, DIR_UL);
 	}
-	g_case = "SwitchMirror=0: the same either way";
+	g_case = "FlicksByFeet=0: the same whatever his feet";
 	{
 		Sim s(hz);
-		s.cfg.switchMirror = 0;
-		s.switched = true;
+		s.cfg.flicksByFeet = 0;
+		s.leftFoot = true;
 		flick(s, D, UR);
 		expectFlip(s, DIR_L, DIR_D, DIR_UR);
 		CHECK(!s.outs.back().mirrored);
 	}
-	g_case = "switch: a flick keeps the side it began on";
+	g_case = "a flick keeps the side it began on";
 	{
-		// He goes switch while the stick crouches (THUG's switch button): the flick out of that
-		// crouch is still read as it began, and the next one the new way round
+		// He switches stance while the stick crouches (THUG's switch button): the flick out of
+		// that crouch is still read as it began, and the next one the new way round
 		Sim s(hz);
 		s.moveTo(0, -1, 60);
 		s.hold(150);
-		s.switched = true;
+		s.leftFoot = true;
 		s.hold(100);
 		CHECK(!s.outs.back().mirrored);
 		const float b = UR * kPi / 180.0f;
@@ -443,10 +466,10 @@ static void testSwitch(double hz) {
 		expectFlip(s, DIR_L, DIR_D, DIR_UR);
 		CHECK(s.outs.back().mirrored);
 		Sim t(hz);
-		t.switched = true;
+		t.leftFoot = true;
 		t.hold(50);
 		CHECK(t.outs.back().mirrored);
-		t.switched = false;                     // back to regular at the centre: at once
+		t.leftFoot = false;                     // back at the centre the side follows at once
 		t.hold(20);
 		CHECK(!t.outs.back().mirrored);
 		flick(t, D, UR);
@@ -1275,7 +1298,7 @@ static void testFuzz(double hz, unsigned seed) {
 		s.y += (ty - s.y) * speed;
 		if (r % 97 == 0) s.lt = !s.lt;
 		if (r % 89 == 0) s.rt = !s.rt;
-		if (r % 211 == 0) s.switched = !s.switched;   // the switch button, a 180 landed
+		if (r % 211 == 0) s.leftFoot = !s.leftFoot;   // the switch button, a 180 landed
 		// The side changes only between gestures: never in a crouch (Ollie held on the frame before,
 		// the crouch not over: a stand-up can keep the button down a frame longer while a trick
 		// press is entered)
@@ -1349,7 +1372,7 @@ int main() {
 		testCrouchPose(hz);
 		testHeldFlip(hz);
 		testNollie(hz);
-		testSwitch(hz);
+		testFeet(hz);
 		testGrabs(hz);
 		testDoubleFlick(hz);
 		testFuzz(hz, 0xC0FFEEu + (unsigned)i);
