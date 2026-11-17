@@ -83,9 +83,11 @@ three settings.
     which animation the skater is in and how far into it. No animation, no
     push: there is no speed without a foot any more.
   - Where the foot pushes, the mod finds out by watching the skater's feet
-    while the animation plays: the speed comes while the foot is on the
-    ground. It knows after the first push of a session; that first one goes
-    by PushFootDown and PushFootUp.
+    while the animation plays: the speed comes as the foot comes down
+    beside the board, slides back along the ground and goes on back as the
+    leg follows through, about a quarter of a second. It knows after the
+    first push of a session; that first one goes by PushFootDown and
+    PushFootUp.
   - If the speed still does not sit on the foot: set Console=1 under
     [Logger] in thugsdl.ini, push a dozen times, and look for the lines
     "Flickit: watched the feet in ..." and "Flickit: push with ...". They
@@ -115,8 +117,8 @@ three settings.
   PushOnOllie=1   0 = only the Flip button pushes
   PushOverTurn=1  0 = in a turn the game shows the turn, and no push
   PushMeasure=1   0 = the feet are not watched, the next two say it all
-  PushFootDown=30 where in the push animation the foot starts to push and
-  PushFootUp=62   where it has pushed, in percent of the animation
+  PushFootDown=8  where in the push animation the foot starts to push and
+  PushFootUp=32   where it has pushed, in percent of the animation
   Coast=100       percent of Skate's rolling resistance. 0 = THUG's friction
   Steering=100    percent of Skate's grip. 200 = turns at speed about as
                   THUG does, 0 = THUG's own turning

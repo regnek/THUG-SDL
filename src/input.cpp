@@ -616,21 +616,21 @@ static void flickitLogGame(const FlickitGame::Skater& sk, uint32_t now) {
 		flickitFootSerial = sk.footSerial;
 		const char* toe = sk.foot.left ? "Bone_Toe_L" : "Bone_Toe_R";
 		if (sk.foot.why == Flickit::FOOT_OK && sk.foot.swept) {
-			Log::TypedLog(CHN_SDL, "Flickit: watched the feet in %s (%.2f s, %d looks): %s goes %.1f units below the other foot, down to %.1f, and is on the ground from %.0f%% to %.0f%% of the animation. There it travels %.1f units, from %.0f%% to %.0f%%: pushes with it get their speed as it travels\n",
-				sk.footAnim, sk.footLength, sk.foot.samples, toe, sk.foot.drop, sk.foot.floor,
+			Log::TypedLog(CHN_SDL, "Flickit: watched the feet in %s (%.2f s, %d looks): %s goes down to %.1f, %.1f below where the other foot stands, and is on the ground from %.0f%% to %.0f%% of the animation. It goes back %.1f units from %.0f%% to %.0f%%: pushes get their speed as it goes\n",
+				sk.footAnim, sk.footLength, sk.foot.samples, toe, sk.foot.floor, sk.foot.drop,
 				sk.foot.lowFrom * 100.0f, sk.foot.lowTo * 100.0f, sk.foot.sweep, sk.foot.profile.down * 100.0f, sk.foot.profile.up * 100.0f);
 		}
 		else if (sk.foot.why == Flickit::FOOT_OK) {
-			Log::TypedLog(CHN_SDL, "Flickit: watched the feet in %s (%.2f s, %d looks): %s goes %.1f units below the other foot, down to %.1f, and is on the ground from %.0f%% to %.0f%% of the animation, where it moves %.1f units: pushes with it get their speed while it is on the ground\n",
-				sk.footAnim, sk.footLength, sk.foot.samples, toe, sk.foot.drop, sk.foot.floor,
+			Log::TypedLog(CHN_SDL, "Flickit: watched the feet in %s (%.2f s, %d looks): %s goes down to %.1f, %.1f below where the other foot stands, and is on the ground from %.0f%% to %.0f%% of the animation, but goes back only %.1f units: pushes get their speed while it is on the ground\n",
+				sk.footAnim, sk.footLength, sk.foot.samples, toe, sk.foot.floor, sk.foot.drop,
 				sk.foot.lowFrom * 100.0f, sk.foot.lowTo * 100.0f, sk.foot.sweep);
 		}
 		else if (sk.foot.why == Flickit::FOOT_SHORT) {
-			Log::TypedLog(CHN_SDL, "Flickit: watched the feet in %s (%.2f s, %d looks) and found no foot pushing: %s goes %.1f units below the other foot, but is on the ground only from %.0f%% to %.0f%% of the animation. Pushes with it go by another push animation or by PushFootDown and PushFootUp\n",
-				sk.footAnim, sk.footLength, sk.foot.samples, toe, sk.foot.drop, sk.foot.lowFrom * 100.0f, sk.foot.lowTo * 100.0f);
+			Log::TypedLog(CHN_SDL, "Flickit: watched the feet in %s (%.2f s, %d looks) and found no foot pushing: %s goes %.1f below where the other foot stands, but is on the ground only from %.0f%% to %.0f%% of the animation and goes back %.1f units. Pushes with it go by another push animation or by PushFootDown and PushFootUp\n",
+				sk.footAnim, sk.footLength, sk.foot.samples, toe, sk.foot.drop, sk.foot.lowFrom * 100.0f, sk.foot.lowTo * 100.0f, sk.foot.sweep);
 		}
 		else {
-			Log::TypedLog(CHN_SDL, "Flickit: watched the feet in %s (%.2f s, %d looks) and found no foot pushing: %s (the lower foot gets %.1f units below the other). Pushes with it go by another push animation or by PushFootDown and PushFootUp\n",
+			Log::TypedLog(CHN_SDL, "Flickit: watched the feet in %s (%.2f s, %d looks) and found no foot pushing: %s (the lower foot gets %.1f below where the other stands). Pushes with it go by another push animation or by PushFootDown and PushFootUp\n",
 				sk.footAnim, sk.footLength, sk.foot.samples,
 				sk.foot.why == Flickit::FOOT_NO_DROP ? "neither foot gets below the other" : "the feet could not be read on enough frames",
 				sk.foot.drop);

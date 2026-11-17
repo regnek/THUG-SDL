@@ -653,15 +653,15 @@ static void testPushing() {
 		CHECK_EQ(s.pushOnOllie, 1);
 		CHECK_EQ(s.pushOverTurn, 1);
 		CHECK_EQ(s.pushMeasure, 1);
-		CHECK_EQ(s.pushFootDown, 30);
-		CHECK_EQ(s.pushFootUp, 62);
+		CHECK_EQ(s.pushFootDown, 8);
+		CHECK_EQ(s.pushFootUp, 32);
 		CHECK_EQ(s.coast, 100);
 		CHECK_EQ(s.steering, 100);
 		Sanitize(s);
 		CHECK_EQ(s.push, 100);
 		CHECK_EQ(s.pushMeasure, 1);
-		CHECK_EQ(s.pushFootDown, 30);
-		CHECK_EQ(s.pushFootUp, 62);
+		CHECK_EQ(s.pushFootDown, 8);
+		CHECK_EQ(s.pushFootUp, 32);
 		CHECK_EQ(s.coast, 100);
 		CHECK_EQ(s.steering, 100);
 		// 0 is THUG's own; anything else stays within reason
@@ -2324,6 +2324,120 @@ static void testFeet() {
 		CHECK(near(PushDone(r.profile, 0.475f), 0.5, 0.03));
 	}
 
+	g_case = "feet: a push the way THUG's animations have it, from what was before";
+	{
+		// The game blends into its push animation from what the skater was doing. In a row
+		// of pushes the foot comes in from the front (the case below). From a standstill it
+		// may be on the ground already and come forward a little before it goes back; from a
+		// pose with the foot on the tail it comes forward from there first, and is blended so
+		// that it does not get all the way down. Whatever came before, the stroke is the way
+		// back from where the foot is farthest forward.
+		for (int before = 0; before < 2; before++) {
+			FootWatch w;
+			for (int k = 0; k < 58; k++) {
+				const double share = k / 58.0;
+				double y, z;
+				if (before == 0) {
+					// on the ground at the start, forward 2 units, then back
+					z = share < 0.08 ? -0.2 + 2.0 * smooth(share / 0.08) : (share < 0.345 ? 1.8 - 48.8 * smooth((share - 0.08) / 0.265) : -47.0 + 65.0 * smooth((share - 0.345) / 0.655));
+					y = share < 0.17 ? 0.0 : (share < 0.42 ? 30.0 * smooth((share - 0.17) / 0.25) : 30.0 - 20.0 * smooth((share - 0.42) / 0.58));
+				}
+				else {
+					// on the tail at the start (12 back), forward to 6.6 back, then back; down to 1.3 only
+					z = share < 0.10 ? -12.3 + 5.7 * smooth(share / 0.10) : (share < 0.345 ? -6.6 - 40.4 * smooth((share - 0.10) / 0.245) : -47.0 + 65.0 * smooth((share - 0.345) / 0.655));
+					y = share < 0.17 ? 5.0 - 3.7 * smooth(share / 0.17) : (share < 0.42 ? 1.3 + 28.7 * smooth((share - 0.17) / 0.25) : 30.0 - 20.0 * smooth((share - 0.42) / 0.58));
+				}
+				const float right[3] = { -10.0f, (float)y, (float)z };
+				const float left[3] = { -1.0f, 5.4f, 9.3f };
+				w.Sample((float)share, left, right);
+			}
+			FootResult r;
+			w.End(0.97f, r);
+			CHECK_EQ(r.why, FOOT_OK);
+			CHECK(r.swept);
+			CHECK(!r.left);
+			CHECK(near(r.board, 5.4, 1e-5));
+			// the stroke starts where the foot is farthest forward, and ends farthest back
+			const double front = before == 0 ? 0.08 : 0.10;
+			CHECK(near(r.profile.down, front, 0.03));
+			CHECK(r.profile.up > 0.30 && r.profile.up < 0.35);
+			CHECK(near(r.sweep, before == 0 ? 48.8 : 40.4, 1.5));
+		}
+	}
+
+	g_case = "feet: a push the way THUG's animations have it";
+	{
+		// Made up here to the shape the game's push animations have in the skater's frame:
+		// the foot comes forward high, comes down beside the board, is on the ground for a
+		// moment as it slides back, goes on back as it rises high behind the skater, and swings
+		// forward again. The other foot stands on the board. The stroke is all of the way back,
+		// from where the foot comes below the board to where it is farthest back.
+		FootWatch w;
+		for (int k = 0; k < 58; k++) {
+			const double share = k / 58.0;
+			const double z = share < 0.345 ? 18.0 - 65.0 * smooth(share / 0.345) : -47.0 + 65.0 * smooth((share - 0.345) / 0.655);
+			double y;
+			if (share < 0.10) y = 10.0 - 10.0 * smooth(share / 0.10);
+			else if (share < 0.16) y = 0.0;
+			else if (share < 0.42) y = 30.0 * smooth((share - 0.16) / 0.26);
+			else if (share < 0.82) y = 30.0 - 25.0 * smooth((share - 0.42) / 0.40);
+			else y = 5.0 + 5.0 * smooth((share - 0.82) / 0.18);
+			const float right[3] = { -10.0f, (float)y, (float)z };
+			const float left[3] = { -1.0f, (float)(5.2 + 0.2 * sin(6.2831853 * share)), 9.3f };
+			w.Sample((float)share, left, right);
+		}
+		FootResult r;
+		w.End(0.97f, r);
+		CHECK_EQ(r.why, FOOT_OK);
+		CHECK(r.swept);
+		CHECK(!r.left);
+		CHECK(near(r.board, 5.2, 0.05));
+		CHECK(near(r.floor, 0.0, 1e-6));
+		// on the ground from 9% to 17%, a twelfth of a second
+		CHECK(r.lowFrom > 0.07 && r.lowFrom < 0.10);
+		CHECK(r.lowTo > 0.16 && r.lowTo < 0.19);
+		// the stroke: from 7% (the first look at which it is 1.5 below the board, 3.7 high;
+		// at the board's own height it was a look earlier) to 33%, nearly 60 units
+		CHECK(near(r.profile.down, 4.0 / 58.0, 1e-5));
+		CHECK(r.profile.up > 0.30 && r.profile.up < 0.35);
+		CHECK(r.sweep > 55.0 && r.sweep < 65.0);
+		// a little under half of it is done by the time the foot leaves the ground, and the
+		// speed comes in fastest around then
+		const float off = PushDone(r.profile, r.lowTo);
+		CHECK(off > 0.35f && off < 0.55f);
+		float fastest = 0.0f;
+		float at = 0.0f;
+		for (int i = 0; i < 200; i++) {
+			const float s0 = r.profile.down + (r.profile.up - r.profile.down) * i / 200.0f;
+			const float s1 = r.profile.down + (r.profile.up - r.profile.down) * (i + 1) / 200.0f;
+			const float rate = PushDone(r.profile, s1) - PushDone(r.profile, s0);
+			if (rate > fastest) {
+				fastest = rate;
+				at = 0.5f * (s0 + s1);
+			}
+		}
+		CHECK(at > r.lowFrom - 0.03f && at < r.lowTo + 0.06f);
+		// It starts as fast as the foot is going back where it comes below the board (here a
+		// little faster than in the game, where the first sixteenth of the stroke is 2 to 5
+		// hundredths of the push), and it runs out gently as the leg slows behind the skater
+		CHECK(r.profile.done[1] > 0.03f && r.profile.done[1] < 0.08f);
+		CHECK(1.0f - r.profile.done[PUSH_KNOTS - 2] < 0.03f);
+		// A push with it, at 60 frames a second: the speed comes from 6% to 33% of the
+		// animation, and none before or after
+		PushRun run;
+		PushAnim anim = { true, true, 1, 0.0f, 0.97f };
+		double speed = 200.0;
+		for (int k = 0; k <= 58; k++) {
+			anim.time = (float)(k / 60.0);
+			const float add = run.Step(1.0f / 60.0f, (float)speed, true, 100, anim, r.profile);
+			const double share = k / 60.0 / 0.97;
+			if (share <= r.profile.down) CHECK(add == 0.0f);
+			if (share > r.profile.up + 1.0 / 58.0) CHECK(add == 0.0f);
+			speed += add;
+		}
+		CHECK(near(speed, 520.0, 0.01));
+	}
+
 	g_case = "feet: a foot that stands where it was put";
 	{
 		// As in THUG's own push animations, in the skater's frame: the foot comes down beside
@@ -2339,7 +2453,7 @@ static void testFeet() {
 		CHECK(!r.left);
 		CHECK(near(r.drop, 4.5, 0.1));
 		CHECK(near(r.floor, 1.2, 1e-5));
-		CHECK(r.sweep > 0.5 && r.sweep < 1.5);      // the last of its way in as it lands, as in the game (1 to 3 units)
+		CHECK(r.sweep > 0.5 && r.sweep < 2.0);      // only the last of its way in as it touches down
 		CHECK(near(r.lowFrom, 0.25, 1e-5));
 		CHECK(near(r.lowTo, 32.0 / 48.0, 1e-5));
 		CHECK(near(r.profile.down, r.lowFrom, 1e-6));
@@ -2382,7 +2496,7 @@ static void testFeet() {
 		FootResult n = watchClip(c, 60.0, 0.0, 1.0, 0);
 		CHECK_EQ(n.why, FOOT_OK);
 		CHECK(!n.swept);
-		CHECK(n.sweep < 2.0);
+		CHECK(n.sweep < 4.0);
 		CHECK(near(n.lowFrom, r.lowFrom, 0.03));
 		CHECK(near(n.lowTo, r.lowTo, 0.03));
 		// A foot that rolls on the ground as it pushes, the toe coming up by half a unit: it
@@ -2413,6 +2527,64 @@ static void testFeet() {
 		CHECK(b.lowFrom > r.lowFrom);
 		CHECK(b.lowFrom < 0.375);
 		CHECK(near(b.lowTo, r.lowTo, 1e-6));
+	}
+
+	g_case = "feet: where the other foot stands";
+	{
+		// It stands on the board: the middle of its heights, whatever it does for a moment.
+		// Here it is lifted 4 units for the middle tenth of the animation (and the foot that
+		// pushes comes back up there too).
+		FootWatch w;
+		for (int k = 0; k < 48; k++) {
+			const double share = k / 48.0;
+			float left[3], right[3];
+			clipFeet(kClip, share, left, right, 0);
+			left[1] = (float)(5.7 + (share > 0.45 && share < 0.55 ? 4.0 : 0.0));
+			w.Sample((float)share, left, right);
+		}
+		FootResult r;
+		w.End(0.8f, r);
+		CHECK_EQ(r.why, FOOT_OK);
+		CHECK(near(r.board, 5.7, 1e-5));
+		CHECK(near(r.drop, 4.5, 1e-4));
+		// A foot that is put down and does not move at all while it is down, after coming in
+		// from 10 units to the side and before going back there: it stands where it was put
+		FootWatch still;
+		for (int k = 0; k < 48; k++) {
+			const double share = k / 48.0;
+			const double out = share < 0.15 ? 0.0 : (share < 0.30 ? smooth((share - 0.15) / 0.15) : (share < 0.60 ? 1.0 : (share < 0.75 ? 1.0 - smooth((share - 0.60) / 0.15) : 0.0)));
+			const float right[3] = { (float)(1.0 + 10.0 * out), (float)(5.7 - 4.5 * out), -9.0f };
+			const float left[3] = { -3.0f, 5.7f, 9.0f };
+			still.Sample((float)share, left, right);
+		}
+		still.End(0.8f, r);
+		CHECK_EQ(r.why, FOOT_OK);
+		CHECK(!r.swept);
+		CHECK(r.sweep < 1.0);
+		CHECK(r.lowFrom > 0.25 && r.lowFrom <= 0.30);
+		CHECK(r.lowTo >= 0.60 && r.lowTo < 0.65);
+		// One that goes back, comes forward by more than 3 units and then goes back farther:
+		// its stroke ends where it turned
+		FootWatch turn;
+		for (int k = 0; k < 48; k++) {
+			const double share = k / 48.0;
+			float left[3], right[3];
+			clipFeet(kClip, share, left, right, 0);
+			if (share >= 0.66) {
+				// up from the end of the stroke, forward by 5, then back 20 more in the air
+				const double u = (share - 0.66) / 0.34;
+				right[2] = (float)(-23.0 + 5.0 * smooth(u / 0.3) - (u > 0.3 ? 25.0 * smooth((u - 0.3) / 0.7) : 0.0));
+				right[1] = (float)(1.2 + 10.0 * smooth(u));
+				right[0] = 9.0f;
+			}
+			turn.Sample((float)share, left, right);
+		}
+		turn.End(0.8f, r);
+		const FootResult plain = watchClip(kClip, 60.0, 0.0, 1.0, 0);
+		CHECK_EQ(r.why, FOOT_OK);
+		CHECK(r.swept);
+		CHECK(near(r.profile.up, plain.profile.up, 1e-6));
+		CHECK(near(r.sweep, plain.sweep, 0.5));
 	}
 
 	g_case = "feet: the looks in order";
@@ -2532,7 +2704,7 @@ static void testFeet() {
 		r = watchClip(c, 60.0, 0.0, 1.0, 0);
 		CHECK_EQ(r.why, FOOT_OK);
 		CHECK(!r.swept);
-		CHECK(near(r.sweep, 3.0, 0.3));
+		CHECK(r.sweep > 2.5 && r.sweep < 4.0);
 		c.ahead = 2.5;
 		c.behind = 2.5;
 		r = watchClip(c, 60.0, 0.0, 1.0, 0);

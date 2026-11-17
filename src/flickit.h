@@ -113,7 +113,8 @@ namespace Flickit {
 		int pushOverTurn;     // 1: the game shows a push in a turn too; 0: its turn animation comes first, as in THUG
 		int pushMeasure;      // 1: the feet are watched in the game's push animations, and a push goes by what its foot does
 		int pushFootDown;     // where in a push animation the foot starts to push, in percent of its length, ...
-		int pushFootUp;       // ... and where it has pushed: for an animation the feet have not been measured in
+		int pushFootUp;       // ... and where it has pushed: for an animation the feet have not been watched in
+		                      // (as watched in the game's: 7 to 12, and 31 to 34)
 		int coast;            // percent of Skate's rolling resistance, 0: THUG's own friction
 		int steering;         // percent of Skate's grip in a turn, 0: THUG's own turning
 
@@ -681,21 +682,25 @@ namespace Flickit {
 		int why;                // FOOT_OK, or why nothing came of it
 		int samples;            // looks at the feet
 		bool left;              // the foot that pushes is the first of the two
-		bool swept;             // it travels along the ground, and the speed goes by that; else it stands where it was put
-		float drop;             // how far below the other foot it gets, in the game's units
-		float floor;            // its lowest height, in the skater's own frame
-		float sweep;            // how far it travels along the ground while it is on it
+		bool swept;             // it goes back along the ground, and the speed goes by that; else it stands where it was put
+		float board;            // where the other foot stands: the middle of its heights, in the skater's own frame
+		float floor;            // the lowest the foot that pushes gets
+		float drop;             // the one less the other, in the game's units
+		float sweep;            // how far it goes back
 		float lowFrom, lowTo;   // the shares of the animation between which it is on the ground
 		PushProfile profile;    // where the speed of a push comes in, and how
 	};
 
 	// Watches the two feet through one play of a push animation and works out where the foot
-	// pushes. The foot that pushes is the one that gets lower than the other stands. It is on
-	// the ground while it is within a fifth of that drop of its lowest point. Where it travels
-	// along the ground there, the speed of a push goes with that travel, between the two
-	// points farthest apart. Where it stands where it was put (as in THUG's own push
-	// animations, in the skater's frame), the speed comes in over the time it is on the ground,
-	// gently at both ends.
+	// pushes. The foot that pushes is the one that gets lower; the other stands on the board.
+	// It is on the ground while it is within a fifth of its drop of its lowest point. Its
+	// stroke goes the way it travels while on the ground: from the farthest forward it is
+	// between coming down below the board and leaving the ground, to the farthest back it gets
+	// after that. In THUG's own push animations that is the foot coming down beside the board,
+	// sliding back along the ground and going on back as it rises behind the skater; the speed
+	// of a push comes in as it goes, most of it while the foot is low and the rest as the leg
+	// follows through. A foot that stands where it was put has the speed come in over the time
+	// it is on the ground, gently at both ends.
 	class FootWatch {
 	public:
 		FootWatch();

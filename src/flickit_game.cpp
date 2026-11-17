@@ -1585,14 +1585,13 @@ namespace FlickitGame {
 		}
 	}
 
-	// Where the foot pushes in a push animation: what its own feet showed, or those of another
-	// push animation of its kind (the one watched last), or what the settings say
+	// Where the foot pushes in a push animation: what the feet showed in the push animation of
+	// its kind that was watched last, or what the settings say. (The six of a skater standing
+	// on his board move the feet alike once the game has blended into them; where the foot comes
+	// down goes by what was played before, and the push before is the likeliest to be like this
+	// one.)
 	static int PushProfileFor(int clip, Flickit::PushProfile& out) {
 		if (s_frame.pushMeasure && clip >= 0) {
-			if (s_footKnown[clip].have) {
-				out = s_footKnown[clip].profile;
-				return PUSH_MEASURED;
-			}
 			int best = -1;
 			for (int i = 0; i < PUSH_CLIPS; i++) {
 				if (s_footKnown[i].have && kPushClips[i].kind == kPushClips[clip].kind
@@ -1602,7 +1601,7 @@ namespace FlickitGame {
 			}
 			if (best >= 0) {
 				out = s_footKnown[best].profile;
-				return PUSH_BORROWED;
+				return best == clip ? PUSH_MEASURED : PUSH_BORROWED;
 			}
 		}
 		Flickit::SmoothPushProfile(out, s_frame.pushFootDown, s_frame.pushFootUp);
