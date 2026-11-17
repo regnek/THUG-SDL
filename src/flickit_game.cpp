@@ -109,6 +109,14 @@ namespace FlickitGame {
 	// gave: which buttons are down, since when, and where the sticks are
 	typedef void(__thiscall* PadUpdate_t)(void* pad, void* data);
 	static const PadUpdate_t PadUpdate = (PadUpdate_t)0x0051AEB0;
+	// CSkaterCorePhysicsComponent, in the physics of the air: the turning of one frame, by Left
+	// and Right or by the two spin buttons
+	typedef void(__thiscall* AirTurn_t)(void* core);
+	static const AirTurn_t AirTurn = (AirTurn_t)0x0055F050;
+	// One of the skater's numbers that go by his stats (the pairs in physics.q), by the checksum
+	// of its name. this = the skater.
+	typedef float(__thiscall* ScriptedStat_t)(void* skater, uint32_t name);
+	static const ScriptedStat_t ScriptedStat = (ScriptedStat_t)0x00516AD0;
 
 	enum {
 		// any component
@@ -164,6 +172,7 @@ namespace FlickitGame {
 		INPUT_DOWN_PRESSED = 0x40,      // Down is held
 		INPUT_LEFT_PRESSED = 0x60,      // Left is, by the d-pad or by the stick
 		INPUT_RIGHT_PRESSED = 0x80,
+		BUTTON_PRESSED_AT = 0x04,       // in a button of the pad: the game's clock (ms) when it went down
 		INPUT_GRIND_PRESSED = 0x1A0,    // the Grind button (Triangle) is down
 		INPUT_DISABLED = 0x498,         // one byte: a script has taken the controls away (DisablePlayerInput)
 		INPUT_NET_DISABLED = 0x499,     // one byte: the same for a network game
@@ -201,6 +210,7 @@ namespace FlickitGame {
 	static const uint32_t kSquare = 0x321C9756;               // Square: the Flip button, the game's own button for a kick
 	static const uint32_t kRollingFriction = 0x78F80EC4;      // Physics_Rolling_Friction
 	static const uint32_t kNollieLoop = 0xF8D9EFB4;           // OnGroundNollieAI
+	static const uint32_t kAirRotation = 0x4957DB43;          // Physics_Air_Rotation_stat
 
 	// Where the game's code is changed
 	static uint8_t* const kCatchTest1 = (uint8_t*)0x0056CB60;   // cmp byte ptr [eax+1A0h], 0   in maybe_stick_to_rail
@@ -239,6 +249,11 @@ namespace FlickitGame {
 	static uint8_t* const kHeldCall = (uint8_t*)0x004566CC;
 	// call the pad update, where an input component is handed what one look at the controller gave
 	static uint8_t* const kPadUpdateCall = (uint8_t*)0x00437E9E;
+	// call the turning in the air, in the physics of the air (0x0056BAD0), and inside that turning
+	// the two calls that ask how fast the skater turns: one for Left, one for Right
+	static uint8_t* const kAirTurnCall = (uint8_t*)0x0056BB46;
+	static uint8_t* const kSpinLeftCall = (uint8_t*)0x0055F2FD;
+	static uint8_t* const kSpinRightCall = (uint8_t*)0x0055F361;
 
 	/******************************************************************/
 	/*                                                                */
@@ -277,6 +292,9 @@ namespace FlickitGame {
 		{ 0x0056747C, 5, { 0xE8, 0x8F, 0x5F, 0xFF, 0xFF }, "CanKick" },
 		{ 0x004566C9, 8, { 0x50, 0x8B, 0xCE, 0xE8, 0x9F, 0xB3, 0xFF, 0xFF }, "Held" },
 		{ 0x00437E9A, 9, { 0x57, 0x8D, 0x4E, 0x20, 0xE8, 0x0D, 0x30, 0x0E, 0x00 }, "pad update" },
+		{ 0x0056BB44, 7, { 0x8B, 0xCE, 0xE8, 0x05, 0x35, 0xFF, 0xFF }, "turning in the air" },
+		{ 0x0055F2F5, 13, { 0x8B, 0x4E, 0x0C, 0x68, 0x43, 0xDB, 0x57, 0x49, 0xE8, 0xCE, 0x77, 0xFB, 0xFF }, "spin rate for Left" },
+		{ 0x0055F359, 13, { 0x8B, 0x4E, 0x0C, 0x68, 0x43, 0xDB, 0x57, 0x49, 0xE8, 0x6A, 0x77, 0xFB, 0xFF }, "spin rate for Right" },
 		// the functions that get called
 		{ 0x004F94F0, 12, { 0x53, 0x56, 0x57, 0x8B, 0xF9, 0x33, 0xF6, 0xE8, 0x84, 0xC0, 0xF3, 0xFF }, "GetLocalSkater" },
 		{ 0x0041BDC0, 12, { 0x8B, 0x81, 0xF0, 0x00, 0x00, 0x00, 0x85, 0xC0, 0x74, 0x12, 0x8B, 0x4C }, "GetComponent" },
@@ -308,6 +326,9 @@ namespace FlickitGame {
 		{ 0x00451A88, 3, { 0xC2, 0x04, 0x00 }, "button held, return" },
 		{ 0x0051AEB0, 12, { 0x83, 0xEC, 0x0C, 0x56, 0x57, 0x8B, 0x7C, 0x24, 0x18, 0x0F, 0xB6, 0x47 }, "pad update function" },
 		{ 0x0051B3AA, 3, { 0xC2, 0x04, 0x00 }, "pad update function, return" },
+		{ 0x0055F050, 12, { 0x83, 0xEC, 0x18, 0x56, 0x8B, 0xF1, 0x8B, 0x86, 0xB4, 0x04, 0x00, 0x00 }, "turning in the air, function" },
+		{ 0x00516AD0, 12, { 0x51, 0x56, 0x57, 0x6A, 0x00, 0x68, 0xDD, 0x89, 0xBC, 0x8C, 0x8B, 0xF9 }, "scripted stat" },
+		{ 0x00516B1E, 6, { 0x5F, 0x5E, 0x59, 0xC2, 0x04, 0x00 }, "scripted stat, return" },
 		// do_jump: the name it asks GetFloat for, where the speed is taken up again after the
 		// call, and where it goes into the skater's speed
 		{ 0x005606C5, 5, { 0x68, 0x09, 0x01, 0xD9, 0xF0 }, "jump speed name" },
@@ -359,6 +380,12 @@ namespace FlickitGame {
 		{ 0x0041BBBA, 12, { 0x8B, 0x4F, 0x10, 0x85, 0xC9, 0x74, 0x05, 0xE8, 0xDA, 0x34, 0xFF, 0xFF }, "object update: the script" },
 		{ 0x0041BBD4, 9, { 0x56, 0x8B, 0xB7, 0xF0, 0x00, 0x00, 0x00, 0x85, 0xF6 }, "object update: the components" },
 		{ 0x0041BBE0, 14, { 0x84, 0x5E, 0x08, 0x75, 0x0E, 0x8B, 0x16, 0x8B, 0x42, 0x04, 0x8B, 0xCE, 0xFF, 0xD0 }, "object update: one component" },
+		// the turning in the air: where it reads Left and Right (the pad is on the stack, the
+		// button 0x40 / 0x60 into it), and the game's "how long has this button been down",
+		// which takes the time it went down from the button's second word
+		{ 0x0055F2E9, 12, { 0x8B, 0x7C, 0x24, 0x10, 0x83, 0xC7, 0x40, 0x80, 0x3F, 0x00, 0x74, 0x58 }, "air turning: Left" },
+		{ 0x0055F34D, 12, { 0x8B, 0x7C, 0x24, 0x10, 0x83, 0xC7, 0x60, 0x80, 0x3F, 0x00, 0x74, 0x5B }, "air turning: Right" },
+		{ 0x005199E0, 12, { 0x56, 0x8B, 0x71, 0x04, 0xE8, 0x37, 0x92, 0x06, 0x00, 0x2B, 0xC6, 0x5E }, "how long a button has been down" },
 		// the name of the script a CScript is running: kept and replaced where it calls another
 		// script, and set where it is given a script to run
 		{ 0x0040E7E9, 6, { 0x8B, 0x95, 0xBC, 0x00, 0x00, 0x00 }, "script name, kept for a call" },
@@ -393,7 +420,8 @@ namespace FlickitGame {
 		if (Flickit::NameChecksum("SkaterState") != kSkaterState || Flickit::NameChecksum("SkaterFlipAndRotate") != kSkaterFlipAndRotate
 			|| Flickit::NameChecksum("SkaterCorePhysics") != kSkaterCorePhysics || Flickit::NameChecksum("slide") != kSlideBalance
 			|| Flickit::NameChecksum("Trick") != kTrick || Flickit::NameChecksum("Square") != kSquare
-			|| Flickit::NameChecksum("Physics_Rolling_Friction") != kRollingFriction) {
+			|| Flickit::NameChecksum("Physics_Rolling_Friction") != kRollingFriction
+			|| Flickit::NameChecksum("OnGroundNollieAI") != kNollieLoop || Flickit::NameChecksum("Physics_Air_Rotation_stat") != kAirRotation) {
 			s_available = false;
 		}
 		if (!s_available) {
@@ -418,12 +446,15 @@ namespace FlickitGame {
 	static Pick s_pick;
 
 	static void HoldAutoKick(bool off);
+	static void WatchStick(const Frame& frame);
 
 	void SetFrame(const Frame& frame) {
 		s_frame = frame;
 		s_active = true;
 		// With Flickit's push the skater does not kick by himself
 		HoldAutoKick(frame.push > 0);
+		// The stick is watched on the ground too: a flick just before a jump makes the spin
+		WatchStick(frame);
 	}
 
 	bool TakePick(Pick& out) {
@@ -507,6 +538,16 @@ namespace FlickitGame {
 	static const int kPushIdleMost = 3;
 	static bool s_groundSeen = false;    // since the last look the game's ground physics have run for him at all
 	static int s_groundIdle = kPushIdleMost + 1;   // looks in a row without that
+	// Spinning: the turning in the air of the skater Flickit drives
+	static Flickit::Spin s_spin;
+	static bool s_airSeen = false;       // since the last look the game's physics of the air have turned him
+	static int s_airIdle = 0;            // looks in a row without that, while Flickit's turning is under way
+	static bool s_spinning = false;      // the game's turning in the air is running for him right now, ...
+	static float s_spinRate = 0.0f;      // ... and this is how fast Flickit has him turn (rad/s)
+	static uint32_t s_spinSerial = 0;    // for the log: goes up when an air with Flickit's turning is over
+	static float s_spinTurned = 0.0f;    // what that air came to: radians asked for, to the right when positive,
+	static float s_spinFlick = 0.0f;     // the flick that counted (0 to 1),
+	static float s_spinSeconds = 0.0f;   // and how long it lasted
 	// The skater whose "auto kick" is held at "off", so that he does not kick by himself
 	static uint8_t* s_autoKickHeld = 0;
 	// Left and Right, kept from the game's scripts for the frame in which a push asks for its
@@ -571,12 +612,44 @@ namespace FlickitGame {
 		s_autoKickHeld = 0;
 	}
 
+	// Once per look at the controller, while Flickit drives. In the air the game's physics step
+	// the turning (AirTurnHook); everywhere else the stick is only watched.
+	static void WatchStick(const Frame& frame) {
+		if (frame.spin <= 0) {
+			s_spin.Reset();
+			s_airSeen = false;
+			s_airIdle = 0;
+			return;
+		}
+		if (s_airSeen) {
+			s_airSeen = false;
+			s_airIdle = 0;
+			return;
+		}
+		if (s_spin.InAir()) {
+			if (++s_airIdle <= kPushIdleMost) {
+				return;     // one look without the physics of the air is not a landing yet
+			}
+			// The air is over: what it came to, for the log
+			s_spinTurned = s_spin.Turned();
+			s_spinFlick = s_spin.Flick();
+			s_spinSeconds = s_spin.Seconds();
+			s_spinSerial++;
+			s_spin.Land();
+		}
+		s_airIdle = 0;
+		s_spin.Feed(frame.seconds, frame.steer);
+	}
+
 	void BeginFrame() {
 		if (!s_active) {
 			// Flickit did not drive the skater on the last frame: the kick is the game's again
 			HoldAutoKick(false);
 			s_push.Reset();
 			s_steer.Reset();
+			s_spin.Reset();
+			s_airSeen = false;
+			s_airIdle = 0;
 		}
 		GiveBackTurnNow();
 		s_active = false;
@@ -765,6 +838,10 @@ namespace FlickitGame {
 		out.pushAsked = s_push.Asked();
 		out.pushAdded = s_push.Added();
 		out.pushFrom = s_push.From();
+		out.spinSerial = s_spinSerial;
+		out.spinTurned = s_spinTurned;
+		out.spinFlick = s_spinFlick;
+		out.spinSeconds = s_spinSeconds;
 		return true;
 	}
 
@@ -1403,6 +1480,67 @@ namespace FlickitGame {
 
 	/******************************************************************/
 	/*                                                                */
+	/*  Spinning: the skater turns in the air the way Skate's does    */
+	/******************************************************************/
+
+	// Slower than this (rad/s) is no turning at all
+	static const float kSpinNone = 0.001f;
+
+	// Stands where the game's turning in the air asks how fast the skater turns, once for Left
+	// and once for Right. Same convention: this (the skater) in ecx, one argument, which the
+	// callee takes off the stack, the answer on the floating point stack. While Flickit's
+	// turning runs (AirTurnHook, below) the answer is Flickit's.
+	static float __fastcall SpinRateHook(void* skater, void* /*edx*/, uint32_t name) {
+		if (s_spinning) {
+			return s_spinRate;
+		}
+		return ScriptedStat(skater, name);
+	}
+
+	// Stands where the physics of the air turn the skater. Same convention: this in ecx, no
+	// arguments, nothing answered.
+	//
+	// The game's own: Left or Right held turns him at 6.85 to 7.75 radians a second, once the
+	// button has been down for a tenth of a second. The turning itself, the count of it for the
+	// name of the trick, the turn toward the way down on a ramp and the two spin buttons all
+	// stay the game's. Flickit only says how fast and which way: for this one call the game
+	// sees Left or Right down, for a long time already, by the side Flickit's turning goes to,
+	// and is told Flickit's rate when it asks for the skater's.
+	static void __fastcall AirTurnHook(uint8_t* core) {
+		if (!Drives(core) || s_frame.spin <= 0) {
+			AirTurn(core);
+			return;
+		}
+		uint8_t* input = *(uint8_t**)(core + CORE_INPUT);
+		// Where a script has taken the controls away the stick does not turn him either
+		if (!input || input[INPUT_DISABLED] != 0 || input[INPUT_NET_DISABLED] != 0) {
+			AirTurn(core);
+			return;
+		}
+		s_airSeen = true;
+		const float rate = s_spin.Step(*(const float*)(core + CORE_FRAME_LENGTH), s_frame.steer, s_frame.spin);
+		uint8_t* const left = input + INPUT_LEFT_PRESSED;
+		uint8_t* const right = input + INPUT_RIGHT_PRESSED;
+		const uint8_t leftWas = left[0];
+		const uint8_t rightWas = right[0];
+		const uint32_t leftAt = *(const uint32_t*)(left + BUTTON_PRESSED_AT);
+		const uint32_t rightAt = *(const uint32_t*)(right + BUTTON_PRESSED_AT);
+		left[0] = rate < -kSpinNone ? 1 : 0;
+		right[0] = rate > kSpinNone ? 1 : 0;
+		*(uint32_t*)(left + BUTTON_PRESSED_AT) = 0;
+		*(uint32_t*)(right + BUTTON_PRESSED_AT) = 0;
+		s_spinRate = rate < 0.0f ? -rate : rate;
+		s_spinning = true;
+		AirTurn(core);
+		s_spinning = false;
+		left[0] = leftWas;
+		right[0] = rightWas;
+		*(uint32_t*)(left + BUTTON_PRESSED_AT) = leftAt;
+		*(uint32_t*)(right + BUTTON_PRESSED_AT) = rightAt;
+	}
+
+	/******************************************************************/
+	/*                                                                */
 	/*  Putting it in                                                 */
 	/******************************************************************/
 
@@ -1441,11 +1579,15 @@ namespace FlickitGame {
 		patchCall(kFrictionCall, (void*)&FrictionHook);
 		patchCall(kTurnCall, (void*)&TurnHook);
 		patchCall(kPadUpdateCall, (void*)&PadUpdateHook);
+		patchCall(kAirTurnCall, (void*)&AirTurnHook);
+		patchCall(kSpinLeftCall, (void*)&SpinRateHook);
+		patchCall(kSpinRightCall, (void*)&SpinRateHook);
 
 		s_installed = true;
 		Log::TypedLog(CHN_SDL, "Flickit: grind hooks are in (rail catch, rail search, grind pick, rail balance, rail boost)\n");
 		Log::TypedLog(CHN_SDL, "Flickit: jump hooks are in (gravity in the air, jump, jump speed)\n");
 		Log::TypedLog(CHN_SDL, "Flickit: rolling hooks are in (brake test, kick test, friction, turning, CanKick, Held, pad update)\n");
+		Log::TypedLog(CHN_SDL, "Flickit: spin hooks are in (turning in the air, spin rate)\n");
 		return true;
 	}
 }

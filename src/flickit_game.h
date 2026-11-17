@@ -32,6 +32,12 @@
 //     Left and Right (the game's picture of the pad, between the look at the controller and the
 //     physics, which get both back)
 //
+// For spinning the way Skate's skater does, two more, in the physics of the air:
+//
+//   - which way the skater turns in the air and whether he does (the game's own turning, which
+//     for that one call sees Left or Right the way Flickit's turning goes)
+//   - how fast (the number the game asks its stats for there)
+//
 // Everything in here is written against the one PC executable of THUG (THUG.exe / THUG-SDL.exe, the
 // same code). Before anything is read or changed the code at every address used is compared with
 // what is expected there. If one byte differs nothing is touched and Flickit works as it did
@@ -81,6 +87,12 @@ namespace FlickitGame {
 		float pushAsked;        // the speed it was asked to add
 		float pushAdded;        // the speed it added
 		float pushFrom;         // the speed it started at
+
+		// Spinning
+		uint32_t spinSerial;    // goes up when an air in which Flickit turned the skater is over
+		float spinTurned;       // that air: radians Flickit asked for, to the right when positive
+		float spinFlick;        // the flick of the stick that counted, 0 to 1
+		float spinSeconds;      // how long the air lasted
 	};
 
 	// What the first local skater is doing. False while there is none or the game is not Available().
@@ -106,6 +118,8 @@ namespace FlickitGame {
 		int coast;              // rolling resistance in percent of Skate's, 0: the game's own friction
 		int steering;           // grip in a turn in percent of Skate's, 0: the game's own turning
 		float steer;            // the movement stick, -1 (left) to 1 (right)
+		int spin;               // turning in the air in percent of Skate's, 0: the game's own
+		float seconds;          // since the look at the controller before this one
 	};
 
 	// Once per frame, before player one's controller is read: nothing is on for this frame

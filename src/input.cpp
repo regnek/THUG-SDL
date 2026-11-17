@@ -329,6 +329,9 @@ bool flickitOlliePush = false;                           // the press of the Oll
 bool flickitFlipPush = false;                            // the Flip button is down and has been a push since the board last rolled under it
 bool flickitPushHeld = false;                            // a push button is down
 uint32_t flickitPushSerial = 0;                          // for the log: the last push
+uint32_t flickitSpinSerial = 0;                          // for the log: the last air Flickit turned the skater in
+uint32_t flickitFrameAt = 0;                             // SDL's clock at the last frame handed to the game hooks
+bool flickitFrameSeen = false;
 
 // Reads the stick pattern file named in the ini (default: skater.pat) from the folder the ini is in.
 // Without the file, or with Patterns=0, Flickit decides tricks from its built-in directions.
@@ -431,6 +434,7 @@ void loadFlickitSettings() {
 	s.pushCycle = (int)GetPrivateProfileInt(FLICKIT_SECTION, "PushCycle", s.pushCycle, configFile);
 	s.coast = (int)GetPrivateProfileInt(FLICKIT_SECTION, "Coast", s.coast, configFile);
 	s.steering = (int)GetPrivateProfileInt(FLICKIT_SECTION, "Steering", s.steering, configFile);
+	s.spin = (int)GetPrivateProfileInt(FLICKIT_SECTION, "Spin", s.spin, configFile);
 
 	Flickit::Sanitize(s);
 	flickitSettings = s;
@@ -506,6 +510,15 @@ void loadFlickitSettings() {
 			}
 			else {
 				Log::TypedLog(CHN_SDL, "Flickit rolling: the turning is the game's own\n");
+			}
+			if (s.spin > 0) {
+				const float share = (float)s.spin * 0.01f;
+				Log::TypedLog(CHN_SDL, "Flickit spin: in the air the stick turns the skater by how far it is pushed and how hard it was flicked: at its end %.1f rad/s at once, %.1f after 0.25 s, %.1f after 1 s for a full flick, %.0f percent of that for a stick that is just held (the game's own: %.2f to %.2f rad/s for Left or Right, after %.1f s)\n",
+					Flickit::SpinRate(0.0f) * share, Flickit::SpinRate(0.25f) * share, Flickit::SpinRate(1.0f) * share, 100.0f * Flickit::kSpinLeast,
+					Flickit::kThugAirSpinWorst, Flickit::kThugAirSpinBest, Flickit::kThugAirSpinWait);
+			}
+			else {
+				Log::TypedLog(CHN_SDL, "Flickit spin: the turning in the air is the game's own\n");
 			}
 		}
 		else {
@@ -588,6 +601,14 @@ static void flickitLogGame(const FlickitGame::Skater& sk, uint32_t now) {
 		flickitPushSerial = sk.pushSerial;
 		Log::TypedLog(CHN_SDL, "Flickit: push, the button was down %.0f ms: %.0f units/s asked for, speed %.0f -> %.0f\n",
 			sk.pushHeld * 1000.0f, sk.pushAsked, sk.pushFrom, sk.pushFrom + sk.pushAdded);
+	}
+	if (sk.spinSerial != flickitSpinSerial) {
+		flickitSpinSerial = sk.spinSerial;
+		// an air in which the stick asked for next to nothing is not worth a line
+		if (sk.spinTurned > 0.05f || sk.spinTurned < -0.05f) {
+			Log::TypedLog(CHN_SDL, "Flickit: spin, %.2f s in the air, flick %.0f%%: %.0f degrees to the %s asked for\n",
+				sk.spinSeconds, sk.spinFlick * 100.0f, (sk.spinTurned < 0.0f ? -sk.spinTurned : sk.spinTurned) * 57.29578f, sk.spinTurned < 0.0f ? "left" : "right");
+		}
 	}
 
 	const bool onRail = (sk.state == Flickit::STATE_RAIL);
@@ -759,6 +780,16 @@ void flickitGameFrame(device* dev) {
 	frame.pushTiming.cycle = (float)flickitSettings.pushCycle * 0.001f;
 	frame.coast = flickitSettings.coast;
 	frame.steering = flickitSettings.steering;
+	frame.spin = flickitSettings.spin;
+	{
+		// How long ago the last frame was, for what is timed between looks at the controller.
+		// A first frame, and one after a long pause, counts as a 60th of a second.
+		const uint32_t now = SDL_GetTicks();
+		const uint32_t passed = now - flickitFrameAt;
+		frame.seconds = (flickitFrameSeen && passed <= 250) ? (float)passed * 0.001f : 1.0f / 60.0f;
+		flickitFrameAt = now;
+		flickitFrameSeen = true;
+	}
 	// The movement stick as the game is about to see it, the d-pad and the keys as a stick at its end.
 	// A stick at rest is not quite at its centre: the first fifth of the way counts as none, which is
 	// what the console Skate ran on did before the game saw the stick.

@@ -125,6 +125,18 @@ static void testAgainstTheScripts(const std::string& dir) {
 	const double wheels = scriptNumber(text, "Physics_Rolling_Friction", found);
 	CHECK(found);
 	CHECK(wheels * 60.0 < 0.001);
+
+	// Spinning. 6.85 to 7.75 radians a second for Left or Right in the air, once the button has
+	// been down for a tenth of a second. (The game would bring the turning in between that
+	// time and a second one, but the second one is the shorter: it is all there at once.)
+	CHECK(scriptPair(text, "Physics_Air_Rotation_stat", low, high));
+	CHECK(near(low, kThugAirSpinWorst, 1e-3) && near(high, kThugAirSpinBest, 1e-3));
+	const double wait = scriptNumber(text, "Physics_Air_No_Rotate_Time", found);
+	CHECK(found);
+	CHECK(near(wait * 0.001, kThugAirSpinWait, 1e-6));
+	const double ramp = scriptNumber(text, "Physics_Air_Ramp_Rotate_Time", found);
+	CHECK(found);
+	CHECK(ramp < wait);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1293,6 +1305,639 @@ static void testSteering() {
 	}
 }
 
+// ---------------------------------------------------------------------------------------------
+// Spinning in the air
+// ---------------------------------------------------------------------------------------------
+
+// Skate 3's curves (physics_bodyspin, the set its normal difficulty uses), to the last digit
+static const Table kSkateSpin = { { 0, 0.0521172583, 0.127035797, 0.244299695, 0.368078202, 0.563517928, 0.905537486, 2 },
+	{ 3.1500001, 6.36428499, 7.77857113, 7.93928623, 7.7142849, 6.9749999, 5.6892848, 3.6642859 } };
+static const Table kSkateSpinStep = { { 0, 0.115635201, 0.25570029, 0.394136786, 0.532573283, 0.677524388, 0.877850175, 1 },
+	{ 0.992856979, 0.760714471, 0.507143021, 0.349999994, 0.224999994, 0.171428606, 0.157142907, 0.153571397 } };
+static const Table kSkateFlick = { { -0.496742696, -0.374592811, -0.254071712, 0, 0.135179207, 0.228012994, 0.337133497, 0.5 },
+	{ 0, 0.0500000007, 1, 1, 1, 0.62857151, 0.385714293, 0.285714298 } };
+
+// The stick over time, the board leaves the ground at 0. -1 (left) to 1 (right).
+typedef double (*StickAt)(double seconds);
+
+// Skate's rules, written down a second time and as plainly as they read in its code: one pass a
+// tick, the ticks before the board leaves the ground only watch the stick. Returns the rate of
+// every tick in the air (rad/s, to the right when positive), and the flick that counted.
+static std::vector<double> skateSpin(StickAt stickAt, double lead, double air, double* flickOut) {
+	const double tick = 1.0 / 60.0;
+	double history[30];
+	for (int i = 0; i < 30; i++) history[i] = 0.0;
+	int index = 0;
+	double last = stickAt(-lead - tick);
+	double smooth = last;
+	double rate = 0.0, peak = 0.0, time = 0.0;
+	std::vector<double> rates;
+	const int before = (int)(lead / tick + 0.5), during = (int)(air / tick + 0.5);
+	for (int k = -before; k < during; k++) {
+		const double stick = stickAt(k * tick);
+		const double moved = (stick - last) * 1.5;
+		last = stick;
+		double flick = 0.0;
+		if (moved * stick > 0.1) flick = moved < -1.0 ? -1.0 : (moved > 1.0 ? 1.0 : moved);
+		history[index] = flick;
+		index = (index + 1) % 30;
+		if (k < 0) {
+			time = 0.0;
+			rate = 0.0;
+			smooth = 0.8 * smooth + 0.2 * stick;
+			continue;
+		}
+		if (time == 0.0) {
+			peak = 0.0;
+			double when = 0.0;
+			int i = index;
+			for (int n = 0; n < 29; n++) {
+				i = (i + 29) % 30;
+				when -= tick;
+				const double counts = at(kSkateFlick, when) * history[i];
+				if (fabs(counts) > fabs(peak)) peak = counts;
+			}
+		}
+		const double counts = at(kSkateFlick, time) * flick;
+		if (fabs(counts) > fabs(peak)) peak = counts;
+		const double was = time;
+		time += tick;
+		double input = stick;
+		if (fabs(stick) < 1.52588e-05) {
+			smooth *= 0.96;
+			input = smooth;
+			last = smooth;
+		}
+		else {
+			smooth = 0.8 * smooth + 0.2 * stick;
+		}
+		const double target = at(kSkateSpin, time) * input;
+		if (target * peak < 0.0) peak = 0.0;
+		const double wanted = -(0.4 + 0.6 * fabs(peak)) * target;
+		const double step = at(kSkateSpinStep, was);
+		const double slow = step < 0.2 ? step : 0.2;
+		const double up = rate > 0.0 ? step : slow;
+		const double down = rate > 0.0 ? -slow : -step;
+		double change = wanted - rate;
+		if (change > up) change = up;
+		if (change < down) change = down;
+		rate += change;
+		rates.push_back(-rate);
+	}
+	if (flickOut) *flickOut = fabs(peak);
+	return rates;
+}
+
+// The same air through the code under test, at any frame rate: the frames before the board
+// leaves the ground are fed, the ones after are stepped. Returns the degrees turned.
+struct SpinLog {
+	double degrees;     // turned, to the right when positive
+	double flick;
+	double most;        // the fastest it turned, rad/s
+	std::vector<double> rates;   // of every frame in the air
+};
+
+static SpinLog runSpin(double fps, StickAt stickAt, double lead, double air, int percent) {
+	Spin spin;
+	SpinLog log;
+	log.degrees = 0.0;
+	log.most = 0.0;
+	const double dt = 1.0 / fps;
+	const int before = (int)(lead * fps + 0.5), during = (int)(air * fps + 0.5);
+	// the stick has been where it starts for a long time
+	for (int k = 0; k < 120; k++) spin.Feed((float)dt, (float)stickAt(-lead - dt));
+	for (int k = -before; k < during; k++) {
+		const double stick = stickAt(k * dt);
+		if (k < 0) {
+			spin.Feed((float)dt, (float)stick);
+			CHECK(!spin.InAir());
+			continue;
+		}
+		const float rate = spin.Step((float)dt, (float)stick, percent);
+		CHECK(rate == rate);
+		log.rates.push_back(rate);
+		log.degrees += rate * dt * 57.29577951;
+		if (fabs(rate) > log.most) log.most = fabs(rate);
+	}
+	log.flick = spin.Flick();
+	CHECK(near(spin.Turned() * 57.29577951, log.degrees, 0.05 + 0.001 * fabs(log.degrees)));
+	return log;
+}
+
+static double spinDegrees(const std::vector<double>& rates) {
+	double sum = 0.0;
+	for (size_t i = 0; i < rates.size(); i++) sum += rates[i] / 60.0 * 57.29577951;
+	return sum;
+}
+
+static double stickHeld(double) { return 1.0; }
+static double stickThrown(double t) { return t >= 0.0 ? 1.0 : 0.0; }
+static double stickThrownLeft(double t) { return t >= 0.0 ? -1.0 : 0.0; }
+static double stickHeldLeft(double) { return -1.0; }
+static double stickThrownAt100Before(double t) { return t >= -0.1 ? 1.0 : 0.0; }
+static double stickThrownAt300Before(double t) { return t >= -0.3 ? 1.0 : 0.0; }
+static double stickThrownAt450Before(double t) { return t >= -0.45 ? 1.0 : 0.0; }
+static double stickThrownAt100After(double t) { return t >= 0.1 ? 1.0 : 0.0; }
+static double stickThrownAt300After(double t) { return t >= 0.3 ? 1.0 : 0.0; }
+static double stickOverIn50(double t) { return t >= 0.0 ? 1.0 : (t <= -0.05 ? 0.0 : (t + 0.05) / 0.05); }
+static double stickOverIn100(double t) { return t >= 0.0 ? 1.0 : (t <= -0.1 ? 0.0 : (t + 0.1) / 0.1); }
+static double stickOverIn200(double t) { return t >= 0.0 ? 1.0 : (t <= -0.2 ? 0.0 : (t + 0.2) / 0.2); }
+static double stickHalf(double) { return 0.5; }
+static double stickHalfThrown(double t) { return t >= 0.0 ? 0.5 : 0.0; }
+static double stickLetGoAt200(double t) { return t >= 0.0 && t < 0.2 ? 1.0 : 0.0; }
+static double stickLetGoAt400(double t) { return t >= 0.0 && t < 0.4 ? 1.0 : 0.0; }
+static double stickLeftThenRight(double t) { return t < -0.05 ? 0.0 : (t < 0.0 ? -1.0 : 1.0); }
+static double stickNone(double) { return 0.0; }
+// held on the ground, let go as the board leaves it
+static double stickLetGoAtTakeoff(double t) { return t < 0.0 ? 1.0 : 0.0; }
+// held, let go a tenth of a second into the air, thrown over again a tenth later
+static double stickHeldLetGoThrown(double t) { return t < 0.1 ? 1.0 : (t < 0.2 ? 0.0 : 1.0); }
+// the same, the second throw between two ticks
+static double stickHeldLetGoThrownBetween(double t) { return t < 0.1 ? 1.0 : (t < 0.205 ? 0.0 : 1.0); }
+// held on the ground, let go for three ticks, thrown over again as the board leaves it
+static double stickReleasedThenThrown(double t) { return t < -0.05 ? 1.0 : (t < 0.0 ? 0.0 : 1.0); }
+// thrown to the right as the board leaves the ground, to the left 0.3 s later
+static double stickRightThenLeftInAir(double t) { return t < 0.0 ? 0.0 : (t < 0.3 ? 1.0 : -1.0); }
+static double stickLeftThenRightInAir(double t) { return -stickRightThenLeftInAir(t); }
+// held to the left, pulled most of the way in at once 0.2 s before the board leaves the ground,
+// then pushed slowly across to the right
+static double stickInThenAcross(double t) { return t < -0.2 ? -1.0 : (t >= 0.0 ? 1.0 : -0.1 + 1.1 * (t + 0.2) / 0.2); }
+// thrown to the left 0.3 s before, then pushed slowly across to the right
+static double stickLeftFlickThenSlowRight(double t) { return t < -0.3 ? 0.0 : (t >= 0.0 ? 1.0 : -1.0 + 2.0 * (t + 0.3) / 0.3); }
+// a small slow move near the centre, then held there
+static double stickSmallSlow(double t) { return t < -0.05 ? 0.0 : (t >= 0.0 ? 0.3 : 0.3 * (t + 0.05) / 0.05); }
+// thrown over 28 and 29 ticks before the board leaves the ground
+static double stickThrown28Before(double t) { return t >= -28.0 / 60.0 - 1e-6 ? 1.0 : 0.0; }
+static double stickThrown29Before(double t) { return t >= -29.0 / 60.0 - 1e-6 ? 1.0 : 0.0; }
+
+static void testSpinning() {
+	g_case = "spinning: the setting";
+	{
+		Settings s;
+		SetDefaults(s);
+		CHECK_EQ(s.spin, 100);
+		Sanitize(s);
+		CHECK_EQ(s.spin, 100);
+		s.spin = 0;
+		Sanitize(s);
+		CHECK_EQ(s.spin, 0);
+		s.spin = -7;
+		Sanitize(s);
+		CHECK_EQ(s.spin, 0);
+		s.spin = 3;
+		Sanitize(s);
+		CHECK_EQ(s.spin, 25);
+		s.spin = 99999;
+		Sanitize(s);
+		CHECK_EQ(s.spin, 400);
+		CHECK_EQ(kSpinMostPercent, 400);
+	}
+
+	g_case = "spinning: Skate's rate";
+	{
+		// With the stick at its end after a full flick: 3.15 rad/s as the board leaves the ground,
+		// 7.9 a quarter of a second later, 5.7 at 0.9 s, 3.7 from 2 s on
+		CHECK(near(SpinRate(0.0f), 3.15, 1e-3));
+		CHECK(near(SpinRate(-1.0f), 3.15, 1e-3));
+		CHECK(near(SpinRate(0.2443f), 7.939, 2e-3));
+		CHECK(near(SpinRate(0.9055f), 5.689, 2e-3));
+		CHECK(near(SpinRate(2.0f), 3.664, 1e-3));
+		CHECK(near(SpinRate(30.0f), 3.664, 1e-3));
+		for (int i = 0; i <= 250; i++) {
+			const double t = i * 0.01;
+			CHECK(near(SpinRate((float)t), at(kSkateSpin, t), 0.01));
+		}
+		// a stick that is only held gets two fifths of it
+		CHECK(near(kSpinLeast, 0.4, 1e-6));
+		// THUG turns faster than Skate's best from a quarter of a second on at the latest,
+		// whatever the stats
+		CHECK(kThugAirSpinWorst > SpinRate(1.0f));
+		CHECK(kThugAirSpinBest < SpinRate(0.2443f));
+	}
+
+	g_case = "spinning: tick for tick against Skate's rules";
+	{
+		// (to the right: to the left Skate itself is a tick late, see "left and right" below)
+		const StickAt sticks[] = { stickHeld, stickThrown, stickThrownAt100Before, stickThrownAt300Before,
+			stickThrownAt450Before, stickThrownAt100After, stickThrownAt300After, stickOverIn50, stickOverIn100, stickOverIn200,
+			stickHalf, stickHalfThrown, stickLetGoAt200, stickLetGoAt400, stickLeftThenRight, stickNone,
+			stickLetGoAtTakeoff, stickHeldLetGoThrown, stickRightThenLeftInAir, stickInThenAcross, stickLeftFlickThenSlowRight,
+			stickSmallSlow, stickThrown28Before, stickThrown29Before, stickReleasedThenThrown };
+		for (size_t n = 0; n < sizeof(sticks) / sizeof(sticks[0]); n++) {
+			double flick = 0.0;
+			const std::vector<double> want = skateSpin(sticks[n], 1.0, 3.0, &flick);
+			const SpinLog got = runSpin(60.0, sticks[n], 1.0, 3.0, 100);
+			CHECK_EQ(got.rates.size(), want.size());
+			double worst = 0.0;
+			for (size_t i = 0; i < want.size() && i < got.rates.size(); i++) {
+				const double off = fabs(got.rates[i] - want[i]);
+				if (off > worst) worst = off;
+			}
+			// the curves in the code are rounded to four places
+			CHECK(worst < 0.004);
+			CHECK(near(got.flick, flick, 0.002));
+			CHECK(near(got.degrees, spinDegrees(want), 0.5));
+		}
+	}
+
+	g_case = "spinning: how far a skater turns";
+	{
+		// Degrees in an air of 0.56 s (Skate's quick pop), 0.79 s (its full one), 1 s and 2 s
+		const double airs[] = { 0.56, 0.79, 1.0, 2.0 };
+		struct Row { StickAt stick; double flick; double degrees[4]; };
+		const Row rows[] = {
+			{ stickHeld, 0.0, { 94, 127, 155, 260 } },                 // the stick held all along
+			{ stickThrown, 1.0, { 220, 301, 372, 635 } },              // thrown over as the board leaves the ground
+			{ stickThrownAt100Before, 1.0, { 220, 301, 372, 635 } },   // a tenth of a second before: the same
+			{ stickThrownAt300Before, 0.51, { 162, 219, 269, 453 } },  // 0.3 s before: half a flick
+			{ stickThrownAt450Before, 0.01, { 96, 129, 158, 265 } },   // 0.45 s before: none to speak of
+			{ stickOverIn50, 0.5, { 161, 217, 267, 451 } },            // pushed over in a twentieth of a second
+			{ stickOverIn100, 0.25, { 128, 173, 212, 356 } },
+			{ stickOverIn200, 0.125, { 112, 150, 184, 308 } },
+			{ stickThrownAt100After, 1.0, { 164, 245, 316, 579 } },    // thrown over in the air: later, but as fast
+			{ stickThrownAt300After, 0.47, { 47, 102, 151, 329 } },
+			{ stickHalf, 0.0, { 48, 64, 78, 131 } },                   // half the stick is half the turning
+			{ stickHalfThrown, 0.75, { 100, 135, 165, 276 } },
+			{ stickLetGoAt200, 1.0, { 179, 206, 218, 232 } },          // let go: the turning runs out
+			{ stickLetGoAt400, 1.0, { 213, 266, 292, 316 } },
+		};
+		for (size_t r = 0; r < sizeof(rows) / sizeof(rows[0]); r++) {
+			for (int a = 0; a < 4; a++) {
+				const SpinLog log = runSpin(60.0, rows[r].stick, 1.0, airs[a], 100);
+				CHECK(near(log.degrees, rows[r].degrees[a], 1.5));
+				CHECK(near(log.flick, rows[r].flick, 0.01));
+				CHECK(log.most <= 7.94 + 0.01);
+			}
+		}
+		// What THUG does with the same airs, with Left or Right held from the start: nothing for
+		// 0.1 s, then 6.85 to 7.75 rad/s. In the short air Skate's best is THUG's, in a long one
+		// it is not.
+		const double thugShort = kThugAirSpinWorst * (0.56 - kThugAirSpinWait) * 57.29577951;
+		const double thugLong = kThugAirSpinWorst * (2.0 - kThugAirSpinWait) * 57.29577951;
+		CHECK(near(thugShort, 180.5, 1.0));
+		CHECK(near(thugLong, 745.7, 1.0));
+		CHECK(runSpin(60.0, stickThrown, 1.0, 0.56, 100).degrees > thugShort);
+		CHECK(runSpin(60.0, stickThrown, 1.0, 2.0, 100).degrees < thugLong);
+		CHECK(runSpin(60.0, stickHeld, 1.0, 0.56, 100).degrees < 0.6 * thugShort);
+		// no stick, no turning
+		const SpinLog none = runSpin(60.0, stickNone, 1.0, 2.0, 100);
+		CHECK(none.degrees == 0.0);
+		CHECK(none.most == 0.0);
+	}
+
+	g_case = "spinning: what counts as a flick";
+	{
+		// A stick that was held on the ground and is let go as the board leaves it: the turning
+		// runs on from where the stick was, a little less each tick. A sixth of a turn, no more.
+		const SpinLog letGo = runSpin(60.0, stickLetGoAtTakeoff, 1.0, 2.0, 100);
+		CHECK(near(letGo.flick, 0.0, 1e-3));
+		CHECK(letGo.degrees > 40.0 && letGo.degrees < 75.0);
+		CHECK(near(letGo.degrees, spinDegrees(skateSpin(stickLetGoAtTakeoff, 1.0, 2.0, 0)), 0.5));
+		// Let go in the air and thrown over again a tenth of a second later: the stick counts
+		// as having been where the turning still was, so the throw is a small flick
+		const SpinLog again = runSpin(60.0, stickHeldLetGoThrown, 1.0, 1.0, 100);
+		double want = 0.0;
+		skateSpin(stickHeldLetGoThrown, 1.0, 1.0, &want);
+		CHECK(near(again.flick, want, 0.005));
+		CHECK(again.flick > 0.1 && again.flick < 0.45);
+		// On the ground a stick that is let go is simply at rest: thrown over again from there it
+		// is a full flick, whatever it did before
+		const SpinLog rethrown = runSpin(60.0, stickReleasedThenThrown, 1.0, 0.79, 100);
+		CHECK(near(rethrown.flick, 1.0, 1e-3));
+		CHECK(near(runSpin(1000.0, stickReleasedThenThrown, 1.0, 0.79, 100).flick, 1.0, 0.01));
+		// the same when the throw comes between two ticks, at a frame rate that has frames there
+		const SpinLog between = runSpin(1000.0, stickHeldLetGoThrownBetween, 1.0, 1.0, 100);
+		CHECK(near(between.flick, again.flick, 0.05));
+		const SpinLog between240 = runSpin(240.0, stickHeldLetGoThrownBetween, 1.0, 1.0, 100);
+		CHECK(near(between240.flick, again.flick, 0.05));
+		// A small slow move near the centre is none: the way the stick went times where it got
+		// to has to come to something
+		const SpinLog small = runSpin(60.0, stickSmallSlow, 1.0, 0.79, 100);
+		CHECK(small.flick == 0.0);
+		CHECK(near(small.degrees, 0.3 * runSpin(60.0, stickHeld, 1.0, 0.79, 100).degrees, 6.0));
+		// A stick that is pulled in is not flicked, however fast. Pulled in from the left and
+		// then pushed slowly over to the right: the slow push is all there is.
+		const SpinLog across = runSpin(60.0, stickInThenAcross, 1.0, 0.79, 100);
+		CHECK(across.degrees > 0.0);
+		CHECK(across.flick < 0.3);
+		// Thrown to the left and then pushed slowly over to the right: the throw went the other
+		// way and does not count
+		const SpinLog crossed = runSpin(60.0, stickLeftFlickThenSlowRight, 1.0, 0.79, 100);
+		CHECK(crossed.degrees > 0.0);
+		CHECK(crossed.flick < 0.3);
+		CHECK(crossed.degrees < 1.3 * runSpin(60.0, stickHeld, 1.0, 0.79, 100).degrees);
+		// How far back a flick counts: the tick the board leaves the ground on and the 28
+		// before it, the last of them for next to nothing
+		const SpinLog far = runSpin(60.0, stickThrown28Before, 1.0, 0.3, 100);
+		CHECK(far.flick > 0.003 && far.flick < 0.008);
+		const SpinLog further = runSpin(60.0, stickThrown29Before, 1.0, 0.3, 100);
+		CHECK(further.flick == 0.0);
+		// To the left as to the right, also with the stick thrown the other way in the air: the
+		// turning comes down by a fifth of a rad/s a tick and then goes the other way
+		const SpinLog there = runSpin(60.0, stickRightThenLeftInAir, 1.0, 1.5, 100);
+		const SpinLog back = runSpin(60.0, stickLeftThenRightInAir, 1.0, 1.5, 100);
+		CHECK_EQ(there.rates.size(), back.rates.size());
+		for (size_t i = 0; i < there.rates.size() && i < back.rates.size(); i++) {
+			CHECK(near(there.rates[i], -back.rates[i], 1e-5));
+			if (i > 0) {
+				// from the throw at 0.3 s until the turning has stopped
+				const bool slowing = there.rates[i] >= 0.0 && there.rates[i] < there.rates[i - 1];
+				if (slowing && i > 20) CHECK(there.rates[i - 1] - there.rates[i] <= 0.2 + 1e-4);
+			}
+		}
+		CHECK(there.rates[17] > 6.0);                         // just before the throw: still at speed
+		CHECK(there.rates[17 + 20] > there.rates[17] - 4.1);  // a third of a second later: 4 rad/s less at most
+		CHECK(there.rates.back() < -1.0);                     // and in the end it does turn the other way
+	}
+
+	g_case = "spinning: left and right";
+	{
+		// To the right when positive, to the left when negative, and exactly as far either way
+		const SpinLog right = runSpin(60.0, stickThrown, 1.0, 0.79, 100);
+		const SpinLog left = runSpin(60.0, stickThrownLeft, 1.0, 0.79, 100);
+		CHECK(right.degrees > 0.0);
+		CHECK(left.degrees < 0.0);
+		CHECK(near(right.degrees, -left.degrees, 1e-3));
+		const SpinLog heldRight = runSpin(60.0, stickHeld, 1.0, 0.79, 100);
+		const SpinLog heldLeft = runSpin(60.0, stickHeldLeft, 1.0, 0.79, 100);
+		CHECK(near(heldRight.degrees, -heldLeft.degrees, 1e-3));
+		CHECK_EQ(right.rates.size(), left.rates.size());
+		for (size_t i = 0; i < right.rates.size() && i < left.rates.size(); i++) {
+			CHECK(right.rates[i] >= 0.0);
+			CHECK(left.rates[i] <= 0.0);
+			CHECK(near(right.rates[i], -left.rates[i], 1e-5));
+		}
+		// Skate's own rules are not quite even: a rate of nothing counts as turning one way, so
+		// a turn to the other side gets going a tick later and stays a few degrees behind. The
+		// code under test turns to both sides like Skate's quicker one.
+		{
+			const std::vector<double> skateRight = skateSpin(stickThrown, 1.0, 0.79, 0);
+			const std::vector<double> skateLeft = skateSpin(stickThrownLeft, 1.0, 0.79, 0);
+			const double quick = spinDegrees(skateRight), late = -spinDegrees(skateLeft);
+			CHECK(quick > late + 4.0 && quick < late + 9.0);
+			CHECK(near(right.degrees, quick, 0.5));
+			CHECK(near(-left.degrees, quick, 0.5));
+			CHECK(near(skateLeft[0], -0.2 * 0.0 - 0.2, 1e-9));     // its first tick to the late side: the slow step
+			CHECK(skateRight[0] > 0.9);                            // and to the quick side
+		}
+		// Flicked to the left, then turned to the right: the flick does not count
+		const SpinLog crossed = runSpin(60.0, stickLeftThenRight, 1.0, 0.79, 100);
+		CHECK(crossed.degrees > 0.0);
+		// (the throw from the left end to the right end is a flick to the right, and a full one)
+		CHECK(near(crossed.flick, 1.0, 0.01));
+	}
+
+	g_case = "spinning: the same at any frame rate";
+	{
+		const StickAt sticks[] = { stickHeld, stickThrown, stickOverIn50, stickOverIn100, stickThrownAt100After, stickLetGoAt400, stickHalfThrown,
+			stickHeldLetGoThrown };
+		const double rates[] = { 60.0, 75.0, 90.0, 120.0, 144.0, 165.0, 240.0, 1000.0 };
+		for (size_t n = 0; n < sizeof(sticks) / sizeof(sticks[0]); n++) {
+			const SpinLog at60 = runSpin(60.0, sticks[n], 1.0, 0.8, 100);
+			for (size_t r = 0; r < sizeof(rates) / sizeof(rates[0]); r++) {
+				const SpinLog log = runSpin(rates[r], sticks[n], 1.0, 0.8, 100);
+				// a frame is not a tick: the stick is seen a little sooner or later
+				CHECK(near(log.degrees, at60.degrees, 2.0 + 0.02 * fabs(at60.degrees)));
+				CHECK(near(log.flick, at60.flick, 0.02));
+				CHECK(log.most <= 7.94 + 0.01);
+			}
+		}
+		// a throw of the stick is a full flick whether it takes one frame of a 60th or one of a 1000th
+		CHECK(near(runSpin(60.0, stickThrown, 1.0, 0.5, 100).flick, 1.0, 0.01));
+		CHECK(near(runSpin(1000.0, stickThrown, 1.0, 0.5, 100).flick, 1.0, 0.01));
+		// half the way in one frame is three quarters of one, as it is for Skate at its 60 ticks
+		CHECK(near(runSpin(60.0, stickHalfThrown, 1.0, 0.5, 100).flick, 0.75, 0.01));
+		CHECK(near(runSpin(144.0, stickHalfThrown, 1.0, 0.5, 100).flick, 0.75, 0.01));
+		CHECK(near(runSpin(1000.0, stickHalfThrown, 1.0, 0.5, 100).flick, 0.75, 0.01));
+		// and a stick pushed over in a tenth of a second is a quarter of one at any rate
+		CHECK(near(runSpin(30.0, stickOverIn100, 1.0, 0.5, 100).flick, 0.25, 0.03));
+		CHECK(near(runSpin(50.0, stickOverIn100, 1.0, 0.5, 100).flick, 0.25, 0.03));
+		CHECK(near(runSpin(240.0, stickOverIn100, 1.0, 0.5, 100).flick, 0.25, 0.03));
+		// Under 60 frames a second a frame is longer than a tick, and what the stick did within
+		// one is not known: it is taken to have moved evenly. So a throw that fills one frame of
+		// a 30th counts as if it had taken both ticks of it, three quarters of a flick, and half
+		// a throw in a frame of a 50th as five eighths. Everything slower than that is as above.
+		CHECK(near(runSpin(30.0, stickThrown, 1.0, 0.5, 100).flick, 0.75, 0.01));
+		CHECK(near(runSpin(50.0, stickThrown, 1.0, 0.5, 100).flick, 1.0, 0.01));
+		CHECK(near(runSpin(50.0, stickHalfThrown, 1.0, 0.5, 100).flick, 0.625, 0.01));
+		CHECK(near(runSpin(50.0, stickHeld, 1.0, 0.8, 100).degrees, runSpin(60.0, stickHeld, 1.0, 0.8, 100).degrees, 3.0));
+		CHECK(near(runSpin(50.0, stickOverIn50, 1.0, 0.8, 100).degrees, runSpin(60.0, stickOverIn50, 1.0, 0.8, 100).degrees, 5.0));
+		const SpinLog slow = runSpin(30.0, stickThrown, 1.0, 0.8, 100);
+		const SpinLog full = runSpin(60.0, stickThrown, 1.0, 0.8, 100);
+		CHECK(slow.degrees > 0.8 * full.degrees && slow.degrees < 0.95 * full.degrees);
+		CHECK(near(runSpin(30.0, stickHeld, 1.0, 0.8, 100).degrees, runSpin(60.0, stickHeld, 1.0, 0.8, 100).degrees, 6.0));
+		CHECK(near(runSpin(30.0, stickOverIn100, 1.0, 0.8, 100).degrees, runSpin(60.0, stickOverIn100, 1.0, 0.8, 100).degrees, 8.0));
+	}
+
+	g_case = "spinning: as a share of Skate's";
+	{
+		const SpinLog whole = runSpin(60.0, stickThrown, 1.0, 0.79, 100);
+		const SpinLog half = runSpin(60.0, stickThrown, 1.0, 0.79, 50);
+		const SpinLog twice = runSpin(60.0, stickThrown, 1.0, 0.79, 200);
+		CHECK(near(half.degrees, 0.5 * whole.degrees, 0.1));
+		CHECK(near(twice.degrees, 2.0 * whole.degrees, 0.2));
+		CHECK(near(half.flick, whole.flick, 1e-6));
+		// off: nothing
+		Spin off;
+		for (int i = 0; i < 120; i++) {
+			CHECK(off.Step(1.0f / 60.0f, 1.0f, 0) == 0.0f);
+			CHECK(off.Step(1.0f / 60.0f, 1.0f, -50) == 0.0f);
+			CHECK(!off.InAir());
+		}
+	}
+
+	g_case = "spinning: one air after another";
+	{
+		Spin spin;
+		const float dt = 1.0f / 60.0f;
+		// on the ground, the stick at rest
+		for (int i = 0; i < 60; i++) spin.Feed(dt, 0.0f);
+		CHECK(!spin.InAir());
+		CHECK(spin.Seconds() == 0.0f);
+		CHECK(spin.Turned() == 0.0f);
+		// an air with the stick thrown over
+		double first = 0.0;
+		for (int i = 0; i < 36; i++) first += spin.Step(dt, 1.0f, 100) * dt;
+		CHECK(spin.InAir());
+		CHECK(near(spin.Seconds(), 0.6, 1e-3));
+		CHECK(near(spin.Flick(), 1.0, 1e-3));
+		CHECK(near(spin.Turned(), first, 1e-3));
+		CHECK(first > 3.5);
+		// it lands: the turning is over, what the air came to is still there to be read
+		spin.Land();
+		CHECK(!spin.InAir());
+		CHECK(near(spin.Turned(), first, 1e-3));
+		CHECK(near(spin.Seconds(), 0.6, 1e-3));
+		CHECK(near(spin.Flick(), 1.0, 1e-3));
+		// on the ground with the stick still over, for a second
+		for (int i = 0; i < 60; i++) spin.Feed(dt, 1.0f);
+		CHECK(!spin.InAir());
+		// the next air starts from nothing, and the old flick is long gone: the stick is only held now
+		double second = 0.0;
+		float firstRate = spin.Step(dt, 1.0f, 100);
+		second += firstRate * dt;
+		CHECK(spin.InAir());
+		CHECK(near(spin.Seconds(), dt, 1e-4));
+		CHECK(firstRate > 0.0f && firstRate < 1.5f);
+		for (int i = 1; i < 36; i++) second += spin.Step(dt, 1.0f, 100) * dt;
+		CHECK(near(spin.Flick(), 0.0, 1e-3));
+		CHECK(near(second, 0.4 * first, 0.25));
+		CHECK(near(spin.Turned(), second, 1e-3));
+		// Straight from one air into the next without a frame on the ground (a bounce): it lands
+		// in between all the same when it is told so
+		spin.Land();
+		const float again = spin.Step(dt, 1.0f, 100);
+		CHECK(spin.InAir());
+		CHECK(near(spin.Seconds(), dt, 1e-4));
+		CHECK(again > 0.0f && again < 1.5f);
+		// Two airs a third of a second apart, the stick thrown over at the start of the first and
+		// held since: by the second the throw is 0.6 s old and counts for nothing
+		{
+			Spin two;
+			for (int i = 0; i < 60; i++) two.Feed(dt, 0.0f);
+			for (int i = 0; i < 18; i++) two.Step(dt, 1.0f, 100);
+			CHECK(near(two.Flick(), 1.0, 1e-3));
+			two.Land();
+			for (int i = 0; i < 18; i++) two.Feed(dt, 1.0f);
+			for (int i = 0; i < 18; i++) two.Step(dt, 1.0f, 100);
+			CHECK(near(two.Flick(), 0.0, 1e-3));
+		}
+		// The ground ends an air by itself as well, without being told
+		{
+			Spin untold;
+			for (int i = 0; i < 20; i++) untold.Step(dt, 1.0f, 100);
+			CHECK(untold.InAir());
+			untold.Feed(dt, 1.0f);
+			CHECK(!untold.InAir());
+			for (int i = 0; i < 59; i++) untold.Feed(dt, 1.0f);
+			const float start = untold.Step(dt, 1.0f, 100);
+			CHECK(near(untold.Seconds(), dt, 1e-4));
+			CHECK(start > 0.0f && start < 1.5f);
+		}
+		// What was left of a tick when the board landed is not carried into the next air
+		{
+			Spin carry;
+			carry.Step(0.01f, 0.0f, 100);
+			carry.Step(0.01f, 0.0f, 100);
+			CHECK(carry.InAir());
+			carry.Land();
+			carry.Step(0.014f, 0.0f, 100);
+			CHECK(!carry.InAir());
+			carry.Step(0.014f, 0.0f, 100);
+			CHECK(carry.InAir());
+		}
+		// Reset: nothing is left
+		CHECK(near(spin.Seconds(), dt, 1e-4));
+		for (int i = 0; i < 30; i++) spin.Feed(dt, 0.0f);
+		for (int i = 0; i < 12; i++) spin.Step(dt, 1.0f, 100);
+		CHECK(near(spin.Flick(), 1.0, 1e-3));
+		spin.Reset();
+		CHECK(!spin.InAir());
+		CHECK(spin.Turned() == 0.0f);
+		CHECK(spin.Flick() == 0.0f);
+		CHECK(spin.Seconds() == 0.0f);
+		// not the stick as it was either: an air with the stick at rest does not turn
+		for (int i = 0; i < 30; i++) CHECK(spin.Step(dt, 0.0f, 100) == 0.0f);
+		// nor a throw that no tick had taken up yet
+		{
+			Spin pending;
+			for (int i = 0; i < 100; i++) pending.Feed(0.001f, 0.0f);
+			pending.Feed(0.001f, 1.0f);
+			pending.Reset();
+			for (int i = 0; i < 300; i++) pending.Step(0.001f, 1.0f, 100);
+			CHECK(pending.InAir());
+			CHECK(near(pending.Flick(), 0.0, 1e-3));
+		}
+		// A throw in the first moments after a reset, before the trail of the stick is a tick
+		// long: it is measured from as far back as the trail goes
+		{
+			Spin early;
+			for (int i = 0; i < 4; i++) early.Feed(0.001f, 0.0f);
+			for (int i = 0; i < 3; i++) early.Feed(0.001f, 0.5f);
+			for (int i = 0; i < 200; i++) early.Step(0.001f, 1.0f, 100);
+			CHECK(near(early.Flick(), 1.0, 0.01));
+		}
+		// a flick made before the reset does not count after it
+		Spin fresh;
+		for (int i = 0; i < 30; i++) fresh.Feed(dt, 0.0f);
+		fresh.Feed(dt, 1.0f);
+		fresh.Reset();
+		for (int i = 0; i < 30; i++) fresh.Step(dt, 1.0f, 100);
+		CHECK(near(fresh.Flick(), 0.0, 1e-3));
+	}
+
+	g_case = "spinning: odd frames";
+	{
+		Spin spin;
+		const float nan = (float)sqrt(-1.0);
+		// no time, time backwards, not a number: nothing happens
+		CHECK(spin.Step(0.0f, 1.0f, 100) == 0.0f);
+		CHECK(spin.Step(-1.0f, 1.0f, 100) == 0.0f);
+		CHECK(spin.Step(nan, 1.0f, 100) == 0.0f);
+		CHECK(!spin.InAir());
+		spin.Feed(0.0f, 1.0f);
+		spin.Feed(-1.0f, 1.0f);
+		spin.Feed(nan, 1.0f);
+		CHECK(!spin.InAir());
+		// and nothing is spoilt: after them a throw is a throw
+		{
+			Spin after;
+			for (int i = 0; i < 30; i++) after.Feed(1.0f / 60.0f, 0.0f);
+			after.Feed(nan, 0.0f);
+			after.Feed(-1.0f, 0.0f);
+			after.Feed(0.0f, 0.0f);
+			for (int i = 0; i < 12; i++) after.Step(1.0f / 60.0f, 1.0f, 100);
+			CHECK(near(after.Flick(), 1.0, 1e-3));
+			// and a stick that is held is not: a second on the ground with it over, then an air
+			after.Land();
+			after.Feed(nan, 1.0f);
+			after.Feed(-1.0f, 1.0f);
+			after.Feed(0.0f, 1.0f);
+			for (int i = 0; i < 60; i++) after.Feed(1.0f / 60.0f, 1.0f);
+			for (int i = 0; i < 12; i++) after.Step(1.0f / 60.0f, 1.0f, 100);
+			CHECK(near(after.Flick(), 0.0, 1e-3));
+			// a stick that is not a number on the ground is a stick at rest too
+			Spin bad;
+			for (int i = 0; i < 30; i++) bad.Feed(1.0f / 60.0f, nan);
+			double turned = 0.0;
+			for (int i = 0; i < 30; i++) {
+				const float rate = bad.Step(1.0f / 60.0f, 0.0f, 100);
+				CHECK(rate == 0.0f);
+				turned += rate;
+			}
+			CHECK(turned == 0.0);
+			for (int i = 0; i < 30; i++) CHECK(bad.Step(1.0f / 60.0f, 1.0f, 100) >= 0.0f);
+			CHECK(bad.Turned() > 0.5f);
+		}
+		// a stick that is not a number is a stick at rest
+		for (int i = 0; i < 60; i++) {
+			const float rate = spin.Step(1.0f / 60.0f, nan, 100);
+			CHECK(rate == 0.0f);
+		}
+		// a stick past its end is at its end
+		Spin far, end;
+		double a = 0.0, b = 0.0;
+		for (int i = 0; i < 40; i++) {
+			a += far.Step(1.0f / 60.0f, 5.0f, 100);
+			b += end.Step(1.0f / 60.0f, 1.0f, 100);
+		}
+		CHECK(near(a, b, 1e-4));
+		// a frame that took seconds counts as a tenth of one: six ticks, not hundreds
+		Spin hitch;
+		const float rate = hitch.Step(5.0f, 1.0f, 100);
+		CHECK(near(hitch.Seconds(), 0.1, 1e-3));
+		CHECK(rate > 0.0f && rate <= 7.94f);
+		CHECK(near(hitch.Turned(), rate * 0.1, 1e-4));
+		// frames far shorter than a tick: the turning waits for the tick, the flick is still seen
+		Spin quick;
+		for (int i = 0; i < 100; i++) quick.Feed(0.0001f, 0.0f);
+		float seen = 0.0f;
+		for (int i = 0; i < 400; i++) seen = quick.Step(0.0001f, 1.0f, 100);
+		CHECK(seen > 0.0f);
+		CHECK(near(quick.Flick(), 1.0, 0.01));
+	}
+}
+
 int main(int argc, char** argv) {
 	const std::string scriptDir = argc > 1 ? argv[1] : "scripts/qb/source/scripts/game/skater";
 	testAgainstTheScripts(scriptDir);
@@ -1300,6 +1945,7 @@ int main(int argc, char** argv) {
 	testPushing();
 	testCoasting();
 	testSteering();
+	testSpinning();
 	printf("%d checks, %d failures\n", g_checks, g_failures);
 	return g_failures == 0 ? 0 : 1;
 }

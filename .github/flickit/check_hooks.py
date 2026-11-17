@@ -36,6 +36,11 @@ they have to keep to what the game's code expects there, whatever the compiler m
                 argument: every return is ret 4 (or a jump into the game's function)
   pad update    takes the place of a call to the game's update of its picture of a pad, which pops
                 one argument: every return is ret 4 (or a jump into the game's function)
+  air turning   takes the place of the call to the game's turning in the air: no arguments, every
+                return is a plain ret
+  spin rate     takes the place of two calls to the game's "one of the skater's numbers that go by
+                his stats", which pops one argument and answers on the floating point stack: every
+                return is ret 4 (or a jump into the game's function) with the answer there
   rail boost    a bare function in the place of a call to GetPhysicsFloat: passes esi to a function
                 that answers with the address to go on at, and jumps there with the stack as it found
                 it. That address is the game's GetPhysicsFloat or a function of the DLL that returns
@@ -70,6 +75,8 @@ VECTOR_TURN = 0x0042F6D0
 MATRIX_TURN = 0x00405230
 BUTTON_HELD = 0x00451A70
 PAD_UPDATE = 0x0051AEB0
+AIR_TURN = 0x0055F050
+SCRIPTED_STAT = 0x00516AD0
 
 # push ecx / push edx / push esi / call ... / add esp, 4 / pop edx / pop ecx / ret
 RAIL_CATCH_PATTERN = bytes.fromhex("515256e8") + b"...." + bytes.fromhex("83c4045a59c3")
@@ -93,6 +100,8 @@ NAMES = {
     MATRIX_TURN: "turn a matrix",
     BUTTON_HELD: "is this button down",
     PAD_UPDATE: "the pad update",
+    AIR_TURN: "the turning in the air",
+    SCRIPTED_STAT: "the skater's number by his stats",
     0x0076A788: "the skate module pointer",
     0x0041BDC0: "GetComponent",
     0x0040FBC0: "CScript::SetScript",
@@ -338,6 +347,7 @@ def check(path):
     catch, pick, balance, boost, search, valid = [], [], [], [], [], []
     gravity, jump, jump_speed = [], [], []
     brake, kick, friction, turning, held, pad = [], [], [], [], [], []
+    air_turn, spin_rate = [], []
     for p in sorted(set(dll.entry(p) for p in pointers)):
         if matches(dll, p, RAIL_CATCH_PATTERN, (4, 8)):
             catch.append(p)
@@ -373,6 +383,10 @@ def check(path):
             held.append((p, insns))
         elif PAD_UPDATE in refs:
             pad.append((p, insns))
+        elif AIR_TURN in refs:
+            air_turn.append((p, insns))
+        elif SCRIPTED_STAT in refs:
+            spin_rate.append((p, insns))
 
     # --- rail catch
     if len(catch) != 1:
@@ -439,7 +453,8 @@ def check(path):
 
     # --- rolling: each stands in for a call, and has to leave the stack as the function it stands in for does
     for found, what, count, pops in ((brake, "brake test hook", 1, 0), (kick, "kick test hook", 2, 0), (friction, "friction hook", 1, 0),
-                                     (turning, "turning hook", 1, 0), (held, "held hook", 1, 4), (pad, "pad update hook", 1, 4)):
+                                     (turning, "turning hook", 1, 0), (held, "held hook", 1, 4), (pad, "pad update hook", 1, 4),
+                                     (air_turn, "air turning hook", 1, 0), (spin_rate, "spin rate hook", 1, 4)):
         if len(found) != count:
             problems.append("the %s was found %d times, not %d" % (what, len(found), count))
         for p, insns in found:
@@ -452,6 +467,8 @@ def check(path):
                 refs = dll.game_refs(insns)
                 if VECTOR_TURN not in refs or MATRIX_TURN not in refs:
                     problems.append("the turning hook does not turn the skater with the game's own functions")
+            if found is spin_rate and not answers_on_x87(insns):
+                problems.append("the spin rate hook has a return without its answer on the floating point stack")
 
     # --- grind pick
     if len(pick) != 1:

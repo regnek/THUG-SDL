@@ -45,10 +45,30 @@ On the rail: stick down = 5-0, up = nosegrind, let go = 50-50 (the game takes
 the switch about three quarters of a second into a grind). A flick pops off;
 letting go does not. Right bumper = drop off the rail. No balancing.
 
+Spinning
+--------
+New in this build: in the air the movement stick turns the skater the way
+Skate does.
+
+  - How far the stick is pushed says how fast he turns. Holding it is not
+    enough for much: 94 degrees in a small ollie, 127 in a full one.
+  - Throw the stick over as you pop (or just before) and he turns up to two
+    and a half times as fast: 220 and 301 degrees. THUG's own turning makes
+    about 190 and 290 of the same two airs with left or right simply held.
+  - In a long air Skate turns less than THUG: the rate falls off after the
+    first second.
+  - Let the stick go and the turning runs out by itself.
+  - The bumpers (THUG's spin buttons) turn him the way THUG does.
+
+  Spin=100        percent of Skate's turning. 0 = THUG's own
+
+With the console on, every air says how hard the flick was and how far the
+stick asked him to turn. Flip tricks are as they were.
+
 Rolling
 -------
-New in this build: the board is pushed, rolls out and steers the way Skate's
-does. Three parts, three settings.
+The board is pushed, rolls out and steers the way Skate's does. Three parts,
+three settings.
 
   Pushing
   - The skater no longer kicks by himself. The Flip button pushes (THUG's own
@@ -174,7 +194,8 @@ If something is wrong
   GrindCatch, GrindPick, GrindSwitch and GrindBalance switch the parts one by one,
   GrindDrag=0 with GrindExit=0 gives THUG's endless grinds back,
   GrindReach=0 its own reach for rails, AirGravity=0 and JumpPop=0 its jumps,
-  Push=0, Coast=0 and Steering=0 its own kick, friction and turning.
+  Push=0, Coast=0 and Steering=0 its own kick, friction and turning,
+  Spin=0 its turning in the air.
 - To go back to stock: delete thugsdl.dll and rename thugsdl.dll.bak back.
 
 Skate 3 stick patterns (optional)

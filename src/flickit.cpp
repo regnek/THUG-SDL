@@ -42,6 +42,7 @@ namespace Flickit {
 	static const int kJumpLeastPercent = 25;
 	// The same for the push and the steering
 	static const int kRollLeastPercent = 25;
+	static const int kSpinLeastPercent = 25;
 
 	static inline int32_t Since(uint32_t now, uint32_t then) {
 		return (int32_t)(now - then);
@@ -108,6 +109,8 @@ namespace Flickit {
 		s.pushCycle = 900;
 		s.coast = 100;
 		s.steering = 100;
+
+		s.spin = 100;
 	}
 
 	void Sanitize(Settings& s) {
@@ -164,6 +167,8 @@ namespace Flickit {
 		s.pushCycle = Clamp(s.pushCycle, 200, 3000);
 		s.coast = Clamp(s.coast, 0, 1000);
 		s.steering = s.steering <= 0 ? 0 : Clamp(s.steering, kRollLeastPercent, kRollMostPercent);
+
+		s.spin = s.spin <= 0 ? 0 : Clamp(s.spin, kSpinLeastPercent, kSpinMostPercent);
 	}
 
 	float AngleDeg(float x, float y) {
@@ -1322,6 +1327,7 @@ namespace Flickit {
 	const float kThugGroundTurn = 1.8f;
 	const float kTurnGrip = 0.8f;
 	const int kRollMostPercent = 400;
+	const int kSpinMostPercent = 400;
 
 	// Skate's numbers come as curves of eight points with straight lines between them. Before the
 	// first point and after the last the curve stays where it is.
@@ -1689,6 +1695,255 @@ namespace Flickit {
 
 		const float turn = m_angle < 0.0f ? -1.0f : 1.0f;
 		return turn * RateOfAngle(m_angle * turn, speed, percent);
+	}
+
+	// ------------------------------------------------------------------------------------------
+	// Spinning in the air
+	// ------------------------------------------------------------------------------------------
+
+	// THUG (physics.q): Physics_Air_Rotation_stat, Physics_Air_No_Rotate_Time
+	const float kThugAirSpinWorst = 6.85f;
+	const float kThugAirSpinBest = 7.75f;
+	const float kThugAirSpinWait = 0.1f;
+	// Skate 3, physics_bodyspin
+	const float kSpinLeast = 0.4f;
+
+	// rad/s with the stick at its end, over the seconds since the board left the ground
+	static const Curve8 kSpinOfTime = {
+		{ 0.0f, 0.0521f, 0.127f, 0.2443f, 0.3681f, 0.5635f, 0.9055f, 2.0f },
+		{ 3.15f, 6.3643f, 7.7786f, 7.9393f, 7.7143f, 6.975f, 5.6893f, 3.6643f }
+	};
+	// The most the rate changes in one tick (rad/s), over the same seconds
+	static const Curve8 kSpinStepOfTime = {
+		{ 0.0f, 0.1156f, 0.2557f, 0.3941f, 0.5326f, 0.6775f, 0.8779f, 1.0f },
+		{ 0.9929f, 0.7607f, 0.5071f, 0.35f, 0.225f, 0.1714f, 0.1571f, 0.1536f }
+	};
+	// What a flick counts for, over when it happened: seconds, the board leaves the ground at 0
+	static const Curve8 kFlickOfTime = {
+		{ -0.4967f, -0.3746f, -0.2541f, 0.0f, 0.1352f, 0.228f, 0.3371f, 0.5f },
+		{ 0.0f, 0.05f, 1.0f, 1.0f, 1.0f, 0.6286f, 0.3857f, 0.2857f }
+	};
+	// A flick: how far the stick moved in one tick, times this, ...
+	static const float kFlickGain = 1.5f;
+	// ... if that times where the stick now is comes to more than this (it moved outward, and not just a little)
+	static const float kFlickLeast = 0.1f;
+	// The rate comes down by no more than this in one tick (rad/s)
+	static const float kSpinSlowStep = 0.2f;
+	// A stick closer to its centre than this has been let go
+	static const float kStickNone = 1.52588e-05f;
+	// Then the turning goes on from the eased stick, which keeps this much of itself a tick
+	static const float kSpinCarry = 0.96f;
+	// The eased stick makes up this share of what it is behind in one tick
+	static const float kSpinEase = 0.2f;
+	// The trail of the stick takes a new look at most this often (s): an eighth of a tick
+	static const float kTrailStep = 1.0f / 480.0f;
+
+	static inline float Absf(float v) {
+		return v < 0.0f ? -v : v;
+	}
+
+	float SpinRate(float seconds) {
+		return At(kSpinOfTime, seconds);
+	}
+
+	Spin::Spin() {
+		Reset();
+	}
+
+	void Spin::Reset() {
+		for (int i = 0; i < HISTORY; i++) {
+			m_history[i] = 0.0f;
+		}
+		m_index = 0;
+		m_trailCount = 0;
+		m_flick = 0.0f;
+		m_smooth = 0.0f;
+		m_air = false;
+		m_time = 0.0f;
+		m_peak = 0.0f;
+		m_rate = 0.0f;
+		m_carry = 0.0f;
+		m_feed = 0.0f;
+		m_turned = 0.0f;
+	}
+
+	// The stick on one frame: how fast it is moving outward. Skate measures that as the way the
+	// stick has gone since the tick before, a 60th of a second ago. Frames do not fall on ticks,
+	// so here it is the way the stick has gone in the last 60th of a second, read off a short
+	// trail of where it was (with a straight line between two looks at it). At 60 frames a
+	// second that is Skate's own measure. The best of the frames since the last tick is that
+	// tick's.
+	void Spin::Watch(float dt, float stick) {
+		for (int i = 0; i < m_trailCount; i++) {
+			m_trailAge[i] += dt;
+		}
+		// Where the stick was a tick ago. The trail runs from the latest look back. With no
+		// trail yet it was where it is: the first look says nothing about how it got there.
+		float then = stick;
+		if (m_trailCount > 0) {
+			float newerAge = 0.0f;
+			float newerStick = stick;
+			then = m_trailStick[m_trailCount - 1];      // the trail is shorter than a tick: as far back as it goes
+			for (int i = 0; i < m_trailCount; i++) {
+				if (m_trailAge[i] >= kSkateTick) {
+					const float span = m_trailAge[i] - newerAge;
+					then = span > 0.0f ? newerStick + (m_trailStick[i] - newerStick) * (kSkateTick - newerAge) / span : m_trailStick[i];
+					break;
+				}
+				newerAge = m_trailAge[i];
+				newerStick = m_trailStick[i];
+			}
+		}
+		const float moved = (stick - then) * kFlickGain;
+		const float flick = moved * stick > kFlickLeast ? Clampf(moved, -1.0f, 1.0f) : 0.0f;
+		if (Absf(flick) > Absf(m_flick)) {
+			m_flick = flick;
+		}
+		// This look joins the trail, unless the last one is only a moment old. The oldest drops
+		// off the end: the trail is long enough to reach back a tick whatever the frame rate.
+		if (m_trailCount == 0 || m_trailAge[0] >= kTrailStep) {
+			const int keep = m_trailCount < TRAIL - 1 ? m_trailCount : TRAIL - 1;
+			for (int i = keep; i > 0; i--) {
+				m_trailAge[i] = m_trailAge[i - 1];
+				m_trailStick[i] = m_trailStick[i - 1];
+			}
+			m_trailAge[0] = 0.0f;
+			// A stick that is let go in the air counts as being where the turning still is
+			m_trailStick[0] = (m_air && Absf(stick) < kStickNone) ? m_smooth : stick;
+			m_trailCount = keep + 1;
+		}
+	}
+
+	// One of Skate's ticks, a 60th of a second
+	void Spin::Tick(float stick, bool air) {
+		const float flick = m_flick;
+		m_history[m_index] = flick;
+		m_index = (m_index + 1) % HISTORY;
+
+		if (!air) {
+			Land();
+			m_smooth += (stick - m_smooth) * kSpinEase;
+			return;
+		}
+		m_feed = 0.0f;
+
+		if (!m_air) {
+			// The board has just left the ground: the best flick of the half second before,
+			// each for what its time counts. The one of this tick is a tick old by now.
+			m_air = true;
+			m_time = 0.0f;
+			m_turned = 0.0f;
+			m_peak = 0.0f;
+			float when = 0.0f;
+			int i = m_index;
+			for (int k = 1; k < HISTORY; k++) {
+				i = (i + HISTORY - 1) % HISTORY;
+				when -= kSkateTick;
+				const float counts = At(kFlickOfTime, when) * m_history[i];
+				if (Absf(counts) > Absf(m_peak)) {
+					m_peak = counts;
+				}
+			}
+		}
+		// A flick in the air counts too, the sooner the more
+		const float counts = At(kFlickOfTime, m_time) * flick;
+		if (Absf(counts) > Absf(m_peak)) {
+			m_peak = counts;
+		}
+		const float before = m_time;
+		m_time += kSkateTick;
+
+		// The stick, or where it was when it was let go
+		float input = stick;
+		if (Absf(stick) < kStickNone) {
+			m_smooth *= kSpinCarry;
+			input = m_smooth;
+			// and that is where the stick counts as having been, when it is thrown again
+			m_trailCount = 1;
+			m_trailAge[0] = 0.0f;
+			m_trailStick[0] = m_smooth;
+		}
+		else {
+			m_smooth += (stick - m_smooth) * kSpinEase;
+		}
+
+		const float target = At(kSpinOfTime, m_time) * input;
+		if (target * m_peak < 0.0f) {
+			m_peak = 0.0f;      // flicked one way, turning the other: the flick is void
+		}
+		// Skate counts the turning the other way round from the stick
+		const float wanted = -(kSpinLeast + (1.0f - kSpinLeast) * Absf(m_peak)) * target;
+		// The rate may grow by more in a tick than it may shrink. (Skate takes a rate of nothing
+		// for one that turns to the left, so its turn to one side starts a tick late and ends up
+		// 7 degrees short in a full pop. Here both sides start like its quicker one.)
+		const float step = At(kSpinStepOfTime, before);
+		const float slow = step < kSpinSlowStep ? step : kSpinSlowStep;
+		const float up = m_rate < 0.0f ? slow : step;
+		const float down = m_rate > 0.0f ? -slow : -step;
+		m_rate += Clampf(wanted - m_rate, down, up);
+	}
+
+	void Spin::Land() {
+		m_air = false;
+		m_rate = 0.0f;
+		m_carry = 0.0f;
+	}
+
+	void Spin::Feed(float dt, float stick) {
+		if (!(dt > 0.0f)) {
+			return;
+		}
+		if (dt > kLongFrame) {
+			dt = kLongFrame;
+		}
+		if (!(stick == stick)) {
+			stick = 0.0f;
+		}
+		stick = Clampf(stick, -1.0f, 1.0f);
+		Watch(dt, stick);
+		m_feed += dt;
+		bool ticked = false;
+		while (m_feed >= kSkateTick - 1.0e-5f) {
+			m_feed -= kSkateTick;
+			Tick(stick, false);
+			ticked = true;
+		}
+		if (m_feed < 0.0f) {
+			m_feed = 0.0f;
+		}
+		if (ticked) {
+			m_flick = 0.0f;
+		}
+	}
+
+	float Spin::Step(float dt, float stick, int percent) {
+		if (percent <= 0 || !(dt > 0.0f)) {
+			return 0.0f;
+		}
+		if (dt > kLongFrame) {
+			dt = kLongFrame;
+		}
+		if (!(stick == stick)) {
+			stick = 0.0f;
+		}
+		stick = Clampf(stick, -1.0f, 1.0f);
+		Watch(dt, stick);
+		m_carry += dt;
+		bool ticked = false;
+		while (m_carry >= kSkateTick - 1.0e-5f) {
+			m_carry -= kSkateTick;
+			Tick(stick, true);
+			ticked = true;
+		}
+		if (m_carry < 0.0f) {
+			m_carry = 0.0f;
+		}
+		if (ticked) {
+			m_flick = 0.0f;
+		}
+		const float rate = -m_rate * (float)percent * 0.01f;
+		m_turned += rate * dt;
+		return rate;
 	}
 
 	TiltTracker::TiltTracker() {

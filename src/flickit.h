@@ -116,6 +116,9 @@ namespace Flickit {
 		int pushCycle;        // ms at least from the start of one push to the start of the next
 		int coast;            // percent of Skate's rolling resistance, 0: THUG's own friction
 		int steering;         // percent of Skate's grip in a turn, 0: THUG's own turning
+
+		// Spinning in the air the Skate way (see Spinning in the air below). Needs the game hooks.
+		int spin;             // percent of Skate's turning in the air, 0: THUG's own
 	};
 
 	void SetDefaults(Settings& s);
@@ -620,6 +623,84 @@ namespace Flickit {
 	// How fast a board turns once its trucks have settled: stick 0 to 1, speed in the game's
 	// units per second, the answer in radians per second
 	float TurnRate(float stick, float speed, int percent);
+
+	// ------------------------------------------------------------------------------------------
+	// Spinning in the air
+	//
+	// THUG turns the skater in the air at 6.85 to 7.75 radians a second (by his spin stat) for as
+	// long as left or right is held: nothing for the first tenth of a second the button is
+	// down, then all of it, and the same from the first moment of an air to the last.
+	//
+	// Skate (the tuning its normal difficulty uses):
+	//
+	//   - The stick says how fast, by how far it is pushed. With the stick at its end the rate
+	//     goes with the time since the board left the ground: 3.2 rad/s at once, 7.9 after a
+	//     quarter of a second, 5.7 after 0.9 s, 3.7 from 2 s on.
+	//   - Of that rate a stick that is simply held gets 0.4. The rest is for a flick: how fast
+	//     the stick moved outward in one tick (times 1.5, at most 1), the best of the last
+	//     quarter second before the board left the ground and the first 0.14 s after it (earlier
+	//     and later flicks count for less). The stick thrown to its end in one tick is the full
+	//     rate; over a twentieth of a second it is 0.7 of it.
+	//   - The rate follows by at most 1 rad/s a tick at first and 0.15 after a second in the
+	//     air, and comes down by at most 0.2 a tick.
+	//   - A stick that is let go does not stop the turning: it goes on from where the stick was,
+	//     4 percent less each tick.
+	//
+	// What Skate adds by itself on a ramp (it turns the skater back toward the way down) is
+	// not here: THUG has its own for that.
+	// ------------------------------------------------------------------------------------------
+
+	extern const float kThugAirSpinWorst;   // rad/s: THUG's own turning in the air, with the worst spin stat
+	extern const float kThugAirSpinBest;    // and with the best (Physics_Air_Rotation_stat)
+	extern const float kThugAirSpinWait;    // s before THUG's turning starts (Physics_Air_No_Rotate_Time)
+	extern const float kSpinLeast;          // the share of Skate's rate a stick that was not flicked gets
+	extern const int kSpinMostPercent;      // the most Settings::spin can be
+
+	// Skate's rate with the stick at its end after a full flick, in radians per second, at a
+	// time in seconds since the board left the ground
+	float SpinRate(float seconds);
+
+	// The turning of one skater in the air.
+	class Spin {
+	public:
+		Spin();
+		void Reset();
+		// Once on every frame the skater is not in the air: the stick is watched there too,
+		// since a flick just before the board leaves the ground counts. dt: seconds.
+		// stick: -1 (left) to 1 (right).
+		void Feed(float dt, float stick);
+		// Once on every frame of the game's physics in the air. percent: Settings::spin, more
+		// than 0. Returns how fast the skater turns, in radians per second, to the right when
+		// positive.
+		float Step(float dt, float stick, int percent);
+		// The air is over. What it came to (Flick, Seconds, Turned) stays until the next one.
+		void Land();
+		// For the log and the tests
+		bool InAir() const { return m_air; }
+		float Flick() const { return m_peak < 0.0f ? -m_peak : m_peak; }   // 0 to 1: the flick that counts
+		float Seconds() const { return m_time; }                          // in this air
+		float Turned() const { return m_turned; }                         // radians asked for in this air, to the right when positive
+
+	private:
+		enum { HISTORY = 30, TRAIL = 12 };
+		void Watch(float dt, float stick);
+		void Tick(float stick, bool air);
+
+		float m_history[HISTORY];   // how fast the stick moved outward, tick by tick
+		int m_index;                // where the next one goes
+		float m_trailAge[TRAIL];    // where the stick was of late: how long ago (s), the latest look first, ...
+		float m_trailStick[TRAIL];  // ... and where
+		int m_trailCount;
+		float m_flick;              // how fast it moved outward at best since the last tick
+		float m_smooth;             // the stick, eased
+		bool m_air;
+		float m_time;               // seconds in this air
+		float m_peak;               // the flick that counts, with the side it went to
+		float m_rate;               // rad/s, the way Skate counts it: to the LEFT when positive
+		float m_carry;              // time in the air that has not made a whole tick yet
+		float m_feed;               // the same on the ground
+		float m_turned;
+	};
 
 	// ------------------------------------------------------------------------------------------
 	// Stick patterns
