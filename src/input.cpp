@@ -9,6 +9,7 @@
 #include "keycodes.h"
 #include "flickit.h"
 #include "flickit_game.h"
+#include "flickit_pose.h"
 #include <QB/LazyStruct.h>
 #include <QB/Qb.h>
 #include <Util/sb.h>
@@ -333,6 +334,8 @@ uint32_t flickitFootSerial = 0;                          // for the log: the las
 uint32_t flickitBlindSerial = 0;                         // for the log: the last time the pushes went over to the clock
 uint32_t flickitCutSerial = 0;                           // for the log: the last animation of the game's a push cut short
 uint32_t flickitWaySerial = 0;                           // for the log: the last push animation that gave way to something before it
+uint32_t flickitPoseSerial = 0;                          // for the log: the last crouch that showed the stick's depth
+uint32_t flickitPoseLostSerial = 0;                      // for the log: the last time the game dropped the pose kept for a crouch
 FlickitGame::Skater flickitFlipSkater;                   // the skater as last read, for the log of a held flip trick
 uint32_t flickitFlipToldLevel = 0;                       // the last held flip trick the log said had no air for another rotation
 uint32_t flickitSpinSerial = 0;                          // for the log: the last air Flickit turned the skater in
@@ -432,6 +435,7 @@ void loadFlickitSettings() {
 	s.grindReach = (int)GetPrivateProfileInt(FLICKIT_SECTION, "GrindReach", s.grindReach, configFile);
 	s.airGravity = (int)GetPrivateProfileInt(FLICKIT_SECTION, "AirGravity", s.airGravity, configFile);
 	s.jumpPop = (int)GetPrivateProfileInt(FLICKIT_SECTION, "JumpPop", s.jumpPop, configFile);
+	s.crouchPose = (int)GetPrivateProfileInt(FLICKIT_SECTION, "CrouchPose", s.crouchPose, configFile);
 	s.push = (int)GetPrivateProfileInt(FLICKIT_SECTION, "Push", s.push, configFile);
 	s.pushOnOllie = (int)GetPrivateProfileInt(FLICKIT_SECTION, "PushOnOllie", s.pushOnOllie, configFile);
 	s.pushOverTurn = (int)GetPrivateProfileInt(FLICKIT_SECTION, "PushOverTurn", s.pushOverTurn, configFile);
@@ -615,6 +619,20 @@ static void flickitLogGame(const FlickitGame::Skater& sk, uint32_t now) {
 	if (sk.cutSerial != flickitCutSerial) {
 		flickitCutSerial = sk.cutSerial;
 		Log::TypedLog(CHN_SDL, "Flickit: the push cut the game's %s short, %.0f%% into it\n", sk.cutAnim, sk.cutShare * 100.0f);
+	}
+	if (sk.poseSerial != flickitPoseSerial) {
+		flickitPoseSerial = sk.poseSerial;
+		const char* name = FlickitPose::AnimName(sk.poseFrom);
+		if (name) {
+			Log::TypedLog(CHN_SDL, "Flickit: the crouch goes as deep as the stick, from %s\n", name);
+		}
+		else {
+			Log::TypedLog(CHN_SDL, "Flickit: the crouch goes as deep as the stick, from animation %08X\n", sk.poseFrom);
+		}
+	}
+	if (sk.poseLostSerial != flickitPoseLostSerial) {
+		flickitPoseLostSerial = sk.poseLostSerial;
+		Log::TypedLog(CHN_SDL, "Flickit: the game started an animation without a blend in the crouch: for the rest of it he crouches as the game has it\n");
 	}
 	if (sk.waySerial != flickitWaySerial) {
 		flickitWaySerial = sk.waySerial;
@@ -847,6 +865,7 @@ void flickitGameFrame(device* dev, const Flickit::Output& out) {
 	FlickitGame::Frame frame;
 	frame.standUp = out.standUp;
 	frame.popStrength = out.popStrength;
+	frame.crouchPose = flickitSettings.crouchPose ? out.crouchPose : -1.0f;
 	frame.catchRails = flickitSettings.grindCatch != 0;
 	frame.pickGrind = flickitSettings.grindPick != 0;
 	frame.noBalance = flickitSettings.grindBalance == 0;

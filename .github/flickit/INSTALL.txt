@@ -14,7 +14,8 @@ Install
 
 In a level
 ----------
-Right stick down           crouch (a third of the way is enough; deeper = higher)
+Right stick down           crouch, as deep as the stick goes (a third of the
+                           way is enough; deeper = a higher ollie)
 Flick away from there      ollie
 Back to the centre         stand up, no ollie
 Flick up-right / up-left   kickflip / heelflip (keep the stick there:
@@ -25,15 +26,22 @@ Bumpers                    spin + nollie / spin + revert, both = get off the boa
 Flip or Ollie, on the ground   push (tap = a little, hold = a lot)
 Right stick click          Flickit off / on (for looking around)
 
-New in this build: the stick
-----------------------------
+New in this build: the crouch you see
+-------------------------------------
+  - The skater crouches as deep as the stick is pulled: a little at a third
+    of the way, THUG's full crouch all the way down, and anything between.
+    Easing the stick back up eases him back up. CrouchPose=0 in the
+    [Flickit] section gives THUG's one crouch back.
+
+The stick (since the last build)
+--------------------------------
   - Weak flicks count, as in Skate: a crouch starts a third of the way down,
     and a flick 40 percent of the way out pops. If your thugsdl.ini already
     has a [Flickit] section, change these four lines in it (the new section
     is in flickit-ini-section.txt):
       Engage=35   Release=30   Flick=40   Snap=60
   - How far down the stick goes is how high the ollie goes (Skate's quick
-    pop to its full pop). The crouch the skater shows is still THUG's one.
+    pop to its full pop).
   - The stick back to the centre without a flick: he stands up, no ollie.
   - Keep the stick where a kickflip's flick ended and it turns again:
     Double, then Triple Kickflip, if there is air to land it. The same for
@@ -173,6 +181,8 @@ Skate's gravity in the air and Skate's pop.
   JumpPop=100     percent of Skate's pop. 0 = THUG's own (it is 146)
                   With AirGravity=0, JumpPop=131 keeps the jumps four fifths
                   as high as THUG's.
+  CrouchPose=1    the crouch is shown as deep as the stick. 0 = THUG's one
+                  crouch
 
 How far a rail reaches
 ----------------------

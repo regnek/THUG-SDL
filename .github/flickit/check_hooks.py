@@ -44,6 +44,10 @@ they have to keep to what the game's code expects there, whatever the compiler m
   anim wait     takes the place of the call to the game's "is the channel over" in the wait of a
                 script for the end of an animation: no arguments, the answer in al, every return is
                 a plain ret
+  blend start   takes the place of the call that starts a blend in PlayAnim's start of an animation,
+                which pops one argument: every return is ret 4 (or a jump into the game's function)
+  pose          takes the place of the call that makes an animated object's pose, in the update of
+                its animation: no arguments, every return is a plain ret
   spin rate     takes the place of two calls to the game's "one of the skater's numbers that go by
                 his stats", which pops one argument and answers on the floating point stack: every
                 return is ret 4 (or a jump into the game's function) with the answer there
@@ -89,6 +93,8 @@ SCRIPTED_STAT = 0x00516AD0
 BONE_POSITION = 0x00487100
 ANIM_OVER = 0x004310D0
 CHANNEL_OVER = 0x004703B0
+BLEND_START = 0x00430F20
+POSE_BLEND = 0x00431B60
 
 # push ecx / push edx / push esi / call ... / add esp, 4 / pop edx / pop ecx / ret
 RAIL_CATCH_PATTERN = bytes.fromhex("515256e8") + b"...." + bytes.fromhex("83c4045a59c3")
@@ -123,6 +129,8 @@ NAMES = {
     BONE_POSITION: "where a bone is",
     ANIM_OVER: "is the animation over",
     CHANNEL_OVER: "is the channel over",
+    BLEND_START: "the start of a blend",
+    POSE_BLEND: "the pose of an animated object",
 }
 
 
@@ -363,6 +371,7 @@ def check(path):
     gravity, jump, jump_speed = [], [], []
     brake, kick, friction, turning, held, pad = [], [], [], [], [], []
     air_turn, spin_rate, anim_finished, anim_wait = [], [], [], []
+    blend_start, pose = [], []
     for p in sorted(set(dll.entry(p) for p in pointers)):
         if matches(dll, p, RAIL_CATCH_PATTERN, (4, 8)):
             catch.append(p)
@@ -406,6 +415,10 @@ def check(path):
             anim_finished.append((p, insns))
         elif CHANNEL_OVER in refs:
             anim_wait.append((p, insns))
+        elif BLEND_START in refs:
+            blend_start.append((p, insns))
+        elif POSE_BLEND in refs:
+            pose.append((p, insns))
 
     # --- rail catch
     if len(catch) != 1:
@@ -474,7 +487,8 @@ def check(path):
     for found, what, count, pops in ((brake, "brake test hook", 1, 0), (kick, "kick test hook", 2, 0), (friction, "friction hook", 1, 0),
                                      (turning, "turning hook", 1, 0), (held, "held hook", 1, 4), (pad, "pad update hook", 1, 4),
                                      (air_turn, "air turning hook", 1, 0), (spin_rate, "spin rate hook", 1, 4),
-                                     (anim_finished, "anim finished hook", 1, 0), (anim_wait, "anim wait hook", 1, 0)):
+                                     (anim_finished, "anim finished hook", 1, 0), (anim_wait, "anim wait hook", 1, 0),
+                                     (blend_start, "blend start hook", 1, 4), (pose, "pose hook", 1, 0)):
         if len(found) != count:
             problems.append("the %s was found %d times, not %d" % (what, len(found), count))
         for p, insns in found:

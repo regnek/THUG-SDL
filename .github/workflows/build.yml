@@ -28,6 +28,8 @@ jobs:
           ./flickit_grind_test scripts/qb/source/scripts/game/skater
           g++ -std=c++11 -Wall -Wextra -I src tests/flickit_physics_test.cpp src/flickit.cpp -o flickit_physics_test
           ./flickit_physics_test scripts/qb/source/scripts/game/skater
+          g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -I src tests/flickit_pose_test.cpp -o flickit_pose_test
+          ./flickit_pose_test
 
   build:
     runs-on: windows-latest

@@ -110,6 +110,7 @@ namespace Flickit {
 		s.grindReach = 100;
 		s.airGravity = 100;
 		s.jumpPop = 100;
+		s.crouchPose = 1;
 
 		s.push = 100;
 		s.pushOnOllie = 1;
@@ -168,6 +169,7 @@ namespace Flickit {
 		s.grindReach = Clamp(s.grindReach, 0, kReachMostPercent);
 		s.airGravity = s.airGravity <= 0 ? 0 : Clamp(s.airGravity, kJumpLeastPercent, kJumpMostPercent);
 		s.jumpPop = s.jumpPop <= 0 ? 0 : Clamp(s.jumpPop, kJumpLeastPercent, kJumpMostPercent);
+		s.crouchPose = Clamp(s.crouchPose, 0, 1);
 
 		s.push = s.push <= 0 ? 0 : Clamp(s.push, kRollLeastPercent, kRollMostPercent);
 		s.pushOnOllie = s.pushOnOllie ? 1 : 0;
@@ -2620,6 +2622,17 @@ namespace Flickit {
 		return share < 0.0f ? 0.0f : (share > 1.0f ? 1.0f : share);
 	}
 
+	// The stick is back in the crouch it left a moment ago. While it was out the crouch was shown as
+	// it was, and the pop would have been as strong (m_leaveStrength): so it is again from here on.
+	void Recognizer::ResumeCrouch(uint32_t now, const Settings& cfg) {
+		const float least = (float)cfg.engage * 0.01f;
+		const float held = least + m_leaveStrength * (kCrouchFull - least);
+		if (held > m_crouch) {
+			m_crouch = held;
+		}
+		NoteCrouch(now, m_crouch);
+	}
+
 	// The crouch ends without a pop: Ollie goes up, and the game is told that this is no jump
 	void Recognizer::StandUp(const Input& in, Output& out) {
 		m_phase = PH_IDLE;
@@ -3201,6 +3214,7 @@ namespace Flickit {
 		out.stepStarted = false;
 		out.popStrength = -1.0f;
 		out.standUp = false;
+		out.crouchPose = -1.0f;
 		out.holding = false;
 		out.flipAgain = false;
 		m_popOut = -1.0f;
@@ -3385,7 +3399,8 @@ namespace Flickit {
 		}
 
 		if (m_phase == PH_LEAVE) {
-			NoteCrouch(now, 0.0f);
+			// The crouch stays as it was while the stick is out of it: what comes next is a pop,
+			// a stand-up, or the stick back in the crouch, taking it up where it was.
 			// Out of the crouch and well away from it in any other direction: the flick, and the pop.
 			// With patterns only a pattern pops, as in Skate.
 			const bool away = hasAngle && !InWindupHalf(angle, m_wind, 0.0f) && mag >= flick;
@@ -3461,8 +3476,9 @@ namespace Flickit {
 
 		if (m_phase == PH_LEAVE) {
 			if (hasAngle && mag >= engage && InWindupHalf(angle, m_wind, 0.0f)) {
-				// Back into the crouch
+				// Back into the crouch, which takes up as deep as it was when the stick left it
 				m_phase = PH_WINDUP;
+				ResumeCrouch(now, cfg);
 				if (sector != m_cur) {
 					m_cur = sector;
 					m_curSince = now;
@@ -3508,6 +3524,11 @@ namespace Flickit {
 		}
 		out.holding = m_hold;
 		out.popStrength = m_popOut;
+		if ((m_phase == PH_WINDUP || m_phase == PH_LEAVE) && m_holdOllie) {
+			// As deep as a pop would be now. A flick swings the stick out of the crouch, and the
+			// moment it takes is not the skater standing up.
+			out.crouchPose = m_phase == PH_LEAVE ? m_leaveStrength : CrouchStrength(now, cfg);
+		}
 
 		if (cfg.triggerGrabs && !onRail) {
 			uint32_t grabStart = now;

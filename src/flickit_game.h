@@ -127,6 +127,9 @@ namespace FlickitGame {
 		const char* wayAnim;    // which,
 		int wayTo;              // to what (Flickit::GiveWay),
 		float wayShare;         // and how far into it the skater was
+		uint32_t poseSerial;    // goes up when a crouch of the stick's begins to show its depth,
+		uint32_t poseFrom;      // with the pose of this animation to stand in (the checksum of its name)
+		uint32_t poseLostSerial;// goes up when the game dropped that pose in a crouch (an animation started without a blend)
 
 		// A flip trick held on the stick (Flickit::Input::flipMore)
 		bool flipMore;          // it can be taken round once more: press its button now
@@ -179,6 +182,7 @@ namespace FlickitGame {
 		float seconds;          // since the look at the controller before this one
 		bool standUp;           // a crouch of Flickit's ended without a pop on this frame
 		float popStrength;      // a pop out of a crouch on this frame, and how deep it was (0 to 1); -1: none
+		float crouchPose;       // the stick crouches: how deep the crouch shown is to be (0 to 1); -1: no crouch to show
 	};
 
 	// Once per frame, before player one's controller is read: nothing is on for this frame

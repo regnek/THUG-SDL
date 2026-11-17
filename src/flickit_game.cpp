@@ -1,4 +1,5 @@
 #include "flickit_game.h"
+#include "flickit_pose.h"
 
 #include <windows.h>
 #include <string.h>
@@ -131,6 +132,15 @@ namespace FlickitGame {
 	// script for the end of an object's animation asks it about the first channel.
 	typedef bool(__thiscall* ChannelOver_t)(void* channel);
 	static const ChannelOver_t ChannelOver = (ChannelOver_t)0x004703B0;
+	// CAnimationComponent: the start of a blend, as PlayAnim starts a new animation with one. The
+	// channels after the second are dropped, the first begins to blend out over "seconds", and a
+	// new channel goes in front (see flickit_pose.h).
+	typedef void(__thiscall* BlendStart_t)(void* anim, float seconds);
+	static const BlendStart_t BlendStart = (BlendStart_t)0x00430F20;
+	// CAnimationComponent: the pose of the object, its channels blended by their weights, put on
+	// its skeleton. Once a frame, in the component's update.
+	typedef void(__thiscall* PoseBlend_t)(void* anim);
+	static const PoseBlend_t PoseBlend = (PoseBlend_t)0x00431B60;
 	// The game's clock, in milliseconds (its frames, at 60 a second)
 	typedef int(__cdecl* GameMs_t)();
 	static const GameMs_t GameMs = (GameMs_t)0x00582C20;
@@ -424,6 +434,10 @@ namespace FlickitGame {
 	static uint8_t* const kAnimWaitCall = (uint8_t*)0x00431DC7;
 	static uint8_t* const kSpinLeftCall = (uint8_t*)0x0055F2FD;
 	static uint8_t* const kSpinRightCall = (uint8_t*)0x0055F361;
+	// in PlayAnim's start of an animation (0x004320E0), the call that starts the blend; and in the
+	// update of an animation component, the call that makes its pose
+	static uint8_t* const kBlendStartCall = (uint8_t*)0x004322AC;
+	static uint8_t* const kPoseCall = (uint8_t*)0x004320A1;
 
 	/******************************************************************/
 	/*                                                                */
@@ -470,6 +484,26 @@ namespace FlickitGame {
 		{ 0x00431DC7, 16, { 0xE8, 0xE4, 0xE5, 0x03, 0x00, 0x84, 0xC0, 0x74, 0x07, 0x8B, 0xCE, 0xE8, 0xC9, 0xB9, 0xFD, 0xFF }, "animation wait: is it over, then the wait is" },
 		{ 0x0055F2F5, 13, { 0x8B, 0x4E, 0x0C, 0x68, 0x43, 0xDB, 0x57, 0x49, 0xE8, 0xCE, 0x77, 0xFB, 0xFF }, "spin rate for Left" },
 		{ 0x0055F359, 13, { 0x8B, 0x4E, 0x0C, 0x68, 0x43, 0xDB, 0x57, 0x49, 0xE8, 0x6A, 0x77, 0xFB, 0xFF }, "spin rate for Right" },
+		{ 0x004322A7, 10, { 0x8B, 0xCE, 0xD9, 0x1C, 0x24, 0xE8, 0x6F, 0xEC, 0xFF, 0xFF }, "PlayAnim: the start of the blend" },
+		{ 0x00432297, 8, { 0x8D, 0x4E, 0x18, 0xE8, 0x91, 0xEB, 0xFF, 0xFF }, "PlayAnim without a blend: every channel goes" },
+		{ 0x0043209F, 7, { 0x8B, 0xCF, 0xE8, 0xBA, 0xFA, 0xFF, 0xFF }, "the animation's update: the pose" },
+		// what the crouch pose relies on (flickit_pose.h)
+		{ 0x00430F4B, 6, { 0x8B, 0x41, 0x24, 0x8D, 0x69, 0x18 }, "blend start: the list of channels" },
+		{ 0x00430F76, 5, { 0x83, 0xFF, 0x03, 0x7C, 0x1D }, "blend start: two channels are kept" },
+		{ 0x0043100B, 18, { 0xD9, 0x46, 0x50, 0xD9, 0x5C, 0x24, 0x18, 0xD9, 0x46, 0x54, 0xD9, 0x5C, 0x24, 0x14, 0xD9, 0x44, 0x24, 0x14 }, "blend start: what the others weigh" },
+		{ 0x00431035, 18, { 0xD9, 0x44, 0x24, 0x30, 0xD9, 0xE8, 0xDE, 0xE1, 0xD9, 0x5C, 0x24, 0x30, 0xD9, 0x47, 0x50, 0xD9, 0x5C, 0x24 }, "blend start: the first weighs the rest" },
+		{ 0x0043107E, 10, { 0x33, 0xC0, 0x89, 0x68, 0x10, 0x8B, 0x55, 0x0C, 0x89, 0x50 }, "blend start: a new channel in front" },
+		{ 0x00431088, 10, { 0x0C, 0x8B, 0x4D, 0x0C, 0x89, 0x41, 0x10, 0x89, 0x45, 0x0C }, "blend start: a new channel in front, the links" },
+		{ 0x00470B50, 18, { 0x51, 0x8B, 0x41, 0x34, 0x83, 0xE8, 0x00, 0x74, 0x1C, 0x83, 0xE8, 0x01, 0x74, 0x09, 0x83, 0xE8, 0x01, 0x75 }, "channel weight" },
+		{ 0x00470B67, 6, { 0xD9, 0x41, 0x54, 0xD8, 0x49, 0x50 }, "channel weight while it blends out" },
+		{ 0x00470A87, 9, { 0x83, 0x7E, 0x34, 0x01, 0x88, 0x5E, 0x2C, 0x75, 0x48 }, "channel update: blending out" },
+		{ 0x00470A9F, 12, { 0xD9, 0x46, 0x50, 0xD9, 0x46, 0x4C, 0xD8, 0x4C, 0x24, 0x08, 0xDE, 0xE9 }, "channel update: what is left of the blend" },
+		{ 0x00470AC5, 18, { 0xD8, 0x4E, 0x54, 0xDC, 0x1D, 0xC8, 0xED, 0x62, 0x00, 0xDF, 0xE0, 0xF6, 0xC4, 0x05, 0x7A, 0x03, 0x89, 0x5E }, "channel update: over when it weighs less than nothing" },
+		{ 0x00431B00, 18, { 0x8B, 0x44, 0x24, 0x04, 0x56, 0x57, 0x8B, 0xF1, 0x50, 0x8D, 0x4E, 0x18, 0xE8, 0x0F, 0xE1, 0x0F, 0x00, 0x8B }, "pose: a channel's weight" },
+		{ 0x00431B11, 9, { 0x8B, 0xF8, 0x8B, 0xCF, 0xE8, 0x36, 0xF0, 0x03, 0x00 }, "pose: a channel's weight, asked" },
+		{ 0x004307A2, 16, { 0x85, 0xED, 0xD9, 0x44, 0x24, 0x10, 0xD8, 0x64, 0x24, 0x54, 0x89, 0x6C, 0x24, 0x18, 0xD9, 0x1A }, "pose: the playing channel weighs the rest" },
+		{ 0x00431B60, 16, { 0x83, 0xEC, 0x08, 0x80, 0x3D, 0x60, 0xC8, 0x7C, 0x00, 0x00, 0x53, 0x8B, 0xD9, 0x0F, 0x85, 0xB8 }, "pose" },
+		{ 0x00430F20, 12, { 0x6A, 0xFF, 0x68, 0xEB, 0x2B, 0x62, 0x00, 0x64, 0xA1, 0x00, 0x00, 0x00 }, "blend start" },
 		// the functions that get called
 		{ 0x004F94F0, 12, { 0x53, 0x56, 0x57, 0x8B, 0xF9, 0x33, 0xF6, 0xE8, 0x84, 0xC0, 0xF3, 0xFF }, "GetLocalSkater" },
 		{ 0x0041BDC0, 12, { 0x8B, 0x81, 0xF0, 0x00, 0x00, 0x00, 0x85, 0xC0, 0x74, 0x12, 0x8B, 0x4C }, "GetComponent" },
@@ -878,6 +912,13 @@ namespace FlickitGame {
 	static const char* s_wayAnim = "";
 	static int s_wayTo = 0;
 	static float s_wayShare = 0.0f;
+	// The crouch shown as deep as the stick's (flickit_pose.h); the game's clock on the frame; for
+	// the log, when a crouch began to show it and from what, and when the game dropped it
+	static FlickitPose::Keeper s_keeper;
+	static uint32_t s_poseNow = 0;
+	static uint32_t s_poseSerial = 0;
+	static uint32_t s_poseFrom = 0;
+	static uint32_t s_poseLostSerial = 0;
 	// The clock that stands in where the game is told to play a push and no push animation is
 	// seen on the skater (Flickit::PushClock), and for the log the animation he was in instead
 	// when it took over
@@ -1334,6 +1375,9 @@ namespace FlickitGame {
 		out.wayAnim = s_wayAnim;
 		out.wayTo = s_wayTo;
 		out.wayShare = s_wayShare;
+		out.poseSerial = s_poseSerial;
+		out.poseFrom = s_poseFrom;
+		out.poseLostSerial = s_poseLostSerial;
 		out.spinSerial = s_spinSerial;
 		out.spinTurned = s_spinTurned;
 		out.spinFlick = s_spinFlick;
@@ -1771,18 +1815,21 @@ namespace FlickitGame {
 	// push the game does not show must not keep the turn from being shown). They run before the
 	// physics do: the physics get both back (GiveBackTurn) and turn the board as if nothing had
 	// happened.
+	static void ShowCrouch(uint8_t* skater);
+
 	static void __fastcall PadUpdateHook(uint8_t* pad, void* /*edx*/, void* data) {
 		PadUpdate(pad, data);
 		if (s_turnKept && s_turnKept + INPUT_PAD == pad) {
 			s_turnKept = 0;     // the game has just written both anew
 		}
-		if (!s_active || (!s_standUp && (s_frame.push <= 0 || !s_frame.pushOverTurn || !s_push.Animating()))) {
-			return;
-		}
 		uint8_t* skater = LocalSkater();
 		const uint8_t* core = skater ? (const uint8_t*)GetComponent(skater, kSkaterCorePhysics) : 0;
 		uint8_t* input = core ? *(uint8_t* const*)(core + CORE_INPUT) : 0;
 		if (!input || input + INPUT_PAD != pad) {
+			return;
+		}
+		ShowCrouch(skater);
+		if (!s_active || (!s_standUp && (s_frame.push <= 0 || !s_frame.pushOverTurn || !s_push.Animating()))) {
 			return;
 		}
 		if (s_standUp) {
@@ -2204,6 +2251,52 @@ namespace FlickitGame {
 
 	/******************************************************************/
 	/*                                                                */
+	/*  The crouch shown as deep as the stick's                       */
+	/******************************************************************/
+
+	// Once a frame, from the update of player one's pad: whether the skater crouches with the
+	// stick, and how deep, to the Keeper (flickit_pose.h), which holds on to the pose he stood in
+	// for that crouch. He crouches with the stick when Flickit drives him, the stick's crouch is
+	// on (CrouchPose=1), he is on his board on the ground, and the game has him crouched.
+	static void ShowCrouch(uint8_t* skater) {
+		uint8_t* anim = (uint8_t*)GetComponent(skater, kAnimation);
+		const uint8_t* state = (const uint8_t*)GetComponent(skater, kSkaterState);
+		const bool ground = state && *(const int32_t*)(state + STATE_STATE) == 0 && state[STATE_DRIVING] == 0
+			&& *(const int32_t*)(state + STATE_PHYSICS) == 0 && state[STATE_BAILING] == 0;
+		const bool crouch = s_active && s_frame.crouchPose >= 0.0f && ground && state[STATE_CROUCHED] != 0;
+		s_poseNow = (uint32_t)GameMs();
+		FlickitPose::Report report;
+		s_keeper.Frame(anim, ground, crouch, s_frame.crouchPose, s_poseNow, report);
+		if (report.started) {
+			s_poseFrom = report.from;
+			s_poseSerial++;
+		}
+		if (report.lost) {
+			s_poseLostSerial++;
+		}
+	}
+
+	// Stands in PlayAnim's start of an animation, where the blend starts. Same convention: this
+	// (the animation component) in ecx, the blend's time on the stack, popped by the callee. For
+	// the skater's, the pose kept for a crouch stays in the list, and the channel that begins to
+	// blend out weighs what it would without it.
+	static void __fastcall BlendStartHook(uint8_t* anim, void* /*edx*/, float seconds) {
+		s_keeper.BeforeBlend(anim);
+		BlendStart(anim, seconds);
+		s_keeper.AfterBlend(anim);
+	}
+
+	// Stands in the update of an animation component, where it makes the object's pose. Same
+	// convention: this in ecx, no arguments. For the skater's, the pose kept for a crouch has the
+	// share the stick asks for.
+	static void __fastcall PoseHook(uint8_t* anim) {
+		s_keeper.BeforePose(anim, s_poseNow);
+		PoseBlend(anim);
+		s_keeper.AfterPose(anim);
+	}
+
+	/******************************************************************/
+	/*                                                                */
 	/*  Rolling: the board loses speed the way Skate's does           */
 	/******************************************************************/
 
@@ -2379,12 +2472,15 @@ namespace FlickitGame {
 		patchCall(kAirTurnCall, (void*)&AirTurnHook);
 		patchCall(kSpinLeftCall, (void*)&SpinRateHook);
 		patchCall(kSpinRightCall, (void*)&SpinRateHook);
+		patchCall(kBlendStartCall, (void*)&BlendStartHook);
+		patchCall(kPoseCall, (void*)&PoseHook);
 
 		s_installed = true;
 		Log::TypedLog(CHN_SDL, "Flickit: grind hooks are in (rail catch, rail search, grind pick, rail balance, rail boost)\n");
 		Log::TypedLog(CHN_SDL, "Flickit: jump hooks are in (gravity in the air, jump, jump speed)\n");
 		Log::TypedLog(CHN_SDL, "Flickit: rolling hooks are in (brake test, kick test, friction, turning, CanKick, Held, pad update, AnimFinished, animation wait)\n");
 		Log::TypedLog(CHN_SDL, "Flickit: spin hooks are in (turning in the air, spin rate)\n");
+		Log::TypedLog(CHN_SDL, "Flickit: crouch hooks are in (blend start, pose)\n");
 		return true;
 	}
 }

@@ -107,6 +107,7 @@ namespace Flickit {
 		int grindReach;       // percent of Skate's reach for a rail that catches by itself, 0: THUG's own
 		int airGravity;       // gravity in the air, in percent of Skate's, 0: THUG's own
 		int jumpPop;          // the speed of a jump, in percent of Skate's, 0: THUG's own
+		int crouchPose;       // 1: the crouch the skater shows goes as deep as the stick is pulled, 0: THUG's one crouch
 
 		// Rolling the Skate way (see Rolling below). These need the game hooks too.
 		int push;             // percent of Skate's push: what one push adds and how fast pushing gets. 0: THUG's own kick
@@ -218,6 +219,8 @@ namespace Flickit {
 		// The crouch for an ollie (on the ground)
 		float popStrength;    // on the frame of a pop out of a crouch: how far the stick was pulled, 0 (a quick pop) to 1; -1 otherwise
 		bool standUp;         // on the frame a crouch ends without a pop: the skater stands back up
+		float crouchPose;     // while the stick crouches on the ground: how deep the crouch is to show, 0 (only
+		                      // just) to 1 (all the way), as the pop would go; -1: the stick has no crouch
 		// The stick held at the end of a flip trick's flick
 		bool holding;         // it is held there
 		bool flipAgain;       // on the frame the trick button is pressed once more for another rotation
@@ -997,6 +1000,7 @@ namespace Flickit {
 		void NoteSpeed(const Input& in, const Settings& cfg);
 		void NoteCrouch(uint32_t now, float target);
 		float CrouchStrength(uint32_t now, const Settings& cfg) const;
+		void ResumeCrouch(uint32_t now, const Settings& cfg);
 		void StandUp(const Input& in, Output& out);
 		void HoldFlip(int slot, int sector, const Input& in);
 		bool WasFast(const Settings& cfg) const;

@@ -482,6 +482,127 @@ static void testWeakThumbs(double hz) {
 	}
 }
 
+// How deep the crouch is to show (Output::crouchPose): -1 without a crouch of the stick's, then
+// the crouch's depth on the pop's scale, held while the stick is out of the crouch
+static void testCrouchPose(double hz) {
+	g_case = "crouch pose: a full pull";
+	{
+		Sim s(hz);
+		s.state = STATE_GROUND;
+		CHECK(s.outs.back().crouchPose == -1.0f);
+		s.moveTo(0, -1, 30);
+		const size_t from = s.outs.size();
+		s.hold(400);
+		bool rising = true, some = false;
+		for (size_t i = from; i < s.outs.size(); i++) {
+			const float p = s.outs[i].crouchPose;
+			some = some || p >= 0.0f;
+			rising = rising && p >= 0.0f && p <= 1.0f && (i == from || p >= s.outs[i - 1].crouchPose);
+		}
+		CHECK(some && rising);
+		CHECK(s.outs.back().crouchPose >= 0.999f);
+		// it takes a fifth of a second or so to get all the way
+		int full = -1;
+		for (size_t i = 0; i < s.outs.size() && full < 0; i++) {
+			if (s.outs[i].crouchPose >= 0.999f) full = (int)i;
+		}
+		CHECK(full >= 0 && s.msBetween(0, full) >= 50 + 150 - 17);
+		// out of the crouch on the way to the flick: as deep as it was, up to the pop
+		const float b = UR * kPi / 180.0f;
+		s.moveTo(cosf(b), sinf(b), 35);
+		const int pop = s.popFrame();
+		CHECK(pop > 0);
+		bool held = true;
+		for (int i = (int)from; i < pop; i++) {
+			held = held && s.outs[i].crouchPose >= 0.0f;
+		}
+		CHECK(held);
+		CHECK(s.outs[pop - 1].crouchPose >= 0.999f);
+		CHECK(s.outs[pop].crouchPose == -1.0f);
+		s.spring();
+		s.hold(200);
+		CHECK(s.outs.back().crouchPose == -1.0f);
+	}
+	g_case = "crouch pose: half way";
+	{
+		Sim s(hz);
+		s.moveTo(0, -0.6f, 30);
+		s.hold(400);
+		CHECK(std::fabs(s.outs.back().crouchPose - (0.6f - 0.35f) / 0.55f) < 0.01f);
+	}
+	g_case = "crouch pose: out and back in";
+	{
+		// The stick eases out of the crouch for a moment and comes back down: the crouch does not
+		// dip in between
+		Sim s(hz);
+		s.moveTo(0, -1, 30);
+		s.hold(300);
+		const size_t from = s.outs.size();
+		s.moveTo(0, -0.2f, 40);
+		s.hold(34);
+		s.moveTo(0, -1, 40);
+		s.hold(100);
+		bool deep = true;
+		for (size_t i = from; i < s.outs.size(); i++) {
+			deep = deep && s.outs[i].crouchPose >= 0.999f;
+		}
+		CHECK(deep);
+	}
+	g_case = "crouch pose: out of the crouch for a while";
+	{
+		// Eased just out of the crouch, and a late flick: the crouch is shown as it was all along
+		Sim s(hz);
+		s.moveTo(0, -1, 30);
+		s.hold(300);
+		const size_t from = s.outs.size();
+		s.moveTo(0, -0.28f, 20);
+		s.hold(170);
+		const size_t to = s.outs.size();
+		bool deep = true;
+		for (size_t i = from; i < to; i++) {
+			deep = deep && s.outs[i].crouchPose >= 0.999f;
+		}
+		CHECK(deep);
+		s.moveTo(0, 1, 25);
+		s.spring();
+		s.hold(200);
+		CHECK_EQ(s.gestures().size(), 1);
+	}
+	g_case = "crouch pose: let go";
+	{
+		Sim s(hz);
+		s.moveTo(0, -0.8f, 30);
+		s.hold(300);
+		const size_t from = s.outs.size();
+		s.spring();
+		s.hold(200);
+		int up = -1;
+		for (size_t i = from; i < s.outs.size(); i++) {
+			if (s.outs[i].standUp) up = (int)i;
+		}
+		CHECK(up > 0);
+		bool shown = true;
+		for (int i = (int)from; i < up; i++) {
+			shown = shown && s.outs[i].crouchPose >= (0.8f - 0.35f) / 0.55f - 0.01f;
+		}
+		CHECK(shown);
+		CHECK(s.outs[up].crouchPose == -1.0f);
+		CHECK(s.outs.back().crouchPose == -1.0f);
+	}
+	g_case = "crouch pose: in the air";
+	{
+		Sim s(hz);
+		s.state = STATE_AIR;
+		s.moveTo(0, -1, 30);
+		s.hold(300);
+		bool none = true;
+		for (size_t i = 0; i < s.outs.size(); i++) {
+			none = none && s.outs[i].crouchPose == -1.0f;
+		}
+		CHECK(none);
+	}
+}
+
 static void testCrouchDepth(double hz) {
 	// How strong the pop is: how far the stick was pulled, after the crouch has had a fifth of a
 	// second to get there
@@ -1120,6 +1241,7 @@ int main() {
 		testSlowRelease(hz);
 		testWeakThumbs(hz);
 		testCrouchDepth(hz);
+		testCrouchPose(hz);
 		testHeldFlip(hz);
 		testNollie(hz);
 		testGrabs(hz);
