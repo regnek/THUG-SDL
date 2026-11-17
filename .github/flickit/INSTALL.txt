@@ -20,9 +20,11 @@ Flick up-right / up-left   kickflip / heelflip
 Drag to the right          pop shove-it
 Triggers                   grabs
 Bumpers                    spin + nollie / spin + revert, both = get off the board
+Flip or Ollie, on the ground   push (tap = a little, hold = a lot)
 Right stick click          Flickit off / on (for looking around)
 
-The face buttons still work. The full table is in the README, section FLICKIT.
+The face buttons still work, except that the Ollie button pushes while the
+board rolls on the ground. The full table is in the README, section FLICKIT.
 
 Grinds
 ------
@@ -43,9 +45,55 @@ On the rail: stick down = 5-0, up = nosegrind, let go = 50-50 (the game takes
 the switch about three quarters of a second into a grind). A flick pops off;
 letting go does not. Right bumper = drop off the rail. No balancing.
 
+Rolling
+-------
+New in this build: the board is pushed, rolls out and steers the way Skate's
+does. Three parts, three settings.
+
+  Pushing
+  - The skater no longer kicks by himself. The Flip button pushes (THUG's own
+    kick button), and so does the Ollie button while the board rolls on the
+    ground. In the air, on a rail and in a manual both are what they were.
+    A press that pushes is not passed on to the game.
+  - A tap is a small push (60 units of speed), a quarter of a second a full
+    one (320). Keep the button down and he keeps pushing.
+  - Pushing stops at 680 units a second, about THUG's best kick.
+  - The speed comes in while the foot is on the ground. When that is, is an
+    estimate: if the speed arrives before the foot is down or after it has
+    left, change PushDelay. If every other push comes without its animation,
+    raise PushCycle.
+  - The push is shown in a turn too (THUG shows only the turn). If that looks
+    wrong, PushOverTurn=0 is THUG's way.
+
+  Rolling out
+  - The board loses speed slowly, as Skate's does: from a fast roll it goes on
+    for half a minute. THUG's own drag is five to seven times as strong at
+    speed, which is why its skater has to kick all the time.
+
+  Steering
+  - The stick steers by how far it is pushed, a little near the centre and a
+    lot at its end.
+  - At a walk the board turns on the spot. The faster it is the wider it
+    turns: at full speed the turn is about twice as wide as THUG's.
+
+  Push=100        percent of Skate's push. 0 = THUG's own kick
+  PushOnOllie=1   0 = only the Flip button pushes
+  PushOverTurn=1  0 = in a turn the game shows the turn, not the push
+  PushDelay=300   ms from the start of a push to the foot on the ground
+  PushContact=250 ms the foot is on the ground
+  PushCycle=900   ms at least from the start of one push to the next
+  Coast=100       percent of Skate's rolling resistance. 0 = THUG's friction
+  Steering=100    percent of Skate's grip. 200 = turns at speed about as
+                  THUG does, 0 = THUG's own turning
+
+THUG's levels expect a skater who keeps his own speed and turns sharply:
+timed goals take pushing now. Each of the three can be turned back by itself.
+With the console on, every push says how long the button was down, what it
+asked for and what the speed did.
+
 Jumps
 -----
-New in this build: Skate's gravity in the air and Skate's pop.
+Skate's gravity in the air and Skate's pop.
 
   - THUG's ollie goes 45 to 75 units up (most of the skater's height) and is
     over in 0.52 to 0.67 seconds: gravity is about three times real. Skate's
@@ -125,7 +173,8 @@ If something is wrong
   as in the build before this one (Grind held for a moment after each pop).
   GrindCatch, GrindPick, GrindSwitch and GrindBalance switch the parts one by one,
   GrindDrag=0 with GrindExit=0 gives THUG's endless grinds back,
-  GrindReach=0 its own reach for rails, AirGravity=0 and JumpPop=0 its jumps.
+  GrindReach=0 its own reach for rails, AirGravity=0 and JumpPop=0 its jumps,
+  Push=0, Coast=0 and Steering=0 its own kick, friction and turning.
 - To go back to stock: delete thugsdl.dll and rename thugsdl.dll.bak back.
 
 Skate 3 stick patterns (optional)

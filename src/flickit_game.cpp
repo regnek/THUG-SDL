@@ -84,6 +84,32 @@ namespace FlickitGame {
 	typedef bool(__thiscall* StructGetFloat_t)(void* structure, uint32_t name, float* out, int assert);
 	static const StructGetFloat_t StructGetFloat = (StructGetFloat_t)0x00410E20;
 
+	// CSkaterCorePhysicsComponent, in the physics of the ground: should the skater brake on this
+	// frame, and may he kick? Both only look.
+	typedef bool(__thiscall* ShouldBrake_t)(void* core);
+	static const ShouldBrake_t ShouldBrake = (ShouldBrake_t)0x0055D250;
+	typedef bool(__thiscall* ShouldKick_t)(void* core);
+	static const ShouldKick_t ShouldKick = (ShouldKick_t)0x0055D410;
+	// The friction of one frame on the ground: the air's, and the wheels'
+	typedef void(__thiscall* GroundFriction_t)(void* core);
+	static const GroundFriction_t GroundFriction = (GroundFriction_t)0x00563B80;
+	// The turning of one frame on the ground, by Left and Right
+	typedef void(__thiscall* GroundTurn_t)(void* core);
+	static const GroundTurn_t GroundTurn = (GroundTurn_t)0x0055E790;
+	// What that turning is done with: a vector turned about the upright axis, and a matrix
+	// turned about its own
+	typedef void(__thiscall* VectorTurn_t)(void* vector, float angle);
+	static const VectorTurn_t VectorTurn = (VectorTurn_t)0x0042F6D0;
+	typedef void* (__thiscall* MatrixTurn_t)(void* matrix, float angle);
+	static const MatrixTurn_t MatrixTurn = (MatrixTurn_t)0x00405230;
+	// The trick component's answer to "is this button down", for the script command Held
+	typedef bool(__thiscall* ButtonHeld_t)(void* trick, uint32_t button);
+	static const ButtonHeld_t ButtonHeld = (ButtonHeld_t)0x00451A70;
+	// The game's own picture of a pad, brought up to date from what one look at the controller
+	// gave: which buttons are down, since when, and where the sticks are
+	typedef void(__thiscall* PadUpdate_t)(void* pad, void* data);
+	static const PadUpdate_t PadUpdate = (PadUpdate_t)0x0051AEB0;
+
 	enum {
 		// any component
 		COMPONENT_OBJECT = 0x0C,        // the object it belongs to
@@ -91,14 +117,24 @@ namespace FlickitGame {
 		// the skater object
 		OBJECT_SCRIPT = 0x10,           // its script
 		OBJECT_LEFT = 0x60,             // the way its left side points (the first row of its matrix; "Move x = 1" in a script goes there)
+		OBJECT_MATRIX = 0x60,           // that matrix
+		OBJECT_FORWARD = 0x80,          // the way it faces (the third row)
 		OBJECT_VELOCITY = 0xA0,
+		OBJECT_PLAYER = 0x2BC,          // which player's skater it is
 
 		// Script::CScript
 		SCRIPT_PARAMS = 0x14,           // the parameters of the script that is running
+		SCRIPT_NAME = 0xBC,             // and the checksum of its name
 
 		// CSkaterCorePhysicsComponent
+		CORE_DISPLAY_MATRIX = 0x18,     // the matrix the skater is drawn with
 		CORE_FRAME_LENGTH = 0x8C,       // seconds, the frame its physics are working on
 		CORE_RAIL_NODE = 0x22C,         // the rail it is on: the node the segment starts at
+		CORE_AUTO_KICK = 0x2D0,         // one byte: he kicks without being asked (the game's option)
+		CORE_NO_KICK = 0x2D8,           // one byte: a script has forbidden kicking (CanKickOff, in a revert)
+		CORE_ROLLING_FRICTION = 0x2DC,  // what the wheels lose; scripts raise it to brake
+		CORE_VELOCITY_LOCKED = 0x34C,   // one byte: turning does not turn the direction of travel
+		CORE_TURNING_LEFT = 0x365,      // one byte: the last turn on the ground went to the left
 		CORE_GRIND_TWEAK = 0x368,
 		CORE_INPUT = 0x4B4,             // CInputComponent
 		CORE_BALANCE = 0x4CC,           // CSkaterBalanceTrickComponent
@@ -124,12 +160,23 @@ namespace FlickitGame {
 		RAIL_FLAG_CLIMB_ONLY = 1 << 4,  // for climbing, not for the board
 
 		// CInputComponent
+		INPUT_PAD = 0x20,               // the game's picture of the pad; each button of it starts with one byte "is down"
+		INPUT_DOWN_PRESSED = 0x40,      // Down is held
+		INPUT_LEFT_PRESSED = 0x60,      // Left is, by the d-pad or by the stick
+		INPUT_RIGHT_PRESSED = 0x80,
 		INPUT_GRIND_PRESSED = 0x1A0,    // the Grind button (Triangle) is down
+		INPUT_DISABLED = 0x498,         // one byte: a script has taken the controls away (DisablePlayerInput)
+		INPUT_NET_DISABLED = 0x499,     // one byte: the same for a network game
+
+		// Skate::Instance()
+		SKATE_AUTO_KICK = 0x3B1,        // one byte for each player, eight bytes apart: the option "auto kick"
+		SKATE_PLAYER_SIZE = 8,
 
 		// CSkaterStateComponent
 		STATE_STATE = 0x18,             // 0 ground, 1 air, 2 wall, 3 lip, 4 rail, 5 wallplant
 		STATE_PHYSICS = 0x1C,           // 0 skating, 1 walking
 		STATE_VERT_AIR = 0x30,
+		STATE_BAILING = 0x70,           // one byte: in a bail
 		STATE_DOING_TRICK = 0xD8,
 		STATE_DRIVING = 0x114,
 
@@ -150,6 +197,10 @@ namespace FlickitGame {
 	static const uint32_t kFiftyFiftyRange = 0xB914FDA6;      // FiftyFifty_Range, FiftyFifty2_range, FiftyFifty3_range: the 50-50
 	static const uint32_t kFiftyFifty2Range = 0x11431833;
 	static const uint32_t kFiftyFifty3Range = 0xB7341387;
+	static const uint32_t kTrick = 0x270F56E1;                // Trick: the component that answers Held
+	static const uint32_t kSquare = 0x321C9756;               // Square: the Flip button, the game's own button for a kick
+	static const uint32_t kRollingFriction = 0x78F80EC4;      // Physics_Rolling_Friction
+	static const uint32_t kNollieLoop = 0xF8D9EFB4;           // OnGroundNollieAI
 
 	// Where the game's code is changed
 	static uint8_t* const kCatchTest1 = (uint8_t*)0x0056CB60;   // cmp byte ptr [eax+1A0h], 0   in maybe_stick_to_rail
@@ -176,6 +227,18 @@ namespace FlickitGame {
 	// call CStruct::GetFloat in do_jump: a script may hand the speed of the jump over as "speed".
 	// The speed worked out so far is where the answer goes; after this call it is final.
 	static uint8_t* const kJumpSpeedCall = (uint8_t*)0x005606EA;
+	// In the physics of the ground (0x0056DF80), one after the other: call should_brake, call
+	// should_kick (when not braking), call the friction, and at the end call the turning
+	static uint8_t* const kBrakeTestCall = (uint8_t*)0x0056E1B1;
+	static uint8_t* const kKickTestCall = (uint8_t*)0x0056E1CD;
+	static uint8_t* const kFrictionCall = (uint8_t*)0x0056E2BF;
+	static uint8_t* const kTurnCall = (uint8_t*)0x0056E81D;
+	// call should_kick, for the script command CanKick
+	static uint8_t* const kCanKickCall = (uint8_t*)0x0056747C;
+	// call "is this button down", for the script command Held with one button
+	static uint8_t* const kHeldCall = (uint8_t*)0x004566CC;
+	// call the pad update, where an input component is handed what one look at the controller gave
+	static uint8_t* const kPadUpdateCall = (uint8_t*)0x00437E9E;
 
 	/******************************************************************/
 	/*                                                                */
@@ -207,6 +270,13 @@ namespace FlickitGame {
 		{ 0x0056BAE6, 5, { 0xE8, 0x85, 0x2B, 0xFF, 0xFF }, "air gravity in the physics of the air" },
 		{ 0x00567FEE, 6, { 0x52, 0xE8, 0x1C, 0x84, 0xFF, 0xFF }, "jump" },
 		{ 0x005606E6, 9, { 0xD9, 0x5C, 0x24, 0x1C, 0xE8, 0x31, 0x07, 0xEB, 0xFF }, "jump speed" },
+		{ 0x0056E1AF, 7, { 0x8B, 0xCE, 0xE8, 0x9A, 0xF0, 0xFE, 0xFF }, "brake test" },
+		{ 0x0056E1C6, 12, { 0xC6, 0x86, 0xEC, 0x02, 0x00, 0x00, 0x00, 0xE8, 0x3E, 0xF2, 0xFE, 0xFF }, "kick test" },
+		{ 0x0056E2BD, 7, { 0x8B, 0xCE, 0xE8, 0xBC, 0x58, 0xFF, 0xFF }, "friction on the ground" },
+		{ 0x0056E81B, 7, { 0x8B, 0xCE, 0xE8, 0x6E, 0xFF, 0xFE, 0xFF }, "turning on the ground" },
+		{ 0x0056747C, 5, { 0xE8, 0x8F, 0x5F, 0xFF, 0xFF }, "CanKick" },
+		{ 0x004566C9, 8, { 0x50, 0x8B, 0xCE, 0xE8, 0x9F, 0xB3, 0xFF, 0xFF }, "Held" },
+		{ 0x00437E9A, 9, { 0x57, 0x8D, 0x4E, 0x20, 0xE8, 0x0D, 0x30, 0x0E, 0x00 }, "pad update" },
 		// the functions that get called
 		{ 0x004F94F0, 12, { 0x53, 0x56, 0x57, 0x8B, 0xF9, 0x33, 0xF6, 0xE8, 0x84, 0xC0, 0xF3, 0xFF }, "GetLocalSkater" },
 		{ 0x0041BDC0, 12, { 0x8B, 0x81, 0xF0, 0x00, 0x00, 0x00, 0x85, 0xC0, 0x74, 0x12, 0x8B, 0x4C }, "GetComponent" },
@@ -226,6 +296,18 @@ namespace FlickitGame {
 		{ 0x00560410, 12, { 0x83, 0xEC, 0x14, 0x53, 0x55, 0x56, 0x57, 0x8B, 0xF1, 0x8B, 0x4C, 0x24 }, "do_jump" },
 		{ 0x005608B4, 6, { 0x83, 0xC4, 0x14, 0xC2, 0x04, 0x00 }, "do_jump return" },
 		{ 0x00410E20, 12, { 0x56, 0x57, 0x8B, 0x7C, 0x24, 0x0C, 0x8D, 0x44, 0x24, 0x0C, 0x50, 0x6A }, "CStruct::GetFloat" },
+		{ 0x0055D250, 12, { 0x51, 0x56, 0x8B, 0xF1, 0x57, 0x8B, 0xBE, 0xB4, 0x04, 0x00, 0x00, 0x83 }, "should_brake" },
+		{ 0x0055D410, 12, { 0x83, 0xEC, 0x08, 0x56, 0x8B, 0xF1, 0x8B, 0x86, 0xB4, 0x04, 0x00, 0x00 }, "should_kick" },
+		{ 0x00563B80, 12, { 0x83, 0xEC, 0x08, 0x56, 0x8B, 0xF1, 0x80, 0xBE, 0xD0, 0x02, 0x00, 0x00 }, "friction on the ground" },
+		{ 0x0055E790, 12, { 0x83, 0xEC, 0x08, 0x53, 0x56, 0x57, 0x8B, 0xF9, 0x8B, 0x47, 0x0C, 0xD9 }, "turning on the ground" },
+		{ 0x0042F6D0, 12, { 0x51, 0xD9, 0x44, 0x24, 0x08, 0x56, 0x8B, 0xF1, 0xE8, 0x93, 0x8F, 0x1C }, "turn a vector" },
+		{ 0x0042F731, 3, { 0xC2, 0x04, 0x00 }, "turn a vector, return" },
+		{ 0x00405230, 12, { 0xD9, 0x44, 0x24, 0x04, 0x81, 0xEC, 0x80, 0x00, 0x00, 0x00, 0x56, 0x51 }, "turn a matrix" },
+		{ 0x0040527B, 3, { 0xC2, 0x04, 0x00 }, "turn a matrix, return" },
+		{ 0x00451A70, 12, { 0x8B, 0x44, 0x24, 0x04, 0x56, 0x50, 0x8B, 0xF1, 0xE8, 0x03, 0xF6, 0xFC }, "button held" },
+		{ 0x00451A88, 3, { 0xC2, 0x04, 0x00 }, "button held, return" },
+		{ 0x0051AEB0, 12, { 0x83, 0xEC, 0x0C, 0x56, 0x57, 0x8B, 0x7C, 0x24, 0x18, 0x0F, 0xB6, 0x47 }, "pad update function" },
+		{ 0x0051B3AA, 3, { 0xC2, 0x04, 0x00 }, "pad update function, return" },
 		// do_jump: the name it asks GetFloat for, where the speed is taken up again after the
 		// call, and where it goes into the skater's speed
 		{ 0x005606C5, 5, { 0x68, 0x09, 0x01, 0xD9, 0xF0 }, "jump speed name" },
@@ -249,6 +331,44 @@ namespace FlickitGame {
 		{ 0x0056D6F8, 10, { 0x89, 0x86, 0x2C, 0x02, 0x00, 0x00, 0x0F, 0xB6, 0x40, 0x4E }, "rail terrain" },
 		// the game's own test for stepping off a rail to the left or right: the skater's left
 		{ 0x00567E7F, 3, { 0x8D, 0x4F, 0x60 }, "the skater's left" },
+		// rolling: what the game's own brake test, friction, turning and kick read, where they
+		// read it: the switch for kicking unasked, the Flip button and Down, the flag of a bail,
+		// what the wheels lose and the name of the usual number, Left and Right, whether the
+		// direction of travel turns with the board, the two matrices, and which way is forward
+		{ 0x0055D25E, 16, { 0x80, 0xBE, 0xD0, 0x02, 0x00, 0x00, 0x00, 0x75, 0x54, 0x80, 0xBF, 0x60, 0x01, 0x00, 0x00, 0x00 }, "brake test: auto kick, Flip" },
+		{ 0x0055D2BB, 4, { 0x80, 0x7F, 0x20, 0x00 }, "brake test: Down" },
+		{ 0x00563B86, 17, { 0x80, 0xBE, 0xD0, 0x02, 0x00, 0x00, 0x00, 0x75, 0x30, 0x8B, 0x86, 0xD0, 0x04, 0x00, 0x00, 0x80, 0x78 }, "friction: auto kick, the state" },
+		{ 0x00563B97, 2, { 0x70, 0x00 }, "friction: in a bail" },
+		{ 0x00563B9B, 13, { 0xD9, 0x86, 0xDC, 0x02, 0x00, 0x00, 0x6A, 0x00, 0x68, 0xC4, 0x0E, 0xF8, 0x78 }, "friction: the wheels" },
+		{ 0x0055E7D5, 4, { 0x80, 0x7E, 0x40, 0x00 }, "turning: Left" },
+		{ 0x0055E7E6, 4, { 0x80, 0x7E, 0x20, 0x00 }, "turning: Down" },
+		{ 0x0055E809, 4, { 0x80, 0x7E, 0x60, 0x00 }, "turning: Right" },
+		{ 0x0055E8AC, 13, { 0x80, 0xBF, 0x4C, 0x03, 0x00, 0x00, 0x00, 0x88, 0x87, 0x65, 0x03, 0x00, 0x00 }, "turning: locked, which way" },
+		{ 0x0055E8BB, 18, { 0x51, 0x8B, 0x4F, 0x0C, 0xD9, 0x1C, 0x24, 0x81, 0xC1, 0xA0, 0x00, 0x00, 0x00, 0xE8, 0x03, 0x0E, 0xED, 0xFF }, "turning: the speed" },
+		{ 0x0055E8D1, 15, { 0x51, 0x8B, 0x4F, 0x0C, 0xD9, 0x1C, 0x24, 0x83, 0xC1, 0x60, 0xE8, 0x50, 0x69, 0xEA, 0xFF }, "turning: the skater" },
+		{ 0x0055E8E4, 12, { 0x51, 0x8D, 0x4F, 0x18, 0xD9, 0x1C, 0x24, 0xE8, 0x40, 0x69, 0xEA, 0xFF }, "turning: as he is drawn" },
+		{ 0x0055D41F, 7, { 0x80, 0xBE, 0xD8, 0x02, 0x00, 0x00, 0x00 }, "kick test: forbidden" },
+		{ 0x0055D441, 4, { 0x80, 0x78, 0x20, 0x00 }, "kick test: Down" },
+		{ 0x0055D4F7, 10, { 0x80, 0xBF, 0x4C, 0x03, 0x00, 0x00, 0x00, 0x8B, 0x77, 0x0C }, "kick: locked" },
+		{ 0x0055D574, 6, { 0xD9, 0x86, 0x80, 0x00, 0x00, 0x00 }, "kick: forward" },
+		{ 0x0056E183, 9, { 0x8B, 0x86, 0xCC, 0x04, 0x00, 0x00, 0x8B, 0x48, 0x18 }, "ground physics: what is balanced" },
+		// Left and Right as the game's scripts read them (LeftPressed, RightPressed), and the
+		// order of an object's frame: its script first, then its components, the physics among them
+		{ 0x00437BD4, 9, { 0x33, 0xC0, 0x38, 0x47, 0x60, 0x5F, 0x0F, 0x95, 0xC0 }, "LeftPressed" },
+		{ 0x00437A12, 12, { 0x33, 0xC0, 0x38, 0x87, 0x80, 0x00, 0x00, 0x00, 0x5F, 0x0F, 0x95, 0xC0 }, "RightPressed" },
+		{ 0x0041BBBA, 12, { 0x8B, 0x4F, 0x10, 0x85, 0xC9, 0x74, 0x05, 0xE8, 0xDA, 0x34, 0xFF, 0xFF }, "object update: the script" },
+		{ 0x0041BBD4, 9, { 0x56, 0x8B, 0xB7, 0xF0, 0x00, 0x00, 0x00, 0x85, 0xF6 }, "object update: the components" },
+		{ 0x0041BBE0, 14, { 0x84, 0x5E, 0x08, 0x75, 0x0E, 0x8B, 0x16, 0x8B, 0x42, 0x04, 0x8B, 0xCE, 0xFF, 0xD0 }, "object update: one component" },
+		// the name of the script a CScript is running: kept and replaced where it calls another
+		// script, and set where it is given a script to run
+		{ 0x0040E7E9, 6, { 0x8B, 0x95, 0xBC, 0x00, 0x00, 0x00 }, "script name, kept for a call" },
+		{ 0x0040E861, 6, { 0x89, 0x95, 0xBC, 0x00, 0x00, 0x00 }, "script name, the called script's" },
+		{ 0x0040F949, 6, { 0x89, 0xAE, 0xBC, 0x00, 0x00, 0x00 }, "script name, set" },
+		// the game's own "have the controls been taken away" test
+		{ 0x004374F0, 18, { 0x80, 0xB9, 0x98, 0x04, 0x00, 0x00, 0x00, 0x75, 0x0C, 0x80, 0xB9, 0x99, 0x04, 0x00, 0x00, 0x00, 0x75, 0x03 }, "input disabled" },
+		// the script command RestoreAutoKick: where the option is kept, and where it goes
+		{ 0x0056871A, 18, { 0x8B, 0x56, 0x0C, 0x8B, 0x82, 0xBC, 0x02, 0x00, 0x00, 0x8B, 0x0D, 0x88, 0xA7, 0x76, 0x00, 0x8A, 0x94, 0xC1 }, "auto kick: the player" },
+		{ 0x00568729, 13, { 0x8A, 0x94, 0xC1, 0xB1, 0x03, 0x00, 0x00, 0x88, 0x96, 0xD0, 0x02, 0x00, 0x00 }, "auto kick: the option" },
 		// the game's own "is he skating" test: the two offsets ReadSkater uses for it
 		{ 0x0044F8A0, 18, { 0x8B, 0x41, 0x2C, 0x80, 0xB8, 0x14, 0x01, 0x00, 0x00, 0x00, 0x75, 0x0C, 0x83, 0x78, 0x1C, 0x00, 0x75, 0x06 }, "skating test" },
 	};
@@ -271,7 +391,9 @@ namespace FlickitGame {
 		}
 		// The checksums in this file are the game's (and the code that computes them is right)
 		if (Flickit::NameChecksum("SkaterState") != kSkaterState || Flickit::NameChecksum("SkaterFlipAndRotate") != kSkaterFlipAndRotate
-			|| Flickit::NameChecksum("SkaterCorePhysics") != kSkaterCorePhysics || Flickit::NameChecksum("slide") != kSlideBalance) {
+			|| Flickit::NameChecksum("SkaterCorePhysics") != kSkaterCorePhysics || Flickit::NameChecksum("slide") != kSlideBalance
+			|| Flickit::NameChecksum("Trick") != kTrick || Flickit::NameChecksum("Square") != kSquare
+			|| Flickit::NameChecksum("Physics_Rolling_Friction") != kRollingFriction) {
 			s_available = false;
 		}
 		if (!s_available) {
@@ -295,9 +417,13 @@ namespace FlickitGame {
 	static bool s_hasPick = false;
 	static Pick s_pick;
 
+	static void HoldAutoKick(bool off);
+
 	void SetFrame(const Frame& frame) {
 		s_frame = frame;
 		s_active = true;
+		// With Flickit's push the skater does not kick by himself
+		HoldAutoKick(frame.push > 0);
 	}
 
 	bool TakePick(Pick& out) {
@@ -373,7 +499,86 @@ namespace FlickitGame {
 		s_reach.found = false;
 	}
 
+	// Rolling: the pushes and the turning of the skater Flickit drives
+	static Flickit::PushRun s_push;
+	static Flickit::Steer s_steer;
+	static bool s_pushAsked = false;     // since the last look the game's ground physics have asked about a kick
+	static int s_pushIdle = 0;           // looks in a row without that
+	static const int kPushIdleMost = 3;
+	static bool s_groundSeen = false;    // since the last look the game's ground physics have run for him at all
+	static int s_groundIdle = kPushIdleMost + 1;   // looks in a row without that
+	// The skater whose "auto kick" is held at "off", so that he does not kick by himself
+	static uint8_t* s_autoKickHeld = 0;
+	// Left and Right, kept from the game's scripts for the frame in which a push asks for its
+	// animation: the input component they were taken out of (0: nothing is kept), and what they
+	// were. The pointer is only ever compared, never followed: the skater may be gone by the time
+	// it is looked at again.
+	static const uint8_t* s_turnKept = 0;
+	static uint8_t s_turnLeft = 0;
+	static uint8_t s_turnRight = 0;
+
+	// The physics of this skater are about to run: Left and Right are what the player holds again
+	static inline void GiveBackTurn(const uint8_t* core) {
+		if (!s_turnKept) {
+			return;
+		}
+		uint8_t* input = *(uint8_t* const*)(core + CORE_INPUT);
+		if (input && input == s_turnKept) {
+			input[INPUT_LEFT_PRESSED] = s_turnLeft;
+			input[INPUT_RIGHT_PRESSED] = s_turnRight;
+			s_turnKept = 0;
+		}
+	}
+
+	// The same before the game takes its next look at the controller, for a frame on which no
+	// physics came by to give them back. The game tells a new press by this very byte: left at
+	// "not down" it would take a held Left for one that has just been pressed.
+	static void GiveBackTurnNow() {
+		if (!s_turnKept) {
+			return;     // nothing is kept (and the game is not asked for anything)
+		}
+		uint8_t* skater = LocalSkater();
+		const uint8_t* core = skater ? (const uint8_t*)GetComponent(skater, kSkaterCorePhysics) : 0;
+		if (core) {
+			GiveBackTurn(core);
+		}
+		s_turnKept = 0;
+	}
+
+	// Flickit's push needs the game's "auto kick" off: the skater then kicks only when asked, and
+	// the game's scripts play the push only when asked. The game's own option is put back the way
+	// its script command RestoreAutoKick does it, as soon as the push is not Flickit's any more.
+	static void HoldAutoKick(bool off) {
+		if (!off && !s_autoKickHeld) {
+			return;     // nothing to put back (and the game is not asked for anything)
+		}
+		uint8_t* skater = LocalSkater();
+		uint8_t* core = skater ? (uint8_t*)GetComponent(skater, kSkaterCorePhysics) : 0;
+		if (off) {
+			if (core) {
+				core[CORE_AUTO_KICK] = 0;
+				s_autoKickHeld = skater;
+			}
+			return;
+		}
+		const uint8_t* skate = (const uint8_t*)*kSkate;
+		if (core && skate && skater == s_autoKickHeld) {
+			const int32_t player = *(const int32_t*)(skater + OBJECT_PLAYER);
+			if (player >= 0 && player < 8) {
+				core[CORE_AUTO_KICK] = skate[SKATE_AUTO_KICK + player * SKATE_PLAYER_SIZE];
+			}
+		}
+		s_autoKickHeld = 0;
+	}
+
 	void BeginFrame() {
+		if (!s_active) {
+			// Flickit did not drive the skater on the last frame: the kick is the game's again
+			HoldAutoKick(false);
+			s_push.Reset();
+			s_steer.Reset();
+		}
+		GiveBackTurnNow();
 		s_active = false;
 		ReachForget();
 	}
@@ -517,6 +722,49 @@ namespace FlickitGame {
 		out.caught = s_reach.caught;
 		out.missSerial = s_reach.misses;
 		out.missed = s_reach.missed;
+
+		// Rolling. A push button pushes while the board rolls on the ground with nothing balanced
+		// (the game does not kick in a manual either), the skater is not in a bail, no script
+		// has forbidden kicking and none has taken the controls away. And while the game is
+		// running his physics at all: a skater the game holds still, for a talk or a film, is
+		// not being pushed, and the buttons are the game's to read.
+		if (s_groundSeen) {
+			s_groundIdle = 0;
+		}
+		else if (s_groundIdle <= kPushIdleMost) {
+			s_groundIdle++;
+		}
+		s_groundSeen = false;
+		const uint8_t* core = (const uint8_t*)GetComponent(skater, kSkaterCorePhysics);
+		const uint8_t* balance = core ? *(const uint8_t* const*)(core + CORE_BALANCE) : 0;
+		const uint8_t* input = core ? *(const uint8_t* const*)(core + CORE_INPUT) : 0;
+		out.rolling = out.skating && out.state == Flickit::STATE_GROUND && state[STATE_BAILING] == 0
+			&& balance != 0 && *(const uint32_t*)(balance + BALANCE_TYPE) == 0 && core[CORE_NO_KICK] == 0
+			&& input != 0 && input[INPUT_DISABLED] == 0 && input[INPUT_NET_DISABLED] == 0
+			&& s_groundIdle <= kPushIdleMost;
+		const float* velocity = (const float*)(skater + OBJECT_VELOCITY);
+		out.speed = std::sqrt(velocity[0] * velocity[0] + velocity[1] * velocity[1] + velocity[2] * velocity[2]);
+		if (!out.rolling) {
+			s_push.Reset();
+			s_pushIdle = 0;
+		}
+		else if (s_pushAsked) {
+			s_pushIdle = 0;
+		}
+		else if (++s_pushIdle > kPushIdleMost) {
+			// On the ground, but the game's physics have not come by for a kick: no push is left half done
+			s_push.Reset();
+		}
+		s_pushAsked = false;
+		if (out.state != Flickit::STATE_GROUND || !out.skating) {
+			// What the trucks did before the board left the ground is history
+			s_steer.Reset();
+		}
+		out.pushSerial = s_push.Serial();
+		out.pushHeld = s_push.HeldFor();
+		out.pushAsked = s_push.Asked();
+		out.pushAdded = s_push.Added();
+		out.pushFrom = s_push.From();
 		return true;
 	}
 
@@ -633,6 +881,7 @@ namespace FlickitGame {
 	// Stands where the game calls get_air_gravity. Same convention: this in ecx, no arguments, the
 	// answer on the floating point stack.
 	static float __fastcall AirGravityHook(uint8_t* core) {
+		GiveBackTurn(core);     // a jump out of a push: the air turns him by Left and Right too
 		float gravity = AirGravity(core);
 		if (s_active && s_frame.gravity > 0 && IsLocal(core)) {
 			gravity *= Flickit::AirGravityFactor(s_frame.gravity);
@@ -911,6 +1160,249 @@ namespace FlickitGame {
 
 	/******************************************************************/
 	/*                                                                */
+	/*  Rolling: a push on a button                                   */
+	/******************************************************************/
+
+	// The skater Flickit drives, on a frame Flickit is on
+	static inline bool Drives(const uint8_t* core) {
+		return s_active && IsLocal(core);
+	}
+
+	static inline float Speed(const uint8_t* skater) {
+		const float* velocity = (const float*)(skater + OBJECT_VELOCITY);
+		return std::sqrt(velocity[0] * velocity[0] + velocity[1] * velocity[1] + velocity[2] * velocity[2]);
+	}
+
+	// Below this speed (units/s) a board that is rolling out is left to the game, which stops it
+	// and stands the skater up
+	static const float kStandSpeed = 10.0f;
+
+	// Stands where an input component is handed what one look at the controller gave. Same
+	// convention: this in ecx, one argument, which the callee takes off the stack.
+	//
+	// The game's ground scripts look at Left and Right first, and play the turn for them; only
+	// when neither is down do they get as far as the push. In Skate the board is pushed in a turn
+	// like anywhere else. So for the frame in which a push of Flickit's asks for its animation,
+	// the scripts see neither Left nor Right. They run before the physics do: the physics get
+	// both back (GiveBackTurn) and turn the board as if nothing had happened.
+	static void __fastcall PadUpdateHook(uint8_t* pad, void* /*edx*/, void* data) {
+		PadUpdate(pad, data);
+		if (s_turnKept && s_turnKept + INPUT_PAD == pad) {
+			s_turnKept = 0;     // the game has just written both anew
+		}
+		if (!s_active || s_frame.push <= 0 || !s_frame.pushOverTurn || s_push.Phase() != Flickit::PUSH_ASKED) {
+			return;
+		}
+		uint8_t* skater = LocalSkater();
+		const uint8_t* core = skater ? (const uint8_t*)GetComponent(skater, kSkaterCorePhysics) : 0;
+		uint8_t* input = core ? *(uint8_t* const*)(core + CORE_INPUT) : 0;
+		if (!input || input + INPUT_PAD != pad || (input[INPUT_LEFT_PRESSED] == 0 && input[INPUT_RIGHT_PRESSED] == 0)) {
+			return;
+		}
+		s_turnLeft = input[INPUT_LEFT_PRESSED];
+		s_turnRight = input[INPUT_RIGHT_PRESSED];
+		input[INPUT_LEFT_PRESSED] = 0;
+		input[INPUT_RIGHT_PRESSED] = 0;
+		s_turnKept = input;
+	}
+
+	// Stands where the physics of the ground ask "should he brake?". Same convention: this in ecx,
+	// no arguments, the answer in al. The game answers yes for Down, and, with "auto kick" off,
+	// for any speed under 50 units/s while the kick button is up: it stops the board dead there.
+	static bool __fastcall BrakeTestHook(uint8_t* core) {
+		GiveBackTurn(core);
+		const bool brake = ShouldBrake(core);
+		if (!Drives(core)) {
+			return brake;
+		}
+		s_groundSeen = true;
+		const uint8_t* input = *(const uint8_t* const*)(core + CORE_INPUT);
+		const uint8_t* skater = *(const uint8_t* const*)(core + COMPONENT_OBJECT);
+		if (!input || !skater) {
+			return brake;
+		}
+		const bool down = input[INPUT_DOWN_PRESSED] != 0;
+		if (s_frame.push > 0) {
+			// A script may have switched "auto kick" back on a moment ago
+			core[CORE_AUTO_KICK] = 0;
+			if (down) {
+				s_push.Reset();     // Down brakes, or turns sharply: either way the foot comes back up
+			}
+			else if (s_push.Active() || s_frame.pushHeld) {
+				// A board that is being pushed is not braking, and one that is about to be has to
+				// get as far as the kick test below
+				return false;
+			}
+		}
+		if (brake && !down && (s_frame.coast > 0 || s_frame.push > 0) && Speed(skater) > kStandSpeed) {
+			return false;   // nobody is braking: the board rolls out
+		}
+		return brake;
+	}
+
+	// Stands where the physics of the ground ask "may he kick?", which they do on every frame the
+	// skater is not braking and balances nothing. Same convention: this in ecx, no arguments, the
+	// answer in al. With Flickit's push the answer is always no, and the push is given here: the
+	// game's own kick, which would follow a yes, pushes for as long as it is allowed to.
+	static bool __fastcall KickTestHook(uint8_t* core) {
+		if (!Drives(core) || s_frame.push <= 0) {
+			return ShouldKick(core);
+		}
+		uint8_t* skater = *(uint8_t**)(core + COMPONENT_OBJECT);
+		const uint8_t* state = *(const uint8_t* const*)(core + CORE_STATE);
+		const uint8_t* input = *(const uint8_t* const*)(core + CORE_INPUT);
+		if (!skater || !state || !input) {
+			return false;
+		}
+		s_pushAsked = true;
+		// Where the game's own test says no whatever the speed, there is no push either: in a
+		// bail, where a script has forbidden kicking, and with Down held. Nor where a script has
+		// taken the controls away: the game empties its pad then, but the push buttons do not
+		// come through the pad.
+		if (state[STATE_BAILING] != 0 || core[CORE_NO_KICK] != 0 || input[INPUT_DOWN_PRESSED] != 0
+			|| input[INPUT_DISABLED] != 0 || input[INPUT_NET_DISABLED] != 0) {
+			s_push.Reset();
+			return false;
+		}
+		float* velocity = (float*)(skater + OBJECT_VELOCITY);
+		const float speed = Speed(skater);
+		const float add = s_push.Step(*(const float*)(core + CORE_FRAME_LENGTH), speed, s_frame.pushHeld, s_frame.push, s_frame.pushTiming);
+		if (add > 0.0f) {
+			// The way the game's own kick goes: the way the skater faces, or the way he travels
+			// when a script has locked that
+			const float* forward = (const float*)(skater + OBJECT_FORWARD);
+			float way[3] = { forward[0], forward[1], forward[2] };
+			if (core[CORE_VELOCITY_LOCKED] != 0 && speed > 0.5f) {
+				way[0] = velocity[0] / speed;
+				way[1] = velocity[1] / speed;
+				way[2] = velocity[2] / speed;
+			}
+			velocity[0] += way[0] * add;
+			velocity[1] += way[1] * add;
+			velocity[2] += way[2] * add;
+		}
+		return false;
+	}
+
+	// Stands where the script command CanKick asks the same question. Same convention. Two of
+	// the game's scripts ask. The loop of a skater who rides nollie plays the push once for a
+	// yes: that is the one a push of Flickit's answers. The other, at the end of a change of
+	// stance on the ground, starts the push as a loop that the game's ground script then waits
+	// on for good if it happens to pick the same animation: it gets the game's own answer.
+	static bool __fastcall CanKickHook(uint8_t* core) {
+		const bool can = ShouldKick(core);
+		if (!Drives(core) || s_frame.push <= 0 || !s_push.Animating()) {
+			return can;
+		}
+		const uint8_t* skater = *(const uint8_t* const*)(core + COMPONENT_OBJECT);
+		const uint8_t* script = skater ? *(const uint8_t* const*)(skater + OBJECT_SCRIPT) : 0;
+		if (!script || *(const uint32_t*)(script + SCRIPT_NAME) != kNollieLoop) {
+			return can;
+		}
+		// The script that asked is about to play the push: its time starts now
+		s_push.Taken();
+		return true;
+	}
+
+	// Stands where the script command Held asks whether one button is down. With "auto kick" off
+	// the game's scripts play the push while the Flip button is held: that button is the game's
+	// own for a kick. The game does not get to see a press that is a push of Flickit's (the
+	// input code keeps it back). Instead, for the skater Flickit drives, on his board on the
+	// ground, the Flip button counts as held while a push of Flickit's wants its animation,
+	// whichever button it came from. Same convention: this in ecx, one argument, which the
+	// callee takes off the stack.
+	static bool __fastcall HeldHook(uint8_t* trick, void* /*edx*/, uint32_t button) {
+		const bool held = ButtonHeld(trick, button);
+		if (button != kSquare || !s_active || s_frame.push <= 0 || !s_push.Animating()) {
+			return held;
+		}
+		uint8_t* skater = LocalSkater();
+		if (!skater || (uint8_t*)GetComponent(skater, kTrick) != trick) {
+			return held;
+		}
+		const uint8_t* state = (const uint8_t*)GetComponent(skater, kSkaterState);
+		if (!state || *(const int32_t*)(state + STATE_STATE) != 0 || state[STATE_DRIVING] != 0 || *(const int32_t*)(state + STATE_PHYSICS) != 0) {
+			return held;    // in the air and off the board the button is what it always was
+		}
+		// The script that asked is about to play the push (or it is one that only wanted to
+		// know; then the one that plays it asks within the next frames): its time starts now
+		s_push.Taken();
+		return true;
+	}
+
+	/******************************************************************/
+	/*                                                                */
+	/*  Rolling: the board loses speed the way Skate's does           */
+	/******************************************************************/
+
+	// Stands where the physics of the ground apply the friction. Same convention: this in ecx, no
+	// arguments, nothing answered. The game's own: a drag that grows with the square of the speed
+	// and next to nothing for the wheels; with "auto kick" off, nothing at all. A bail, and a
+	// script that has raised what the wheels lose (that is how the game brakes), stay the game's.
+	static void __fastcall FrictionHook(uint8_t* core) {
+		if (!Drives(core) || s_frame.coast <= 0) {
+			GroundFriction(core);
+			return;
+		}
+		uint8_t* skater = *(uint8_t**)(core + COMPONENT_OBJECT);
+		const uint8_t* state = *(const uint8_t* const*)(core + CORE_STATE);
+		if (!skater || !state || state[STATE_BAILING] != 0
+			|| *(const float*)(core + CORE_ROLLING_FRICTION) != GetPhysicsFloat(kRollingFriction, 0)) {
+			GroundFriction(core);
+			return;
+		}
+		float* velocity = (float*)(skater + OBJECT_VELOCITY);
+		const float speed = Speed(skater);
+		if (!(speed > 0.0f)) {
+			return;
+		}
+		const float scale = Flickit::Coast(speed, *(const float*)(core + CORE_FRAME_LENGTH), s_frame.coast) / speed;
+		velocity[0] *= scale;
+		velocity[1] *= scale;
+		velocity[2] *= scale;
+	}
+
+	/******************************************************************/
+	/*                                                                */
+	/*  Rolling: the board turns the way Skate's does                 */
+	/******************************************************************/
+
+	// Stands where the physics of the ground turn the skater. Same convention: this in ecx, no
+	// arguments, nothing answered. The game's own: 1.8 radians a second for Left or Right, at any
+	// speed, and twice that with Down. With Down the turn stays the game's.
+	static void __fastcall TurnHook(uint8_t* core) {
+		GiveBackTurn(core);     // where the brake test did not come by (something is balanced)
+		if (!Drives(core) || s_frame.steering <= 0) {
+			GroundTurn(core);
+			return;
+		}
+		uint8_t* skater = *(uint8_t**)(core + COMPONENT_OBJECT);
+		const uint8_t* input = *(const uint8_t* const*)(core + CORE_INPUT);
+		// With Down, and where a script has taken the controls away (the stick does not come
+		// through the game's pad either), the turn is the game's
+		if (!skater || !input || input[INPUT_DOWN_PRESSED] != 0 || input[INPUT_DISABLED] != 0 || input[INPUT_NET_DISABLED] != 0) {
+			s_steer.Reset();
+			GroundTurn(core);
+			return;
+		}
+		const float dt = *(const float*)(core + CORE_FRAME_LENGTH);
+		const float rate = s_steer.Step(dt, s_frame.steer, Speed(skater), s_push.Phase() == Flickit::PUSH_CONTACT, s_frame.steering);
+		// The game turns to the left for a positive angle
+		const float angle = -rate * dt;
+		if (angle == 0.0f || !(angle == angle)) {
+			return;
+		}
+		// What the game's own turning does with its angle, in its order
+		core[CORE_TURNING_LEFT] = angle > 0.0f ? 1 : 0;
+		if (core[CORE_VELOCITY_LOCKED] == 0) {
+			VectorTurn(skater + OBJECT_VELOCITY, angle);
+		}
+		MatrixTurn(skater + OBJECT_MATRIX, angle);
+		MatrixTurn(core + CORE_DISPLAY_MATRIX, angle);
+	}
+
+	/******************************************************************/
+	/*                                                                */
 	/*  Putting it in                                                 */
 	/******************************************************************/
 
@@ -942,10 +1434,18 @@ namespace FlickitGame {
 		patchCall(kGravityCall4, (void*)&AirGravityHook);
 		patchCall(kJumpCall, (void*)&JumpHook);
 		patchCall(kJumpSpeedCall, (void*)&JumpSpeedHook);
+		patchCall(kBrakeTestCall, (void*)&BrakeTestHook);
+		patchCall(kKickTestCall, (void*)&KickTestHook);
+		patchCall(kCanKickCall, (void*)&CanKickHook);
+		patchCall(kHeldCall, (void*)&HeldHook);
+		patchCall(kFrictionCall, (void*)&FrictionHook);
+		patchCall(kTurnCall, (void*)&TurnHook);
+		patchCall(kPadUpdateCall, (void*)&PadUpdateHook);
 
 		s_installed = true;
 		Log::TypedLog(CHN_SDL, "Flickit: grind hooks are in (rail catch, rail search, grind pick, rail balance, rail boost)\n");
 		Log::TypedLog(CHN_SDL, "Flickit: jump hooks are in (gravity in the air, jump, jump speed)\n");
+		Log::TypedLog(CHN_SDL, "Flickit: rolling hooks are in (brake test, kick test, friction, turning, CanKick, Held, pad update)\n");
 		return true;
 	}
 }

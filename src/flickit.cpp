@@ -40,6 +40,8 @@ namespace Flickit {
 
 	// Gravity and pop: the least a setting other than 0 can be, in percent of Skate's
 	static const int kJumpLeastPercent = 25;
+	// The same for the push and the steering
+	static const int kRollLeastPercent = 25;
 
 	static inline int32_t Since(uint32_t now, uint32_t then) {
 		return (int32_t)(now - then);
@@ -97,6 +99,15 @@ namespace Flickit {
 		s.grindReach = 100;
 		s.airGravity = 100;
 		s.jumpPop = 100;
+
+		s.push = 100;
+		s.pushOnOllie = 1;
+		s.pushOverTurn = 1;
+		s.pushDelay = 300;
+		s.pushContact = 250;
+		s.pushCycle = 900;
+		s.coast = 100;
+		s.steering = 100;
 	}
 
 	void Sanitize(Settings& s) {
@@ -144,6 +155,15 @@ namespace Flickit {
 		s.grindReach = Clamp(s.grindReach, 0, kReachMostPercent);
 		s.airGravity = s.airGravity <= 0 ? 0 : Clamp(s.airGravity, kJumpLeastPercent, kJumpMostPercent);
 		s.jumpPop = s.jumpPop <= 0 ? 0 : Clamp(s.jumpPop, kJumpLeastPercent, kJumpMostPercent);
+
+		s.push = s.push <= 0 ? 0 : Clamp(s.push, kRollLeastPercent, kRollMostPercent);
+		s.pushOnOllie = s.pushOnOllie ? 1 : 0;
+		s.pushOverTurn = s.pushOverTurn ? 1 : 0;
+		s.pushDelay = Clamp(s.pushDelay, 0, 1000);
+		s.pushContact = Clamp(s.pushContact, 50, 1000);
+		s.pushCycle = Clamp(s.pushCycle, 200, 3000);
+		s.coast = Clamp(s.coast, 0, 1000);
+		s.steering = s.steering <= 0 ? 0 : Clamp(s.steering, kRollLeastPercent, kRollMostPercent);
 	}
 
 	float AngleDeg(float x, float y) {
@@ -1287,6 +1307,388 @@ namespace Flickit {
 		out.height = speed * speed / (2.0f * gravity);
 		out.seconds = 2.0f * speed / gravity;
 		return out;
+	}
+
+	// ------------------------------------------------------------------------------------------
+	// Rolling: pushing, coasting, steering
+	// ------------------------------------------------------------------------------------------
+
+	const float kPushTopSpeed = 8.5f;
+	const float kPushLastSpeed = 8.3f;
+	const float kPushTap = 0.75f;
+	const float kPushMost = 4.0f;
+	const float kPushFullHold = 0.25f;
+	// THUG (physics.q): Physics_Ground_Rotation
+	const float kThugGroundTurn = 1.8f;
+	const float kTurnGrip = 0.8f;
+	const int kRollMostPercent = 400;
+
+	// Skate's numbers come as curves of eight points with straight lines between them. Before the
+	// first point and after the last the curve stays where it is.
+	struct Curve8 {
+		float x[8];
+		float y[8];
+	};
+
+	static float At(const Curve8& c, float x) {
+		if (!(x > c.x[0])) {
+			return c.y[0];
+		}
+		for (int i = 1; i < 8; i++) {
+			if (x < c.x[i]) {
+				const float span = c.x[i] - c.x[i - 1];
+				if (!(span > 0.0f)) {
+					return c.y[i];
+				}
+				return c.y[i - 1] + (c.y[i] - c.y[i - 1]) * (x - c.x[i - 1]) / span;
+			}
+		}
+		return c.y[7];
+	}
+
+	// The speed a push is asked to add (m/s), over the share of the full hold the button was down
+	static const Curve8 kPushOfHold = {
+		{ 0.0f, 0.2417f, 0.3426f, 0.4197f, 0.5153f, 0.7676f, 0.8845f, 1.0f },
+		{ 0.75f, 1.0446f, 1.4304f, 2.0411f, 2.5232f, 2.9732f, 3.5036f, 4.5f }
+	};
+	// How long the button is down for the full push (s), over the speed (m/s)
+	static const Curve8 kFullHoldOfSpeed = {
+		{ 0.0f, 0.3239f, 1.0383f, 2.8785f, 4.6169f, 5.5538f, 6.6713f, 8.4774f },
+		{ 0.2268f, 0.25f, 0.25f, 0.25f, 0.25f, 0.25f, 0.25f, 0.25f }
+	};
+	// The most a push adds in one tick (m/s): this at a standstill, and this at the top speed
+	static const float kPushStepSlow = 0.6f;
+	static const float kPushStepFast = 0.5f;
+	static const float kSkateTick = 1.0f / 60.0f;
+	// What the four wheels take off the speed (m/s2), over the speed (m/s)
+	static const Curve8 kRollLoss = {
+		{ 0.0f, 1.1451f, 2.2823f, 3.3313f, 4.1962f, 5.1572f, 6.5265f, 8.0f },
+		{ 0.1286f, 0.1518f, 0.2071f, 0.2929f, 0.3857f, 0.4411f, 0.4804f, 0.5f }
+	};
+	// What the air takes on top of that (m/s2), over the speed (m/s): nothing up to the speed a push reaches
+	static const Curve8 kAirLoss = {
+		{ 0.0f, 8.1205f, 10.4213f, 12.0454f, 12.8575f, 14.3322f, 18.4039f, 26.9782f },
+		{ 0.0f, 0.0f, 0.03f, 0.1629f, 0.6f, 0.9041f, 1.05f, 1.2f }
+	};
+	// How far the trucks turn: this many radians at most ...
+	static const float kTruckMost = 0.6f;
+	// ... times this, over how far the stick is pushed
+	static const Curve8 kTruckOfStick = {
+		{ 0.0f, 0.0586f, 0.25f, 0.375f, 0.5088f, 0.6904f, 0.8577f, 1.0f },
+		{ 0.0f, 0.0f, 0.0338f, 0.0777f, 0.1723f, 0.3345f, 0.5642f, 0.8345f }
+	};
+	// ... times this, over the speed as a share of 50 m/s
+	static const Curve8 kTruckOfSpeed = {
+		{ 0.057f, 0.1238f, 0.1731f, 0.2191f, 0.2979f, 0.4f, 0.5f, 1.0f },
+		{ 1.0f, 0.9696f, 0.848f, 0.6081f, 0.3953f, 0.3f, 0.28f, 0.27f }
+	};
+	static const float kTruckSpeedScale = 50.0f;
+	// Each truck sits this far from the middle of the board (m)
+	static const float kTruckOffset = 0.243f;
+	// How fast the stick and the trucks follow, as the share of what is missing that is made up in one tick
+	static const float kStickEase = 0.7f;
+	static const float kTruckEase = 0.2f;
+	// A pushing foot takes turning away: down to this share, by this much a tick, and back by that much
+	static const float kPushTurnLeast = 0.5f;
+	static const float kPushTurnDown = 0.015f;
+	static const float kPushTurnUp = 0.05f;
+	// Standing still the board turns on the spot the way THUG's does. That fades out up to this
+	// speed (units/s), where the trucks have long taken over.
+	static const float kPivotSpeed = 100.0f;
+	// A frame longer than this is a hitch, not a frame
+	static const float kLongFrame = 0.1f;
+	// Once the game has said it started the animation of a push, it is asked for it this much longer (s)
+	static const float kAnimateLeast = 0.1f;
+	// How long a push waits for the game to take it (s), at the least
+	static const float kAskWait = 0.1f;
+	// For this long (s) after the game has started the animation of a push its scripts are taken
+	// to be busy with it: they look for the next push when the animation is over. A push that
+	// is wanted meanwhile waits for them.
+	static const float kBusyMost = 1.5f;
+
+	static inline float Clampf(float v, float lo, float hi) {
+		return v < lo ? lo : (v > hi ? hi : v);
+	}
+
+	float PushStrength(float heldSeconds, float speed) {
+		const float full = At(kFullHoldOfSpeed, speed);
+		const float share = heldSeconds > 0.0f ? Clampf(heldSeconds / full, 0.0f, 1.0f) : 0.0f;
+		const float asked = At(kPushOfHold, share);
+		return asked > kPushMost ? kPushMost : asked;
+	}
+
+	float PushStep(float speed) {
+		const float share = Clampf(speed / kPushTopSpeed, 0.0f, 1.0f);
+		return kPushStepSlow + (kPushStepFast - kPushStepSlow) * share;
+	}
+
+	float CoastLoss(float speed) {
+		if (speed < 0.0f) {
+			speed = -speed;
+		}
+		return At(kRollLoss, speed) + At(kAirLoss, speed);
+	}
+
+	float Coast(float speed, float dt, int percent) {
+		if (percent <= 0 || !(dt > 0.0f) || !(speed > 0.0f)) {
+			return speed;
+		}
+		const float loss = CoastLoss(speed / kUnitsPerMetre) * kUnitsPerMetre * (float)percent * 0.01f * dt;
+		return loss >= speed ? 0.0f : speed - loss;
+	}
+
+	PushRun::PushRun() {
+		m_held = false;
+		m_hold = 0.0f;
+		m_serial = 0;
+		m_pushHold = 0.0f;
+		m_asked = 0.0f;
+		m_added = 0.0f;
+		m_from = 0.0f;
+		Reset();
+	}
+
+	void PushRun::Reset() {
+		m_phase = PUSH_NONE;
+		m_time = 0.0f;
+		m_since = 0.0f;
+		m_wait = kAskWait;
+		m_busy = kBusyMost;
+		m_asking = false;
+		m_tracking = false;
+		m_target = 0.0f;
+	}
+
+	bool PushRun::Active() const {
+		return m_phase == PUSH_ASKED || m_phase == PUSH_INTO || m_phase == PUSH_CONTACT;
+	}
+
+	bool PushRun::Animating() const {
+		// m_since stands at nothing for as long as the push asks
+		return m_phase != PUSH_NONE && m_since < kAnimateLeast;
+	}
+
+	void PushRun::Taken() {
+		if (m_phase == PUSH_ASKED) {
+			m_phase = PUSH_INTO;
+			m_time = 0.0f;
+			m_busy = 0.0f;
+		}
+	}
+
+	float PushRun::Step(float dt, float speed, bool held, int percent, const PushTiming& timing) {
+		// The button. A press asks for a push; how long it stays down is what makes the push strong.
+		const bool pressed = held && !m_held;
+		const bool released = !held && m_held;
+		m_held = held;
+		if (pressed) {
+			m_hold = 0.0f;
+			m_asking = true;
+		}
+		if (released) {
+			m_tracking = false;
+		}
+		if (percent <= 0 || !(dt > 0.0f)) {
+			return 0.0f;
+		}
+		if (dt > kLongFrame) {
+			dt = kLongFrame;
+		}
+
+		const float units = kUnitsPerMetre * (float)percent * 0.01f;   // the game's units for one of Skate's m/s
+		const float top = kPushTopSpeed * units;
+		const float last = kPushLastSpeed * units;
+		const float delay = timing.delay > 0.0f ? timing.delay : 0.0f;
+		const float contact = timing.contact > 0.0f ? timing.contact : 0.0f;
+		const float period = timing.cycle > delay + contact ? timing.cycle : delay + contact;
+
+		float add = 0.0f;
+		float left = dt;
+		while (left > 0.0f) {
+			if (m_phase == PUSH_NONE) {
+				if (!(m_asking || held)) {
+					break;
+				}
+				if (speed + add >= last) {
+					// As fast as pushing gets. A press is not kept for later; a button that stays
+					// down pushes again when the board has slowed.
+					m_asking = false;
+					break;
+				}
+				m_phase = PUSH_ASKED;
+				m_since = 0.0f;
+				// It waits for the game's scripts for as long as they may be busy with the last push
+				m_wait = kBusyMost - m_busy > kAskWait ? kBusyMost - m_busy : kAskWait;
+				// The press this push comes from: the one that is down, or a tap that is over
+				m_tracking = held;
+				m_pushHold = m_hold;
+				m_asking = false;
+			}
+
+			const float span = m_phase == PUSH_ASKED ? m_wait
+				: (m_phase == PUSH_INTO ? delay : (m_phase == PUSH_CONTACT ? contact : period - delay - contact));
+			float step = span - m_time;
+			if (step > left) {
+				step = left;
+			}
+			if (step < 0.0f) {
+				step = 0.0f;
+			}
+
+			if (m_phase == PUSH_CONTACT) {
+				// While the foot is on the ground the board is taken up to the speed the push is
+				// for: what is still missing is spread over the time that is left, so whatever
+				// else pulls at the board meanwhile is made up for. But no faster than Skate lets
+				// a push come in.
+				const float missing = m_target - (speed + add);
+				const float remains = contact - m_time;
+				float want = step >= remains ? missing : missing * step / remains;
+				const float most = PushStep((speed + add) / units) * (step / kSkateTick) * units;
+				if (want > most) {
+					want = most;
+				}
+				if (want > 0.0f) {
+					add += want;
+					m_added += want;
+				}
+			}
+
+			m_time += step;
+			if (m_phase != PUSH_ASKED) {
+				m_since += step;
+			}
+			if (m_busy < kBusyMost) {
+				m_busy += step;
+			}
+			left -= step;
+			if (held) {
+				m_hold += step;
+			}
+			if (m_tracking) {
+				m_pushHold = m_hold;
+			}
+
+			if (m_time >= span - 1.0e-6f) {
+				m_time = 0.0f;
+				if (m_phase == PUSH_ASKED) {
+					// Nobody took it: the push goes ahead without the game's animation
+					m_phase = PUSH_INTO;
+				}
+				else if (m_phase == PUSH_INTO) {
+					// The foot is down: how long the button was held is settled now
+					m_tracking = false;
+					m_from = speed + add;
+					m_asked = PushStrength(m_pushHold, m_from / units) * units;
+					// never past the top speed
+					m_target = m_from + m_asked;
+					if (m_target > top) {
+						m_target = top;
+					}
+					m_added = 0.0f;
+					m_phase = PUSH_CONTACT;
+				}
+				else if (m_phase == PUSH_CONTACT) {
+					m_phase = PUSH_RECOVER;
+					m_serial++;
+				}
+				else {
+					m_phase = PUSH_NONE;
+				}
+			}
+		}
+		if (m_phase == PUSH_NONE && left > 0.0f) {
+			if (held) {
+				m_hold += left;
+			}
+			if (m_busy < kBusyMost) {
+				m_busy += left;
+			}
+		}
+		return add;
+	}
+
+	// The trucks' angle that the stick asks for at this speed, 0 or more. stick: 0 to 1.
+	static float TruckAngle(float stick, float metresPerSecond) {
+		return kTruckMost * At(kTruckOfStick, stick) * At(kTruckOfSpeed, Clampf(metresPerSecond / kTruckSpeedScale, 0.0f, 1.0f));
+	}
+
+	// How fast the board turns with its trucks at this angle (0 or more), in radians per second
+	static float RateOfAngle(float angle, float speed, int percent) {
+		const float v = speed / kUnitsPerMetre;
+		// The board goes where its trucks point ...
+		float rate = v * std::tan(angle) / kTruckOffset;
+		// ... as far as the wheels grip
+		if (v > 0.01f) {
+			const float grip = kTurnGrip * 9.8f * (float)percent * 0.01f / v;
+			if (rate > grip) {
+				rate = grip;
+			}
+		}
+		// At a standstill there is nothing for the trucks to steer: THUG's own turn on the spot
+		if (speed < kPivotSpeed) {
+			const float most = kTruckMost * kTruckOfStick.y[7];
+			const float pivot = kThugGroundTurn * Clampf(angle / most, 0.0f, 1.0f) * (1.0f - (speed > 0.0f ? speed : 0.0f) / kPivotSpeed);
+			if (pivot > rate) {
+				rate = pivot;
+			}
+		}
+		return rate;
+	}
+
+	float TurnRate(float stick, float speed, int percent) {
+		if (percent <= 0) {
+			return 0.0f;
+		}
+		if (speed < 0.0f) {
+			speed = -speed;
+		}
+		stick = Clampf(stick < 0.0f ? -stick : stick, 0.0f, 1.0f);
+		return RateOfAngle(TruckAngle(stick, speed / kUnitsPerMetre), speed, percent);
+	}
+
+	Steer::Steer() {
+		Reset();
+	}
+
+	void Steer::Reset() {
+		m_stick = 0.0f;
+		m_angle = 0.0f;
+		m_ramp = 1.0f;
+		m_carry = 0.0f;
+	}
+
+	float Steer::Step(float dt, float stick, float speed, bool pushing, int percent) {
+		if (percent <= 0 || !(dt > 0.0f)) {
+			return 0.0f;
+		}
+		if (dt > kLongFrame) {
+			dt = kLongFrame;
+		}
+		if (speed < 0.0f) {
+			speed = -speed;
+		}
+		if (!(stick == stick)) {
+			stick = 0.0f;
+		}
+		stick = Clampf(stick, -1.0f, 1.0f);
+
+		// Skate eases the stick and the trucks by a share per tick of a 60th of a second. So that
+		// a frame of any length comes out the same, the easing is done in those ticks here too.
+		m_carry += dt;
+		while (m_carry >= kSkateTick - 1.0e-5f) {
+			m_carry -= kSkateTick;
+			m_stick += (stick - m_stick) * kStickEase;
+			m_ramp = Clampf(m_ramp + (pushing ? -kPushTurnDown : kPushTurnUp), kPushTurnLeast, 1.0f);
+			const float side = m_stick < 0.0f ? -1.0f : 1.0f;
+			const float wanted = side * TruckAngle(m_stick * side, speed / kUnitsPerMetre) * m_ramp;
+			m_angle += (wanted - m_angle) * kTruckEase;
+		}
+		if (m_carry < 0.0f) {
+			m_carry = 0.0f;
+		}
+
+		const float turn = m_angle < 0.0f ? -1.0f : 1.0f;
+		return turn * RateOfAngle(m_angle * turn, speed, percent);
 	}
 
 	TiltTracker::TiltTracker() {

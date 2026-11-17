@@ -106,6 +106,16 @@ namespace Flickit {
 		int grindReach;       // percent of Skate's reach for a rail that catches by itself, 0: THUG's own
 		int airGravity;       // gravity in the air, in percent of Skate's, 0: THUG's own
 		int jumpPop;          // the speed of a jump, in percent of Skate's, 0: THUG's own
+
+		// Rolling the Skate way (see Rolling below). These need the game hooks too.
+		int push;             // percent of Skate's push: what one push adds and how fast pushing gets. 0: THUG's own kick
+		int pushOnOllie;      // 1: the Ollie button pushes as well while the board rolls on the ground
+		int pushOverTurn;     // 1: the game shows a push in a turn too; 0: its turn animation comes first, as in THUG
+		int pushDelay;        // ms from the start of the push animation to the foot reaching the ground
+		int pushContact;      // ms the foot is on the ground: the speed of a push comes in over this time
+		int pushCycle;        // ms at least from the start of one push to the start of the next
+		int coast;            // percent of Skate's rolling resistance, 0: THUG's own friction
+		int steering;         // percent of Skate's grip in a turn, 0: THUG's own turning
 	};
 
 	void SetDefaults(Settings& s);
@@ -472,6 +482,144 @@ namespace Flickit {
 		float seconds;
 	};
 	FlatJump JumpOnFlat(float thugPop, int gravityPercent, int popPercent);
+
+	// ------------------------------------------------------------------------------------------
+	// Rolling: pushing, coasting, steering
+	//
+	// THUG's skater kicks by himself whenever he is slower than his kick speed (394 to 496 units/s
+	// standing, 532 to 675 crouched, by his speed stat), at 629 to 1200 units/s2. What stops him
+	// going faster is a drag that grows with the square of the speed (294 units/s2 at 700, standing).
+	// He turns at 1.8 radians a second whenever left or right is held: all or nothing, at any speed.
+	//
+	// Skate:
+	//
+	//   - The board is pushed on a button. How long the button was down when the foot reaches the
+	//     ground says how much speed the push is asked to add: 0.75 m/s for a tap, 4 m/s from a
+	//     quarter of a second on. While the foot is on the ground the board is taken up to that
+	//     speed, by no more than 0.6 m/s in one tick near a standstill and 0.5 at full speed, and
+	//     never past 8.5 m/s. From 8.3 m/s on no push starts. A button that stays down pushes again
+	//     and again, each time with all it has. How long one push takes is in Skate's animations,
+	//     which were not looked at; here the game's own push animation sets the pace.
+	//   - On its four wheels the board loses 0.13 m/s2 at a crawl and 0.5 m/s2 from 8 m/s on, and
+	//     more above 8.1 m/s (1.1 m/s2 at 13 m/s). From 8 m/s it rolls for half a minute.
+	//   - The stick turns the trucks, by up to 0.5 radians at a walk and less the faster the board
+	//     is, and gently near its centre: half the stick is a fifth of the angle. The board follows
+	//     the trucks as far as the wheels grip, 0.8 g sideways. So at a walk it turns on the spot,
+	//     and at full speed the circle it can hold is nine metres in radius. While a foot is on
+	//     the ground the trucks turn less and less, down to half.
+	//
+	// All of it is put into THUG's units at kUnitsPerMetre, as the rails and the jumps are: Skate's
+	// 8.5 m/s is 680 units/s, about the best THUG's own kick does.
+	// ------------------------------------------------------------------------------------------
+
+	extern const float kPushTopSpeed;     // m/s: pushing never takes the board past this
+	extern const float kPushLastSpeed;    // m/s: from this speed on no push starts
+	extern const float kPushTap;          // m/s a tap of the button adds
+	extern const float kPushMost;         // m/s the strongest push adds
+	extern const float kPushFullHold;     // s the button is down for the strongest push
+	extern const float kThugGroundTurn;   // rad/s: THUG's own turning (Physics_Ground_Rotation)
+	extern const float kTurnGrip;         // what the wheels hold sideways, in g
+	extern const int kRollMostPercent;    // the most Settings::push and steering can be
+
+	// The speed a push is asked to add, in m/s. heldSeconds: how long the button has been down
+	// when the foot reaches the ground. speed: the board's, in m/s.
+	float PushStrength(float heldSeconds, float speed);
+	// The most a push adds in one of Skate's ticks (a 60th of a second), in m/s, at a speed in m/s
+	float PushStep(float speed);
+	// What the board loses while it rolls on its four wheels, in m/s2, at a speed in m/s
+	float CoastLoss(float speed);
+	// One frame of rolling: the speed after it. speed in the game's units per second, dt in
+	// seconds, percent: Settings::coast.
+	float Coast(float speed, float dt, int percent);
+
+	// When the parts of a push happen, in seconds
+	struct PushTiming {
+		float delay;      // from the start of its animation to the foot on the ground
+		float contact;    // the foot on the ground
+		float cycle;      // the least from the start of one push to the start of the next
+	};
+
+	enum PushPhase {
+		PUSH_NONE = 0,
+		PUSH_ASKED = 1,     // a push is wanted: the game is asked to start its animation
+		PUSH_INTO = 2,      // the animation runs, the foot is on its way down
+		PUSH_CONTACT = 3,   // it is on the ground and pushes
+		PUSH_RECOVER = 4    // it is on its way back to the board
+	};
+
+	// The pushes of one skater. Step is called once on every frame of the game's ground physics.
+	//
+	// The game plays the push, and its scripts decide when: they look for it only while no other
+	// animation has their attention, and while one push is playing they look for nothing. So a
+	// push first asks, and its time starts when the game says it has started the animation
+	// (Taken). A push that is wanted while the scripts may still be busy with the last one waits
+	// for them, until a second and a half after that one was taken: so with the button held
+	// the pushes follow the game's animation, whatever its length up to there. A push nobody
+	// takes starts by itself, without the animation: after a tenth of a second if the scripts
+	// are not busy with a push.
+	class PushRun {
+	public:
+		PushRun();
+		// Nothing is under way, and no press is remembered
+		void Reset();
+		// dt: seconds. speed: the board's, in the game's units per second. held: a push button
+		// is down. percent: Settings::push, more than 0. Returns the speed to add on this frame.
+		float Step(float dt, float speed, bool held, int percent, const PushTiming& timing);
+		// The game has started the animation of the push that is asking
+		void Taken();
+		int Phase() const { return m_phase; }
+		// From the moment a push is wanted until the foot leaves the ground: the board is being pushed
+		bool Active() const;
+		// The game should start its animation now (also for a moment after it has said it did:
+		// the first to ask is not always the script that plays it)
+		bool Animating() const;
+		// For the log. The serial goes up when the foot leaves the ground.
+		uint32_t Serial() const { return m_serial; }
+		float HeldFor() const { return m_pushHold; }   // seconds the button had been down
+		float Asked() const { return m_asked; }        // units/s the push was asked to add
+		float Added() const { return m_added; }        // units/s it did add
+		float From() const { return m_from; }          // the speed it started at
+
+	private:
+		int m_phase;
+		float m_time;       // into the phase
+		float m_since;      // since the animation started
+		float m_wait;       // how long this push waits for the game to take it
+		float m_busy;       // since the game last took a push, as far as that matters
+		bool m_held;        // the button on the frame before
+		float m_hold;       // how long the press that is down, or the last one, has lasted
+		bool m_asking;      // a press that no push has taken up yet
+		bool m_tracking;    // the press this push came from is still down
+		float m_pushHold;   // how long that press had lasted when the foot reached the ground
+		float m_target;     // the speed the board is taken up to while the foot is on the ground
+		float m_asked;
+		float m_added;
+		float m_from;
+		uint32_t m_serial;
+	};
+
+	// The turning of one skater. Step is called once on every frame of the game's ground physics.
+	class Steer {
+	public:
+		Steer();
+		void Reset();
+		// dt: seconds. stick: -1 (left) to 1 (right). speed: the game's units per second.
+		// pushing: a foot is on the ground. percent: Settings::steering, more than 0.
+		// Returns how fast the board turns, in radians per second, to the right when positive.
+		float Step(float dt, float stick, float speed, bool pushing, int percent);
+		// For the log and the tests: the angle of the trucks, in radians
+		float Angle() const { return m_angle; }
+
+	private:
+		float m_stick;      // the stick, eased
+		float m_angle;      // the trucks, eased
+		float m_ramp;       // 0.5 to 1: a pushing foot takes turning away
+		float m_carry;      // time that has not made a whole tick yet
+	};
+
+	// How fast a board turns once its trucks have settled: stick 0 to 1, speed in the game's
+	// units per second, the answer in radians per second
+	float TurnRate(float stick, float speed, int percent);
 
 	// ------------------------------------------------------------------------------------------
 	// Stick patterns

@@ -17,6 +17,21 @@
 //   - the gravity in the air
 //   - the speed of a jump
 //
+// And for rolling the way Skate's board does, seven more: four in the physics of the ground, two
+// commands of the game's scripts, and the place where the game takes in the controller.
+//
+//   - the skater does not kick by himself: a push comes from Flickit, on a button (the game's own
+//     kick test; its switch for kicking unasked is held at "off" meanwhile)
+//   - below walking pace he is not stopped dead, the board rolls out (the game's brake test)
+//   - the board loses speed the way Skate's does (the game's friction on the ground)
+//   - it turns by the stick the way Skate's does (the game's turning on the ground)
+//   - the game's scripts are told when to play the push (the commands CanKick, where the loop
+//     of a skater riding nollie asks it, and Held for the Flip button, which is the game's own
+//     button for a kick)
+//   - they play it in a turn as well: on the frame a push asks for its animation they do not see
+//     Left and Right (the game's picture of the pad, between the look at the controller and the
+//     physics, which get both back)
+//
 // Everything in here is written against the one PC executable of THUG (THUG.exe / THUG-SDL.exe, the
 // same code). Before anything is read or changed the code at every address used is compared with
 // what is expected there. If one byte differs nothing is touched and Flickit works as it did
@@ -57,6 +72,15 @@ namespace FlickitGame {
 		Flickit::RailPass caught;   // how the board passed that rail on the frame it was taken
 		uint32_t missSerial;    // goes up when a flight ends on the ground with a rail just out of reach
 		Flickit::RailPass missed;   // the rail that came closest in that flight
+
+		// Rolling
+		bool rolling;           // on the board, on the ground, nothing balanced, not bailing: a push button pushes
+		float speed;            // the game's units per second
+		uint32_t pushSerial;    // goes up when the foot of a push leaves the ground
+		float pushHeld;         // that push: seconds the button had been down
+		float pushAsked;        // the speed it was asked to add
+		float pushAdded;        // the speed it added
+		float pushFrom;         // the speed it started at
 	};
 
 	// What the first local skater is doing. False while there is none or the game is not Available().
@@ -75,6 +99,13 @@ namespace FlickitGame {
 		int reach;              // percent of Skate's reach for rails that catch by themselves, 0: the game's own
 		int gravity;            // gravity in the air in percent of Skate's, 0: the game's own
 		int pop;                // the speed of a jump in percent of Skate's, 0: the game's own
+		int push;               // the push in percent of Skate's, 0: the game's own kick
+		bool pushHeld;          // a push button is down, and the press is a push
+		bool pushOverTurn;      // the game's scripts play a push in a turn as well
+		Flickit::PushTiming pushTiming;
+		int coast;              // rolling resistance in percent of Skate's, 0: the game's own friction
+		int steering;           // grip in a turn in percent of Skate's, 0: the game's own turning
+		float steer;            // the movement stick, -1 (left) to 1 (right)
 	};
 
 	// Once per frame, before player one's controller is read: nothing is on for this frame

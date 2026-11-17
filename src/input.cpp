@@ -323,6 +323,12 @@ float flickitRailSpeedIn = 0.0f;
 float flickitRailSpeed = 0.0f;
 uint32_t flickitCatchSerial = 0;                         // for the log: the last rail that caught the board by itself, and the last that did not
 uint32_t flickitMissSerial = 0;
+bool flickitRolling = false;                             // the board rolls on the ground: a push button pushes
+bool flickitOllieWas = false;                            // the Ollie button on the frame before
+bool flickitOlliePush = false;                           // the press of the Ollie button that is down is a push: it began while the board rolled
+bool flickitFlipPush = false;                            // the Flip button is down and has been a push since the board last rolled under it
+bool flickitPushHeld = false;                            // a push button is down
+uint32_t flickitPushSerial = 0;                          // for the log: the last push
 
 // Reads the stick pattern file named in the ini (default: skater.pat) from the folder the ini is in.
 // Without the file, or with Patterns=0, Flickit decides tricks from its built-in directions.
@@ -417,6 +423,14 @@ void loadFlickitSettings() {
 	s.grindReach = (int)GetPrivateProfileInt(FLICKIT_SECTION, "GrindReach", s.grindReach, configFile);
 	s.airGravity = (int)GetPrivateProfileInt(FLICKIT_SECTION, "AirGravity", s.airGravity, configFile);
 	s.jumpPop = (int)GetPrivateProfileInt(FLICKIT_SECTION, "JumpPop", s.jumpPop, configFile);
+	s.push = (int)GetPrivateProfileInt(FLICKIT_SECTION, "Push", s.push, configFile);
+	s.pushOnOllie = (int)GetPrivateProfileInt(FLICKIT_SECTION, "PushOnOllie", s.pushOnOllie, configFile);
+	s.pushOverTurn = (int)GetPrivateProfileInt(FLICKIT_SECTION, "PushOverTurn", s.pushOverTurn, configFile);
+	s.pushDelay = (int)GetPrivateProfileInt(FLICKIT_SECTION, "PushDelay", s.pushDelay, configFile);
+	s.pushContact = (int)GetPrivateProfileInt(FLICKIT_SECTION, "PushContact", s.pushContact, configFile);
+	s.pushCycle = (int)GetPrivateProfileInt(FLICKIT_SECTION, "PushCycle", s.pushCycle, configFile);
+	s.coast = (int)GetPrivateProfileInt(FLICKIT_SECTION, "Coast", s.coast, configFile);
+	s.steering = (int)GetPrivateProfileInt(FLICKIT_SECTION, "Steering", s.steering, configFile);
 
 	Flickit::Sanitize(s);
 	flickitSettings = s;
@@ -465,6 +479,33 @@ void loadFlickitSettings() {
 					Flickit::kThugAirGravity * Flickit::AirGravityFactor(s.airGravity), s.airGravity > 0 ? "Skate's is 784" : "the game's own",
 					100.0f * Flickit::JumpPopFactor(s.jumpPop), s.jumpPop > 0 ? "Skate's is 69" : "the game's own",
 					tap.height, held.height, tap.seconds, held.seconds);
+			}
+			if (s.push > 0) {
+				const float units = Flickit::kUnitsPerMetre * (float)s.push * 0.01f;
+				Log::TypedLog(CHN_SDL, "Flickit rolling: a push adds %.0f (a tap) to %.0f units/s (the button held %.2f s) up to %.0f units/s, on the Flip button%s; the foot is down %d ms after the push starts for %d ms, the next push starts %d ms after this one at the earliest; %s (the game's own: he kicks by himself, up to 394 to 675)\n",
+					Flickit::kPushTap * units, Flickit::kPushMost * units, Flickit::kPushFullHold, Flickit::kPushTopSpeed * units,
+					s.pushOnOllie ? " and the Ollie button" : "", s.pushDelay, s.pushContact, s.pushCycle,
+					s.pushOverTurn ? "the game shows a push in a turn too" : "in a turn the game shows the turn, not the push");
+			}
+			else {
+				Log::TypedLog(CHN_SDL, "Flickit rolling: the push is the game's own\n");
+			}
+			if (s.coast > 0) {
+				Log::TypedLog(CHN_SDL, "Flickit rolling: the board loses %.0f units/s2 at 100 units/s and %.0f at 700 (the game's own: 6 and 294, and nothing with its auto kick off)\n",
+					Flickit::CoastLoss(100.0f / Flickit::kUnitsPerMetre) * Flickit::kUnitsPerMetre * (float)s.coast * 0.01f,
+					Flickit::CoastLoss(700.0f / Flickit::kUnitsPerMetre) * Flickit::kUnitsPerMetre * (float)s.coast * 0.01f);
+			}
+			else {
+				Log::TypedLog(CHN_SDL, "Flickit rolling: the friction is the game's own\n");
+			}
+			if (s.steering > 0) {
+				Log::TypedLog(CHN_SDL, "Flickit rolling: with the stick at its end the board turns %.1f rad/s at 100 units/s, %.1f at 300, %.1f at 700; with the stick halfway %.1f, %.1f and %.1f (the game's own: %.1f at any speed)\n",
+					Flickit::TurnRate(1.0f, 100.0f, s.steering), Flickit::TurnRate(1.0f, 300.0f, s.steering), Flickit::TurnRate(1.0f, 700.0f, s.steering),
+					Flickit::TurnRate(0.5f, 100.0f, s.steering), Flickit::TurnRate(0.5f, 300.0f, s.steering), Flickit::TurnRate(0.5f, 700.0f, s.steering),
+					Flickit::kThugGroundTurn);
+			}
+			else {
+				Log::TypedLog(CHN_SDL, "Flickit rolling: the turning is the game's own\n");
 			}
 		}
 		else {
@@ -541,6 +582,12 @@ static void flickitLogGame(const FlickitGame::Skater& sk, uint32_t now) {
 					side, lift, where, m.miss * 100.0f, would);
 			}
 		}
+	}
+
+	if (sk.pushSerial != flickitPushSerial) {
+		flickitPushSerial = sk.pushSerial;
+		Log::TypedLog(CHN_SDL, "Flickit: push, the button was down %.0f ms: %.0f units/s asked for, speed %.0f -> %.0f\n",
+			sk.pushHeld * 1000.0f, sk.pushAsked, sk.pushFrom, sk.pushFrom + sk.pushAdded);
 	}
 
 	const bool onRail = (sk.state == Flickit::STATE_RAIL);
@@ -640,6 +687,7 @@ int flickitPoll(device* dev, SDL_GameController* controller, Flickit::Output* ou
 			if (paused) {
 				return FLICKIT_PAUSED;
 			}
+			flickitRolling = skater.rolling;
 			in.state = skater.state;
 			in.railCatch = FlickitGame::Installed() && flickitSettings.grindCatch;
 			in.grind = skater.grind;
@@ -703,7 +751,63 @@ void flickitGameFrame(device* dev) {
 	frame.reach = flickitSettings.grindReach;
 	frame.gravity = flickitSettings.airGravity;
 	frame.pop = flickitSettings.jumpPop;
+	frame.push = flickitSettings.push;
+	frame.pushHeld = flickitPushHeld;
+	frame.pushOverTurn = flickitSettings.pushOverTurn != 0;
+	frame.pushTiming.delay = (float)flickitSettings.pushDelay * 0.001f;
+	frame.pushTiming.contact = (float)flickitSettings.pushContact * 0.001f;
+	frame.pushTiming.cycle = (float)flickitSettings.pushCycle * 0.001f;
+	frame.coast = flickitSettings.coast;
+	frame.steering = flickitSettings.steering;
+	// The movement stick as the game is about to see it, the d-pad and the keys as a stick at its end.
+	// A stick at rest is not quite at its centre: the first fifth of the way counts as none, which is
+	// what the console Skate ran on did before the game saw the stick.
+	frame.steer = ((float)dev->controlData[6] - 128.0f) / 127.0f;
+	{
+		const float rest = 0.2f;
+		const float side = frame.steer < 0.0f ? -1.0f : 1.0f;
+		const float out = (frame.steer * side - rest) / (1.0f - rest);
+		frame.steer = out <= 0.0f ? 0.0f : (out >= 1.0f ? side : side * out);
+	}
+	if (dev->controlData[2] & (0x01 << 7)) {
+		frame.steer = -1.0f;
+	}
+	else if (dev->controlData[2] & (0x01 << 5)) {
+		frame.steer = 1.0f;
+	}
 	FlickitGame::SetFrame(frame);
+}
+
+// The push buttons. Skate pushes on two buttons, one for each foot. Here they are the Flip button,
+// which is THUG's own button for a kick, and the Ollie button, which has nothing to do on the
+// ground while Ollie is on the stick.
+//
+// The Flip button pushes whenever it is down while the board rolls on the ground. The Ollie button
+// pushes if its press begins there: one that is held from the air into a landing is the game's
+// crouch for the next ollie, as it always was. Either stays a push until the button is let go.
+//
+// A press that is a push is not passed on to the game, neither as Ollie nor as Flip: the push is
+// Flickit's, and the game would take the Flip button for the start of a flip trick as well.
+// The game's scripts hear of the push from the game hooks, to play its animation.
+void flickitPushButtons(device* dev, bool on, bool ollieDown, bool flipDown) {
+	if (dev->port != 0) {
+		return;
+	}
+	const bool pushes = on && flickitSeesSkater && flickitRolling && flickitSettings.push > 0 && FlickitGame::Installed();
+	if (!ollieDown || !on) {
+		flickitOlliePush = false;
+	}
+	else if (!flickitOllieWas) {
+		flickitOlliePush = pushes && flickitSettings.pushOnOllie != 0;
+	}
+	if (!flipDown || !on) {
+		flickitFlipPush = false;
+	}
+	else if (pushes) {
+		flickitFlipPush = true;
+	}
+	flickitOllieWas = ollieDown;
+	flickitPushHeld = flickitOlliePush || flickitFlipPush;
 }
 
 // Merges what the recognizer asked for into the pad data. Runs after the real buttons, d-pad and sticks.
@@ -1031,13 +1135,20 @@ void pollController(device* dev, SDL_GameController* controller) {
 						dev->controlData[3] |= 0x01 << 5;
 						dev->controlData[13] = 0xff;
 					}
-					if (getButton(controller, padbinds.ollie)) {
-						dev->controlData[3] |= 0x01 << 6;
-						dev->controlData[14] = 0xff;
-					}
-					if (getButton(controller, padbinds.kick)) {
-						dev->controlData[3] |= 0x01 << 7;
-						dev->controlData[15] = 0xff;
+					{
+						// With Flickit's push a press of the Ollie or the Flip button on the ground is a
+						// push, and not the game's to see
+						const bool ollieDown = getButton(controller, padbinds.ollie) != 0;
+						const bool flipDown = getButton(controller, padbinds.kick) != 0;
+						flickitPushButtons(dev, flickit, ollieDown, flipDown);
+						if (ollieDown && !(dev->port == 0 && flickitOlliePush)) {
+							dev->controlData[3] |= 0x01 << 6;
+							dev->controlData[14] = 0xff;
+						}
+						if (flipDown && !(dev->port == 0 && flickitFlipPush)) {
+							dev->controlData[3] |= 0x01 << 7;
+							dev->controlData[15] = 0xff;
+						}
 					}
 					// Shoulders
 					if (flickit && flickitSettings.triggerGrabs) {

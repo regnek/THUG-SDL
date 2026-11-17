@@ -96,7 +96,7 @@ An example environment to easily develop script mods can be found [here](https:/
 
 
 ## FLICKIT
-Flickit puts the board on the right stick, the way the Skate games do. It sits in the input layer only: the stick is translated into the game's own Ollie / Flip / Grab / Grind buttons, so every trick, score and goal works as before. The face buttons keep working next to it.
+Flickit puts the board on the right stick, the way the Skate games do. The stick is translated into the game's own Ollie / Flip / Grab / Grind buttons, so every trick, score and goal works as before. The face buttons keep working next to it, with one exception: while the board rolls on the ground the Flip button and the Ollie button push (see Rolling below).
 
 | Input | What happens |
 | --- | --- |
@@ -113,6 +113,8 @@ Flickit puts the board on the right stick, the way the Skate games do. It sits i
 | Left trigger / right trigger | Grab with that hand (Left + Grab / Right + Grab), held as long as the trigger is |
 | Nothing | Grind: rails and ledges catch the board by themselves, and the right stick says which grind it is (see Grinds below) |
 | Left bumper / right bumper | Spin left + nollie / spin right + revert and switch, both together: caveman |
+| Flip button or Ollie button, on the ground | Push. A tap is a small push, a quarter of a second a full one, and a button that stays down keeps pushing (see Rolling below) |
+| Movement stick left / right | Steers the way Skate's board does: gently near the centre, tightly at a walk, widely at speed (see Rolling below) |
 | Right stick click | Flickit on / off, for looking around. On foot and in a car it stands down by itself |
 
 The tricks named above are the default trick slots. Flickit presses the slot, so whatever is assigned to it in the Edit Tricks menu is what comes out. Manuals are unchanged (up, down on the movement stick).
@@ -187,8 +189,42 @@ Together they make every jump four fifths as high as it was and a fifth longer: 
 
 Both are percent of Skate's, so 50 is half of Skate's gravity or pop and 200 double. 0 leaves the game's own number alone. THUG's levels were built for THUG's jump: where a ledge or a gap is out of reach now, a boneless still clears more than THUG's plain ollie did.
 
+### Rolling
+THUG's skater keeps himself going. Whenever he is slower than his kick speed (394 to 496 units a second standing and 532 to 675 crouched, by his speed stat) he kicks, at 629 to 1200 units/s², and what holds him back is a drag that grows with the square of his speed: 96 units/s² at 400, 294 at 700. He turns at 1.8 radians a second for as long as left or right is held, all or nothing, at any speed. Skate's board does nothing by itself: it is pushed, it rolls out, and it goes where its trucks point as far as its wheels grip. With Flickit the board is Skate's, at the scale the rails and the jumps use (80 units to the metre).
+
+Pushing, `Push=100`:
+
+- The Flip button pushes: it is THUG's own button for a kick. So does the Ollie button, which has nothing else to do on the ground while Ollie is on the stick; Skate pushes on two buttons as well. The Flip button pushes whenever it is down while the board rolls on the ground, the Ollie button when its press begins there (held from the air into a landing it is still THUG's crouch). A press that pushes is not passed on to the game, not as Ollie and not as Flip: the game would take the Flip button for the start of a flip trick as well. In the air, on a rail, in a manual, during a revert and off the board both buttons are what they always were. `PushOnOllie=0` leaves the Ollie button alone.
+- How long the button is down says how strong the push is. A tap adds 60 units of speed (Skate: 0.75 m/s), a tenth of a second 150, 0.15 s 215, 0.2 s 250, and a quarter of a second or more adds 320 (4 m/s). A button that stays down pushes again and again with all there is.
+- Pushing gets the board to 680 units a second and no further (Skate's 8.5 m/s, which is about the best THUG's own kick does). From 664 on no push starts. Holding the button from a standstill is 320, 640, 680.
+- The speed comes in while the foot is on the ground, and the board is taken up to the speed the push is for whatever the slope does meanwhile. Down ends a push.
+- The game plays its own push for it, and a push starts when the game's scripts start that animation, which as a rule is on the next frame. While they are still playing the last push they do not look for the next: it waits for them, until a second and a half after the last one began (then it goes ahead without the animation). So with the button held the pushes come as fast as the game's animation allows, and no faster than `PushCycle` (900 ms from the start of one push to the start of the next). When the foot is down is two more times: `PushDelay` (300 ms from the start of the push to the foot on the ground) and `PushContact` (250 ms on the ground). All three are estimates of THUG's push animation, not measurements: if the speed arrives before the foot is down or after it has left, `PushDelay` is the one to move, and if every other push comes without its animation, `PushCycle` is too short for it. How long a push takes in Skate is in its animations too, which were not looked at; what a push adds, how fast it comes in at most and where it stops are Skate 3's own numbers.
+- THUG's scripts look at Left and Right before they look for a push, and show the turn. Skate pushes in a turn like anywhere else, so with `PushOverTurn=1` the scripts do not get to see Left and Right on the frame a push starts: they play the push, and the board turns all the same. `PushOverTurn=0` is THUG's order, the turn first; the speed of a push arrives either way.
+- What is not covered: a skater whose push style is mongo gets THUG's looping mongo push, which runs on after the first push until another animation takes over (THUG does the same with its "auto kick" off). Riding nollie, the push is played once per push but is not waited for.
+- `Push` is percent of Skate's: at 50 a push adds half as much and pushing stops at 340. 0 is THUG's own kick.
+- While the push is Flickit's the game's "auto kick" is held off for the skater, so that he kicks only when asked. The game's own setting comes back when Flickit is switched off.
+
+Rolling out, `Coast=100`:
+
+- On its wheels the board loses 10 units of speed a second at a crawl and 35 to 40 from 400 up (Skate: 0.13 to 0.5 m/s²), and more above 650: 48 at 900, 100 at 1100. THUG's own drag takes 96 at 400 and 294 at 700 from a standing skater, a fifth of that from a crouching one.
+- From 640 units a second the board rolls for half a minute and about 7000 units of ground; after nine seconds it still has half its speed.
+- Under 10 units a second the game stops the board and stands the skater up.
+- In a bail, in a revert, in a manual, and wherever the game's scripts put the brakes on, the friction is THUG's as before. Slopes are the game's as well.
+- `Coast` is percent of Skate's. 0 is THUG's own friction. With the push on that is none at all (with "auto kick" off THUG lets the board roll forever), so the two belong together.
+
+Steering, `Steering=100`:
+
+- The stick turns the trucks, and the board follows them. Near its centre the stick does little: half the stick is a fifth of the angle. The d-pad and the keys count as the stick at its end.
+- At a walk the board turns tightly: 2.8 radians a second at 100 units/s and 4.2 at 150, with the stick at its end. From there on the wheels' grip is the limit, 0.8 g to the side, and the faster the board the wider the turn: 3.1 at 200, 2.1 at 300, 1.3 at 500, 0.9 at 680, 0.7 at 900. The two games are level at about 350 units a second. At 680 the tightest circle is 740 units in radius, where THUG's is 380.
+- The trucks follow the stick in about a fifth of a second. While a foot is on the ground they turn less, by a fifth at the end of one push.
+- Standing still the board turns on the spot as it does in THUG, at 1.8 radians a second with the stick at its end.
+- Down with left or right is THUG's own sharp turn as before.
+- `Steering` is the grip in percent of Skate's: 200 turns at speed about as THUG does and leaves the rest as it is. 0 is THUG's own turning.
+
+THUG's levels were built for a skater who keeps his own speed and turns on a coin. Timed goals take pushing now, and a tight park is tighter. The three settings are separate so that each can be turned back by itself.
+
 ### What the mod changes in the game
-For the grinds the mod looks at the skater's state and changes five places in the game's rail code: the test for the Grind button before a rail is caught, the search for a rail that follows it, the pick of the grind, the balance of a grind (the drag is applied in the same place, once per frame of the game's rail physics), and the speed the game adds when the board lands on a rail. For the jumps it stands in for the game's own answer to "what is the gravity in the air", and scales the speed of a jump at the point where the game has worked it out. The code at every address it uses is compared with what is expected there first. If anything differs nothing is touched and grinds work as in earlier versions, with the Grind button held for a moment after each pop. `GameHooks=0` does the same on purpose. All of it applies to the first player's skater, while he is on his board and Flickit is on.
+For the grinds the mod looks at the skater's state and changes five places in the game's rail code: the test for the Grind button before a rail is caught, the search for a rail that follows it, the pick of the grind, the balance of a grind (the drag is applied in the same place, once per frame of the game's rail physics), and the speed the game adds when the board lands on a rail. For the jumps it stands in for the game's own answer to "what is the gravity in the air", and scales the speed of a jump at the point where the game has worked it out. For rolling it stands in for four things in the game's physics of the ground (the test for braking, the test for a kick, the friction and the turning) and for two commands of the game's scripts (CanKick in the nollie loop, and Held when it is asked about the Flip button), it holds the game's "auto kick" setting off for the skater, and with `PushOverTurn=1` it keeps Left and Right from the game's scripts on the frame a push starts (the game's physics see both as they are). The code at every address it uses is compared with what is expected there first. If anything differs nothing is touched and grinds work as in earlier versions, with the Grind button held for a moment after each pop. `GameHooks=0` does the same on purpose. All of it applies to the first player's skater, while he is on his board and Flickit is on.
 
 The settings live in the `[Flickit]` section of `thugsdl.ini`. Thresholds are percent of full stick deflection, times are milliseconds. Press F9 in game to re-read the section without restarting.
 
@@ -231,6 +267,12 @@ The settings live in the `[Flickit]` section of `thugsdl.ini`. Thresholds are pe
 | GrindBoost | 0 | 1: keep the speed THUG adds when the board lands on a rail. Without the drag (`GrindDrag=0`) it is always kept |
 | AirGravity | 100 | Gravity in the air, in percent of Skate's (see Jumps). 0: the game's own, which is 172. 25 to 400 |
 | JumpPop | 100 | The speed of every jump, in percent of Skate's pop (see Jumps). 0: the game's own, which is 146. 25 to 400 |
+| Push | 100 | The push, in percent of Skate's: what one push adds and how fast pushing gets (see Rolling). 0: the game's own kick. 25 to 400 |
+| PushOnOllie | 1 | The Ollie button pushes too while the board rolls on the ground. 0: only the Flip button does |
+| PushOverTurn | 1 | The game shows a push in a turn as well. 0: in a turn it shows the turn and not the push, as THUG does |
+| PushDelay, PushContact, PushCycle | 300, 250, 900 | When the speed of a push comes in: this long after its start, over this long, and how long at least from the start of one push to the start of the next. Estimates of the game's push animation |
+| Coast | 100 | What the board loses while it rolls, in percent of Skate's (see Rolling). 0: the game's own friction. Up to 1000 |
+| Steering | 100 | The grip of the wheels in a turn, in percent of Skate's (see Rolling). 0: the game's own turning. 25 to 400 |
 
 ### Stick patterns
 Out of the box Flickit sorts a flick by where it starts and ends, in eight directions (the table above). If a pattern file is present, it uses that instead: each trick is then a short list of stick positions that have to be passed in order, each with a tolerance radius. This is how the Skate games define their gestures, and the file format is theirs, so if you own Skate 3 you can copy its `skater.pat` next to `thugsdl.ini` and flick the tricks the way that game expects them. No pattern file comes with THUG SDL; without one nothing changes.
@@ -256,7 +298,7 @@ g++ -std=c++11 -I src tests/flickit_pattern_test.cpp src/flickit.cpp -o flickit_
 g++ -std=c++11 -I src tests/flickit_grind_test.cpp src/flickit.cpp -o flickit_grind_test && ./flickit_grind_test
 g++ -std=c++11 -I src tests/flickit_physics_test.cpp src/flickit.cpp -o flickit_physics_test && ./flickit_physics_test
 ```
-The second one also takes a pattern file: `./flickit_pattern_test skater.pat` draws every pattern in it and reports what was recognized. The third one is run from the top of the repository: it checks the grinds the mod asks the game for against the game's own grind table in `scripts/qb/source/scripts/game/skater/grindlist.q`, the drag on a rail against the times and distances a grind lasts in Skate, the reach of a rail against the distance to it worked out the slow way and against THUG's own reach, and the search for a rail against trying every piece of rail one by one. The fourth is run from there too: it checks THUG's jump numbers in the code against the game's own `physics.q`, and what gravity and pop come to against Skate's jump.
+The second one also takes a pattern file: `./flickit_pattern_test skater.pat` draws every pattern in it and reports what was recognized. The third one is run from the top of the repository: it checks the grinds the mod asks the game for against the game's own grind table in `scripts/qb/source/scripts/game/skater/grindlist.q`, the drag on a rail against the times and distances a grind lasts in Skate, the reach of a rail against the distance to it worked out the slow way and against THUG's own reach, and the search for a rail against trying every piece of rail one by one. The fourth is run from there too: it checks THUG's jump, kick and turning numbers in the code against the game's own `physics.q`, what gravity and pop come to against Skate's jump, and the pushes, the rolling out and the steering against Skate's curves at several frame rates.
 
 ## TROUBLESHOOTING
 

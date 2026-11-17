@@ -23,6 +23,19 @@ they have to keep to what the game's code expects there, whatever the compiler m
                 ret 4 (or a jump into the game's function)
   jump speed    takes the place of a call to CStruct::GetFloat, which pops three arguments: every
                 return is ret 0Ch (or a jump into the game's function)
+  brake test    takes the place of the call to the game's "should he brake": no arguments, every
+                return is a plain ret
+  kick test     two functions, in the place of the two calls to the game's "may he kick" (one in the
+                physics of the ground, one for the script command CanKick): no arguments, every
+                return is a plain ret
+  friction      takes the place of the call to the game's friction on the ground: no arguments,
+                every return is a plain ret
+  turning       takes the place of the call to the game's turning on the ground: no arguments, every
+                return is a plain ret. It turns the skater with the game's own two functions for that
+  held          takes the place of a call to the game's "is this button down", which pops one
+                argument: every return is ret 4 (or a jump into the game's function)
+  pad update    takes the place of a call to the game's update of its picture of a pad, which pops
+                one argument: every return is ret 4 (or a jump into the game's function)
   rail boost    a bare function in the place of a call to GetPhysicsFloat: passes esi to a function
                 that answers with the address to go on at, and jumps there with the stack as it found
                 it. That address is the game's GetPhysicsFloat or a function of the DLL that returns
@@ -49,6 +62,14 @@ RAIL_VALID = 0x00512760
 AIR_GRAVITY = 0x0055E670
 DO_JUMP = 0x00560410
 STRUCT_GET_FLOAT = 0x00410E20
+SHOULD_BRAKE = 0x0055D250
+SHOULD_KICK = 0x0055D410
+GROUND_FRICTION = 0x00563B80
+GROUND_TURN = 0x0055E790
+VECTOR_TURN = 0x0042F6D0
+MATRIX_TURN = 0x00405230
+BUTTON_HELD = 0x00451A70
+PAD_UPDATE = 0x0051AEB0
 
 # push ecx / push edx / push esi / call ... / add esp, 4 / pop edx / pop ecx / ret
 RAIL_CATCH_PATTERN = bytes.fromhex("515256e8") + b"...." + bytes.fromhex("83c4045a59c3")
@@ -64,6 +85,14 @@ NAMES = {
     AIR_GRAVITY: "get_air_gravity",
     DO_JUMP: "do_jump",
     STRUCT_GET_FLOAT: "CStruct::GetFloat",
+    SHOULD_BRAKE: "should_brake",
+    SHOULD_KICK: "should_kick",
+    GROUND_FRICTION: "the friction on the ground",
+    GROUND_TURN: "the turning on the ground",
+    VECTOR_TURN: "turn a vector",
+    MATRIX_TURN: "turn a matrix",
+    BUTTON_HELD: "is this button down",
+    PAD_UPDATE: "the pad update",
     0x0076A788: "the skate module pointer",
     0x0041BDC0: "GetComponent",
     0x0040FBC0: "CScript::SetScript",
@@ -308,6 +337,7 @@ def check(path):
 
     catch, pick, balance, boost, search, valid = [], [], [], [], [], []
     gravity, jump, jump_speed = [], [], []
+    brake, kick, friction, turning, held, pad = [], [], [], [], [], []
     for p in sorted(set(dll.entry(p) for p in pointers)):
         if matches(dll, p, RAIL_CATCH_PATTERN, (4, 8)):
             catch.append(p)
@@ -331,6 +361,18 @@ def check(path):
             jump.append((p, insns))
         elif STRUCT_GET_FLOAT in refs:
             jump_speed.append((p, insns))
+        elif SHOULD_BRAKE in refs:
+            brake.append((p, insns))
+        elif SHOULD_KICK in refs:
+            kick.append((p, insns))
+        elif GROUND_FRICTION in refs:
+            friction.append((p, insns))
+        elif GROUND_TURN in refs:
+            turning.append((p, insns))
+        elif BUTTON_HELD in refs:
+            held.append((p, insns))
+        elif PAD_UPDATE in refs:
+            pad.append((p, insns))
 
     # --- rail catch
     if len(catch) != 1:
@@ -394,6 +436,22 @@ def check(path):
                 problems.append("the %s returns with %s: every return has to pop %d bytes" % (what, [hex(r) for r in rets], pops))
             if found is gravity and not answers_on_x87(insns):
                 problems.append("the air gravity hook has a return without its answer on the floating point stack")
+
+    # --- rolling: each stands in for a call, and has to leave the stack as the function it stands in for does
+    for found, what, count, pops in ((brake, "brake test hook", 1, 0), (kick, "kick test hook", 2, 0), (friction, "friction hook", 1, 0),
+                                     (turning, "turning hook", 1, 0), (held, "held hook", 1, 4), (pad, "pad update hook", 1, 4)):
+        if len(found) != count:
+            problems.append("the %s was found %d times, not %d" % (what, len(found), count))
+        for p, insns in found:
+            show(dll, "%s at %08X" % (what, p), insns)
+            rets = returns(insns)
+            tail = insns and insns[-1].mnemonic == "jmp"
+            if any(r != pops for r in rets) or (not rets and not tail):
+                problems.append("the %s returns with %s: every return has to pop %d bytes" % (what, [hex(r) for r in rets], pops))
+            if found is turning:
+                refs = dll.game_refs(insns)
+                if VECTOR_TURN not in refs or MATRIX_TURN not in refs:
+                    problems.append("the turning hook does not turn the skater with the game's own functions")
 
     # --- grind pick
     if len(pick) != 1:
