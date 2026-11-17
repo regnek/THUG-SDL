@@ -16,6 +16,9 @@
 // that channel. When the crouch ends without a pop, its share goes over 0.3 s (the game's blend
 // time) once the game has started the animation he stands in, and blending is switched back
 // to what it was. A pop starts its animation without a blend, and the game drops every channel.
+// Not every jump does: THUG's nollie starts its animation with a short blend. So a pop lets go of
+// the kept channel at once and switches blending back (Pop), before the game starts the jump: as
+// the player's skater never blends, the jump's animation then takes over at once, the nollie's too.
 //
 // Some crouches start with nothing standing to blend with: a short drop lands in THUG's crouch
 // bump, and the crouch idle follows it. Then the game side starts the idle he stands in under the
@@ -387,6 +390,24 @@ namespace FlickitPose {
 
 		// Whether the last frame's crouch tried to start a standing pose already (once a crouch)
 		bool StandingTried() const { return m_standingTried; }
+
+		// The stick's crouch ended in a pop on this frame, before the game starts the jump: the kept
+		// channel goes now, and blending is switched back to what it was, so that the jump's
+		// animation takes over at once, with a blend or without (the game's nollie has one)
+		void Pop(uint8_t* anim) {
+			if (m_channel && anim == m_anim) {
+				uint8_t* channels[kMostChannels];
+				const int n = Channels(anim, channels);
+				if (Index(channels, n, m_channel) >= 1 && Still(m_channel)) {
+					StateOf(m_channel) = CHANNEL_DONE;
+				}
+			}
+			if (m_channel) {
+				Forget();
+			}
+			m_wantsStanding = false;
+			SwitchBack(anim);
+		}
 
 		// The game is about to start a blend in the channels of "anim". The kept channel is put
 		// second, so that the start of the blend keeps it, and weighs nothing while the blend

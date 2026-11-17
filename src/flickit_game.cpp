@@ -247,6 +247,12 @@ namespace FlickitGame {
 		SKATE_AUTO_KICK = 0x3B1,        // one byte for each player, eight bytes apart: the option "auto kick"
 		SKATE_PLAYER_SIZE = 8,
 
+		// the SkaterStancePanel component (0x24 bytes, made at 0x00578CE0): the stances that the
+		// script commands NollieOn / NollieOff / InNollie and PressureOn / PressureOff / InPressure
+		// (0x00578BE0) set and read
+		PANEL_NOLLIE = 0x1D,            // one byte: he rides nollie
+		PANEL_PRESSURE = 0x1E,          // one byte: he rides pressure
+
 		// CSkaterStateComponent
 		STATE_STATE = 0x18,             // 0 ground, 1 air, 2 wall, 3 lip, 4 rail, 5 wallplant
 		STATE_PHYSICS = 0x1C,           // 0 skating, 1 walking
@@ -290,6 +296,7 @@ namespace FlickitGame {
 	static const uint32_t kNollieLoop = 0xF8D9EFB4;           // OnGroundNollieAI
 	static const uint32_t kGroundLoop = 0x1DDE4804;           // OnGroundAi
 	static const uint32_t kWaitOneFrame = 0x18B3B291;         // WaitOneGameFrame: where the loops of the ground wait for the next frame
+	static const uint32_t kStancePanel = 0x21FC3301;          // SkaterStancePanel: the component that keeps nollie and pressure
 	// The animations started under a crouch for it to blend with: the one the skater rolls in, and
 	// the one he rolls in in nollie stance
 	static const uint32_t kStandIdle = 0x23DB4AEA;          // Idle
@@ -698,6 +705,14 @@ namespace FlickitGame {
 		{ 0x0040E7A8, 5, { 0x68, 0xC0, 0x02, 0x00, 0x00 }, "script call: room for 16 calls" },
 		// the game's own "is he skating" test: the two offsets ReadSkater uses for it
 		{ 0x0044F8A0, 18, { 0x8B, 0x41, 0x2C, 0x80, 0xB8, 0x14, 0x01, 0x00, 0x00, 0x00, 0x75, 0x0C, 0x83, 0x78, 0x1C, 0x00, 0x75, 0x06 }, "skating test" },
+		// the stance commands of SkaterStancePanel: which name goes where, the byte that InPressure
+		// reads and PressureOff clears, and the type the component is made with
+		{ 0x00578BE0, 18, { 0x8B, 0x44, 0x24, 0x04, 0x3D, 0xD6, 0x7D, 0xB5, 0x71, 0x53, 0xBB, 0x01, 0x00, 0x00, 0x00, 0x0F, 0x87, 0x97 }, "stance commands" },
+		{ 0x00578BF5, 16, { 0x74, 0x71, 0x3D, 0x10, 0xD7, 0x23, 0x0A, 0x74, 0x46, 0x3D, 0xCE, 0x1D, 0xB6, 0x1E, 0x74, 0x33 }, "stance commands: pressure, nollie" },
+		{ 0x00578C68, 15, { 0x38, 0x59, 0x1E, 0x75, 0x54, 0xD9, 0xEE, 0x51, 0xD9, 0x1C, 0x24, 0xC6, 0x41, 0x1E, 0x00 }, "PressureOff" },
+		{ 0x00578C8C, 7, { 0x3D, 0x0B, 0x9D, 0xAB, 0x9F, 0x74, 0x34 }, "stance commands: InPressure" },
+		{ 0x00578CC7, 12, { 0x33, 0xC0, 0x38, 0x41, 0x1E, 0x5B, 0x0F, 0x95, 0xC0, 0xC2, 0x0C, 0x00 }, "InPressure" },
+		{ 0x00578D25, 13, { 0xC7, 0x06, 0x40, 0x72, 0x64, 0x00, 0xC7, 0x46, 0x04, 0x01, 0x33, 0xFC, 0x21 }, "stance component: its type" },
 	};
 
 	static bool s_checked = false;
@@ -723,7 +738,8 @@ namespace FlickitGame {
 			|| Flickit::NameChecksum("Physics_Rolling_Friction") != kRollingFriction
 			|| Flickit::NameChecksum("OnGroundNollieAI") != kNollieLoop || Flickit::NameChecksum("Physics_Air_Rotation_stat") != kAirRotation
 			|| Flickit::NameChecksum("Animation") != kAnimation || Flickit::NameChecksum("Skeleton") != kSkeleton
-			|| Flickit::NameChecksum("Bone_Toe_L") != kToeLeft || Flickit::NameChecksum("Bone_Toe_R") != kToeRight) {
+			|| Flickit::NameChecksum("Bone_Toe_L") != kToeLeft || Flickit::NameChecksum("Bone_Toe_R") != kToeRight
+			|| Flickit::NameChecksum("SkaterStancePanel") != kStancePanel) {
 			s_available = false;
 		}
 		for (int i = 0; i < PUSH_CLIPS; i++) {
@@ -796,6 +812,13 @@ namespace FlickitGame {
 
 	static bool s_hasPick = false;
 	static Pick s_pick;
+	// The stance the stick asks for (Flickit::StanceKeeper), and for the log the last change it made:
+	// to which stance, whether it took him out of pressure, whether it was a nollie that went nowhere
+	static Flickit::StanceKeeper s_stance;
+	static uint32_t s_stanceSerial = 0;
+	static int s_stanceTo = Flickit::STANCE_ANY;
+	static bool s_stancePressure = false;
+	static bool s_stanceLate = false;
 
 	static void HoldAutoKick(bool off);
 	static void WatchStick(const Frame& frame);
@@ -807,6 +830,7 @@ namespace FlickitGame {
 		if (frame.standUp) {
 			s_standUp = true;
 		}
+		s_stance.Ask(frame.stance);
 		if (frame.popStrength >= 0.0f) {
 			s_popStrength = frame.popStrength;
 			s_popFrame = s_frames;
@@ -1084,6 +1108,7 @@ namespace FlickitGame {
 			s_spin.Reset();
 			s_airSeen = false;
 			s_airIdle = 0;
+			s_stance.Reset();
 		}
 		GiveBackTurnNow();
 		s_active = false;
@@ -1431,6 +1456,10 @@ namespace FlickitGame {
 		out.poseUnderSerial = s_poseUnderSerial;
 		out.poseUnderCrouch = s_poseUnderCrouch;
 		out.poseUnderStand = s_poseUnderStand;
+		out.stanceSerial = s_stanceSerial;
+		out.stanceTo = s_stanceTo;
+		out.stancePressure = s_stancePressure;
+		out.stanceLate = s_stanceLate;
 		out.spinSerial = s_spinSerial;
 		out.spinTurned = s_spinTurned;
 		out.spinFlick = s_spinFlick;
@@ -1870,6 +1899,7 @@ namespace FlickitGame {
 	// happened.
 	static void ShowCrouch(uint8_t* skater);
 	static uint8_t* StandUnder(uint8_t* anim, uint32_t stand);
+	static void KeepStance(uint8_t* skater);
 
 	static void __fastcall PadUpdateHook(uint8_t* pad, void* /*edx*/, void* data) {
 		PadUpdate(pad, data);
@@ -1883,6 +1913,7 @@ namespace FlickitGame {
 			return;
 		}
 		ShowCrouch(skater);
+		KeepStance(skater);
 		if (!s_active || (!s_standUp && (s_frame.push <= 0 || !s_frame.pushOverTurn || !s_push.Animating()))) {
 			return;
 		}
@@ -2324,6 +2355,11 @@ namespace FlickitGame {
 			&& balance && *(const uint32_t*)(balance + BALANCE_TYPE) == 0;
 		const bool crouched = state && state[STATE_CROUCHED] != 0;
 		s_poseNow = (uint32_t)GameMs();
+		if (s_active && s_frame.popStrength >= 0.0f) {
+			// A pop out of the stick's crouch on this frame: the jump the game starts takes over at
+			// once (its nollie blends for a moment, which the player's skater never does)
+			s_keeper.Pop(anim);
+		}
 		FlickitPose::Report report;
 		s_keeper.Frame(anim, ground, stick, crouched, s_frame.crouchPose, s_poseNow, report);
 		if (anim && s_keeper.WantsStanding(anim)) {
@@ -2331,16 +2367,19 @@ namespace FlickitGame {
 			// lands in the crouch's bump, and the crouch idle comes after it). Between frames of the
 			// loop of the ground no script waits for an animation: there a standing pose is started
 			// under the crouch.
+			// In the nollie loop he stands in nollie, unless the stick put him there: then the crouch
+			// is the stick's up, and he stands in regular before and after it.
 			const ScriptAt at = ScriptOf(skater);
 			const bool nollie = at.running == kNollieLoop || (at.running == kWaitOneFrame && at.caller == kNollieLoop);
 			const bool loop = nollie || at.running == kGroundLoop || (at.running == kWaitOneFrame && at.caller == kGroundLoop);
 			if (loop) {
 				const uint8_t* head = *(const uint8_t* const*)(anim + ANIM_FIRST);
 				const uint32_t crouchAnim = head ? *(const uint32_t*)(head + CHANNEL_NAME) : 0;
-				uint8_t* standing = StandUnder(anim, nollie ? kStandNollieIdle : kStandIdle);
+				const uint32_t stand = nollie && !s_stance.Ours() ? kStandNollieIdle : kStandIdle;
+				uint8_t* standing = StandUnder(anim, stand);
 				if (s_keeper.Adopt(anim, standing, s_poseNow)) {
 					s_poseUnderCrouch = crouchAnim;
-					s_poseUnderStand = nollie ? kStandNollieIdle : kStandIdle;
+					s_poseUnderStand = stand;
 					s_poseUnderSerial++;
 				}
 			}
@@ -2396,6 +2435,53 @@ namespace FlickitGame {
 			return 0;
 		}
 		return second;
+	}
+
+	/******************************************************************/
+	/*                                                                */
+	/*  The stance the stick asks for                                 */
+	/******************************************************************/
+
+	// Once a frame, from the update of player one's pad, after the crouch: where the skater is, to
+	// the StanceKeeper (flickit.h), and what it answers is done. His script goes to the other loop of
+	// the ground, which sets the stance as it starts; this happens between frames of a loop, before
+	// his script runs on this frame, so no script is waiting for anything there.
+	static void KeepStance(uint8_t* skater) {
+		if (!s_active) {
+			return;
+		}
+		uint8_t* panel = (uint8_t*)GetComponent(skater, kStancePanel);
+		const uint8_t* state = (const uint8_t*)GetComponent(skater, kSkaterState);
+		void* script = *(void**)(skater + OBJECT_SCRIPT);
+		if (!panel || !state || !script) {
+			return;
+		}
+		const ScriptAt at = ScriptOf(skater);
+		Flickit::StanceLook look;
+		look.ground = *(const int32_t*)(state + STATE_STATE) == 0 && state[STATE_DRIVING] == 0
+			&& *(const int32_t*)(state + STATE_PHYSICS) == 0 && state[STATE_BAILING] == 0;
+		// Between frames the loops wait in WaitOneGameFrame. Every other wait in them (for a push
+		// animation, say) is a script of its own as well, and is left to end by itself.
+		look.regularLoop = at.running == kWaitOneFrame && at.caller == kGroundLoop;
+		look.nollieLoop = at.running == kWaitOneFrame && at.caller == kNollieLoop;
+		look.pressure = panel[PANEL_PRESSURE] != 0;
+		const Flickit::StanceAnswer answer = s_stance.Look(look);
+		if (answer.endPressure) {
+			// What PressureOff does, but for the event it sends, which only the debugger hears
+			panel[PANEL_PRESSURE] = 0;
+		}
+		if (answer.move == Flickit::STANCE_TO_NOLLIE) {
+			SetScript(script, kNollieLoop, 0, skater);
+		}
+		else if (answer.move == Flickit::STANCE_TO_REGULAR) {
+			SetScript(script, kGroundLoop, 0, skater);
+		}
+		if (answer.move != Flickit::STANCE_STAY) {
+			s_stanceTo = answer.move == Flickit::STANCE_TO_NOLLIE ? Flickit::STANCE_NOLLIE : Flickit::STANCE_REGULAR;
+			s_stancePressure = answer.endPressure;
+			s_stanceLate = answer.late;
+			s_stanceSerial++;
+		}
 	}
 
 	// Stands in PlayAnim's start of an animation, where the blend starts. Same convention: this

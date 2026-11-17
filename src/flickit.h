@@ -53,6 +53,15 @@ namespace Flickit {
 		GESTURE_GRAB = 3    // trigger grab
 	};
 
+	// The stance the stick asks for (Output::stance). Skate has no stance to switch to: the stick
+	// pushed up puts the skater's weight on the nose, and back at the centre he rides as before.
+	// THUG has nollie as a stance of its own, with its own animations (see StanceKeeper).
+	enum Stance {
+		STANCE_ANY = 0,       // the stick asks for nothing: whatever the game has
+		STANCE_REGULAR = 1,   // out of nollie
+		STANCE_NOLLIE = 2     // into nollie
+	};
+
 	struct Settings {
 		int enabled;          // master switch
 		int toggleButton;     // SDL_GameControllerButton that switches Flickit on/off in a level, -1 for none
@@ -60,8 +69,8 @@ namespace Flickit {
 		int debug;            // 1: log every recognized gesture
 
 		int kickflipSide;     // 0: kickflip = flick up-right, heelflip = up-left. 1: mirrored
-		int nollie;           // 1: stick up, then flick down = nollie
-		int nollieTaps;       // presses of the Nollie button needed to get from regular into nollie stance
+		int nollie;           // 1: stick up = nollie stance, a flick down from there = nollie (and the nollie flips)
+		int nollieTaps;       // without the game hooks: presses of the Nollie button that get from regular into nollie stance
 		int triggerGrabs;     // 1: left / right trigger = grab
 		int autoGrind;        // 1: hold Grind after every pop (where the game does not catch rails by itself)
 
@@ -178,10 +187,13 @@ namespace Flickit {
 		// it. flipLevel tells one such chance from the next (it changes with every trick the game starts).
 		bool flipMore;
 		uint32_t flipLevel;
+		// The game takes Output::stance and keeps the skater in it (StanceKeeper). Without that the
+		// Nollie button is tapped (Settings::nollieTaps) as a crouch up begins.
+		bool keepsStance;
 
 		Input() : now(0), rx(0.0f), ry(0.0f), leftTrigger(false), rightTrigger(false),
 			state(STATE_UNKNOWN), railCatch(false), grind(GRIND_UNKNOWN), grindReady(false), grindSerial(0),
-			railOff(false), offSide(0), flipMore(false), flipLevel(0) {}
+			railOff(false), offSide(0), flipMore(false), flipLevel(0), keepsStance(false) {}
 	};
 
 	struct Output {
@@ -224,6 +236,10 @@ namespace Flickit {
 		// The stick held at the end of a flip trick's flick
 		bool holding;         // it is held there
 		bool flipAgain;       // on the frame the trick button is pressed once more for another rotation
+		// With Settings::nollie: the stance the stick asks for on this frame (Stance). Nollie while it
+		// crouches up, regular while it crouches down and on the frame a crouch up ends without a
+		// pop; STANCE_ANY otherwise, a pop included (the game's jump from nollie is a nollie).
+		int stance;
 	};
 
 	// ------------------------------------------------------------------------------------------
@@ -863,6 +879,67 @@ namespace Flickit {
 	};
 
 	// ------------------------------------------------------------------------------------------
+	// The stance the stick asks for
+	//
+	// THUG rides nollie as a stance of its own: a loop of the ground of its own (OnGroundNollieAI)
+	// with the nollie animations (its crouch is NollieCrouchIdle), and the game's Nollie as the
+	// jump from there. Its Nollie button goes round three stances: regular, pressure, nollie.
+	//
+	// Here the stick decides, as in Skate: crouched up the skater rides nollie, crouched down he
+	// rides regular (Output::stance). A crouch up that ends without a pop takes him back to regular.
+	// After a pop the game has it: its landing takes him out of nollie as it always did. The game's
+	// side looks between frames of a loop of the ground, where no script waits for anything, and
+	// moves his script to the other loop, which sets the stance as it starts (OnGroundNollieAI:
+	// NollieOn, OnGroundAi: NollieOff). Anywhere else (a landing, a manual, a brake, a grind, where
+	// the game's scripts set nollie for their own reasons) it waits. Pressure, the third stance, is
+	// left as it is in a crouch down; the stick's nollie is never pressure as well.
+	// ------------------------------------------------------------------------------------------
+
+	enum StanceMove {
+		STANCE_STAY = 0,        // nothing to do
+		STANCE_TO_NOLLIE = 1,   // his script goes to the nollie loop
+		STANCE_TO_REGULAR = 2   // and to the regular one
+	};
+
+	// What the skater is doing as the game's side looks
+	struct StanceLook {
+		bool ground;          // on his board on the ground, not in a bail
+		bool regularLoop;     // between frames of the loop of the ground (OnGroundAi)
+		bool nollieLoop;      // between frames of the nollie loop
+		bool pressure;        // in the game's pressure stance
+	};
+
+	struct StanceAnswer {
+		int move;             // StanceMove, to be made at once
+		bool endPressure;     // and out of pressure (before the move, if there is one)
+		bool late;            // a move back to regular because nothing came of a crouch up: he is
+		                      // still in the nollie loop on the ground a while after it (a pop the
+		                      // game did not jump for)
+	};
+
+	class StanceKeeper {
+	public:
+		StanceKeeper();
+		void Reset();
+		// On every frame the stick drives the skater: what it asks for (Stance)
+		void Ask(int stance);
+		// After that, once on the frame: where the skater is. The answer is what to do there.
+		StanceAnswer Look(const StanceLook& look);
+		// He rides nollie because the stick put him in it, and has not left the nollie loop since
+		bool Ours() const { return m_ours; }
+
+	private:
+		int m_asked;          // what the stick asks for on this frame
+		bool m_back;          // regular was asked for, and he is not there yet
+		bool m_ours;
+		int m_quiet;          // looks in the nollie loop since the stick last asked for nollie
+	};
+
+	// Looks in the nollie loop, with nothing asked for, after which a nollie of the stick's that
+	// went nowhere goes back to regular (half a second at 60 frames a second)
+	static const int kStanceQuietLooks = 30;
+
+	// ------------------------------------------------------------------------------------------
 	// Stick patterns
 	//
 	// A pattern is a short list of stick positions that have to be passed in order, each with a
@@ -983,7 +1060,7 @@ namespace Flickit {
 		};
 
 		void BeginWindup(int wind, int sector, const Input& in, const Settings& cfg);
-		void StartNollieTaps(uint32_t now, const Settings& cfg);
+		void StartNollieTaps(const Input& in, const Settings& cfg);
 		void BeginTrack(uint32_t now, int track);
 		void LeaveWindup(const Input& in, const Settings& cfg, bool nearCentre);
 		void Popped(uint32_t now, const Settings& cfg);

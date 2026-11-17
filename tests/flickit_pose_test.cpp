@@ -46,6 +46,8 @@ static const uint32_t kCrouchedLand = 0xBC825547;
 static const uint32_t kOllie = 0x9B65D7B8;
 static const uint32_t kPushCycle = 0x4266D67F;
 static const uint32_t kCrouchBumpDown = 0x50159F24;
+static const uint32_t kNollieCrouchIdle = 0x33746A70;
+static const uint32_t kNollie = 0xDE7BEF2C;
 
 static const uint8_t kFreed = 0xDD;
 
@@ -300,12 +302,16 @@ struct Run {
 		float blend;
 	};
 
-	// One frame. "plays" are what the scripts play on it.
-	void Frame(bool crouch, float depth, const Play* plays = 0, int nplays = 0) {
+	// One frame. "plays" are what the scripts play on it. pop: the stick's crouch ended in a pop on
+	// it, which the game side tells the Keeper before its frame.
+	void Frame(bool crouch, float depth, const Play* plays = 0, int nplays = 0, bool pop = false) {
 		if (scriptsFirst) {
 			for (int i = 0; i < nplays; i++) {
 				anim.PlayAnim(plays[i].name, plays[i].blend);
 			}
+		}
+		if (pop) {
+			keeper.Pop(anim.mem);
 		}
 		Report r;
 		keeper.Frame(anim.mem, ground, crouch, crouch && crouched, depth, now, r);
@@ -520,6 +526,63 @@ static void testPop() {
 		CHECK(RateOf(ollie) == rate);               // nothing touched the new channel
 		CHECK(LeftOf(ollie) == 0.0f && ScaleOf(ollie) == 0.0f);
 		CHECK(r.lost == (order == 1 ? 1 : 0));
+	}
+}
+
+static void testNolliePop() {
+	g_case = "the pop into a nollie";
+	for (int order = 0; order < 2; order++) {
+		// THUG's nollie starts its animation with a blend of a tenth of a second, where the ollie
+		// has none. With blending on for the crouch that blend would keep the pose he stood in,
+		// and its share would only go over the fade. The pop lets go of it first.
+		Run r;
+		r.scriptsFirst = order == 1;
+		CHECK(r.anim.mem[ANIM_BLENDING] == 0);
+		r.Frame(true, 0.0f);
+		r.Frame(true, 0.1f, kNollieCrouchIdle, 0.3f);
+		for (int i = 0; i < 10; i++) {
+			r.Frame(true, 0.5f);
+		}
+		uint8_t* const stood = r.keeper.Kept();
+		CHECK(stood != 0 && NameOf(stood) == kIdle);
+		CHECK_NEAR(r.CrouchShare(), 0.5, 1e-4);
+		Run::Play nollie = { kNollie, 0.1f };
+		r.Frame(false, -1.0f, &nollie, 1, true);
+		CHECK(r.keeper.Kept() == 0);
+		CHECK(r.anim.mem[ANIM_BLENDING] == 0);      // back to what it was
+		uint8_t* const jump = r.anim.First();
+		CHECK(NameOf(jump) == kNollie);
+		if (order == 0) {
+			// the game side comes first in THUG: the nollie takes over at once, as the ollie does
+			CHECK(r.anim.Count() == 1);
+			CHECK(r.ShareOf(jump) == 1.0f);
+		}
+		float standing = 0.0f;
+		for (int i = 0; i < 12; i++) {
+			r.Frame(false, -1.0f);
+			for (int k = 0; k < r.count; k++) {
+				if (NameOf(r.order[k]) == kIdle) {
+					standing += r.shares[k];
+				}
+			}
+			CHECK(r.SharesSane());
+		}
+		CHECK(standing == 0.0f);                    // nothing of the pose he stood in in the jump
+		CHECK(r.anim.Count() == 1);
+		CHECK(r.ShareOf(jump) == 1.0f);
+		CHECK(r.lost == 0);
+		CHECK(r.anim.mem[ANIM_BLENDING] == 0);
+	}
+	{
+		// a pop with nothing kept changes nothing but the switch
+		Run r;
+		r.Frame(true, 0.5f);
+		r.keeper.Pop(r.anim.mem);
+		CHECK(r.anim.mem[ANIM_BLENDING] == 0);
+		CHECK(r.keeper.Kept() == 0);
+		Run q;
+		q.keeper.Pop(q.anim.mem);
+		CHECK(q.anim.mem[ANIM_BLENDING] == 0);
 	}
 }
 
@@ -984,6 +1047,7 @@ int main() {
 	testStandUp();
 	testStandUpWaitsNoLonger();
 	testPop();
+	testNolliePop();
 	testCrouchInALanding();
 	testNotOnTheGround();
 	testRecrouch();

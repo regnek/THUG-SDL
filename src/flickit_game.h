@@ -49,6 +49,11 @@
 // mod reads the trick's extra tricks, the game's clock, the air left and the length of the
 // animation (only read).
 //
+// For the nollie, the stance the stick asks for: between frames of a loop of the ground the skater's
+// script goes to the other loop, regular or nollie, which sets the stance as it starts. The
+// game's pressure stance is let go of for the stick's nollie (one byte of the component that keeps
+// the stances).
+//
 // For spinning the way Skate's skater does, two more, in the physics of the air:
 //
 //   - which way the skater turns in the air and whether he does (the game's own turning, which
@@ -139,6 +144,12 @@ namespace FlickitGame {
 		uint32_t poseUnderCrouch;// the crouch animation,
 		uint32_t poseUnderStand; // and the animation started under it
 
+		// The stance the stick asks for (Flickit::StanceKeeper)
+		uint32_t stanceSerial;  // goes up when the stick has changed his stance:
+		int stanceTo;           // to which (Flickit::STANCE_NOLLIE or STANCE_REGULAR),
+		bool stancePressure;    // out of the game's pressure stance as well,
+		bool stanceLate;        // back to regular because his crouch up ended and took him nowhere
+
 		// A flip trick held on the stick (Flickit::Input::flipMore)
 		bool flipMore;          // it can be taken round once more: press its button now
 		bool flipDecide;        // now is the moment for it, air enough or not
@@ -191,6 +202,7 @@ namespace FlickitGame {
 		bool standUp;           // a crouch of Flickit's ended without a pop on this frame
 		float popStrength;      // a pop out of a crouch on this frame, and how deep it was (0 to 1); -1: none
 		float crouchPose;       // the stick crouches: how deep the crouch shown is to be (0 to 1); -1: no crouch to show
+		int stance;             // the stance the stick asks for on this frame (Flickit::Stance)
 	};
 
 	// Once per frame, before player one's controller is read: nothing is on for this frame

@@ -393,21 +393,22 @@ static void testRecognizer(int hz) {
 		Run r = play(rec, mirrored, { at(6, 1.0, 60, 300), at(10, 1.0, 35, 120) }, hz);
 		CHECK(r.flipPresses == 1 && r.flipDir == DIR_L && r.lastPattern == "Kickflip");
 	}
-	{   // nollies are off by default: holding the stick up does nothing, and the patterns that start
-		// there are not followed. Ending low is an ordinary crouch, so letting go is a plain ollie.
+	{   // with Nollie=0 holding the stick up does nothing, and the patterns that start there are not
+		// followed. Ending low is an ordinary crouch, so letting go is a plain ollie.
 		Recognizer rec;
 		rec.UsePatterns(&set);
-		Run up = play(rec, cfg, { at(12, 1.0, 60, 300) }, hz);
+		Settings off = cfg;
+		off.nollie = 0;
+		Run up = play(rec, off, { at(12, 1.0, 60, 300) }, hz);
 		CHECK(up.pops == 0 && up.flipPresses == 0 && up.gestures == 0);
-		Run r = play(rec, cfg, { at(12, 1.0, 60, 300), at(4, 1.0, 35, 120) }, hz);
+		Run r = play(rec, off, { at(12, 1.0, 60, 300), at(4, 1.0, 35, 120) }, hz);
 		CHECK(r.flipPresses == 0 && r.lastPattern.empty());
 	}
-	{   // nollies on
+	{   // nollies are on by default
 		Recognizer rec;
 		rec.UsePatterns(&set);
-		Settings n = cfg;
-		n.nollie = 1;
-		Run r = play(rec, n, { at(12, 1.0, 60, 300), at(4, 1.0, 35, 120) }, hz);
+		CHECK(cfg.nollie == 1);
+		Run r = play(rec, cfg, { at(12, 1.0, 60, 300), at(4, 1.0, 35, 120) }, hz);
 		CHECK(r.pops == 1 && r.flipPresses == 1 && r.flipDir == DIR_L && r.lastPattern == "N_Kickflip");
 	}
 	{   // Patterns = 0 in the settings, or no set: the built-in directions decide, as before

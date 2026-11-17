@@ -69,7 +69,7 @@ namespace Flickit {
 		s.debug = 1;
 
 		s.kickflipSide = 0;
-		s.nollie = 0;
+		s.nollie = 1;
 		s.nollieTaps = 2;
 		s.triggerGrabs = 1;
 		s.autoGrind = 1;
@@ -2370,6 +2370,70 @@ namespace Flickit {
 		return rate;
 	}
 
+	// ------------------------------------------------------------------------------------------
+	// The stance the stick asks for
+	// ------------------------------------------------------------------------------------------
+
+	StanceKeeper::StanceKeeper() {
+		Reset();
+	}
+
+	void StanceKeeper::Reset() {
+		m_asked = STANCE_ANY;
+		m_back = false;
+		m_ours = false;
+		m_quiet = 0;
+	}
+
+	void StanceKeeper::Ask(int stance) {
+		m_asked = stance;
+		if (stance == STANCE_REGULAR) {
+			m_back = true;
+		}
+		else if (stance == STANCE_NOLLIE) {
+			m_back = false;
+		}
+	}
+
+	StanceAnswer StanceKeeper::Look(const StanceLook& look) {
+		StanceAnswer a;
+		a.move = STANCE_STAY;
+		a.endPressure = false;
+		a.late = false;
+		if (!look.ground || !look.nollieLoop) {
+			// Whatever took him out of the nollie loop (a pop, a bump into a wall) has its own way back
+			m_ours = false;
+			m_quiet = 0;
+		}
+		if (!look.ground || (!look.regularLoop && !look.nollieLoop)) {
+			return a;    // busy elsewhere: later
+		}
+		if (m_asked == STANCE_NOLLIE) {
+			m_quiet = 0;
+			a.endPressure = look.pressure;
+			if (look.regularLoop) {
+				a.move = STANCE_TO_NOLLIE;
+				m_ours = true;
+			}
+			return a;
+		}
+		if (look.nollieLoop && m_ours && !m_back && ++m_quiet >= kStanceQuietLooks) {
+			// The stick put him in nollie and has not asked for it for a while, and he is still in
+			// its loop on the ground: what ended the crouch took him nowhere
+			m_back = true;
+			a.late = true;
+		}
+		if (m_back) {
+			if (look.nollieLoop) {
+				a.move = STANCE_TO_REGULAR;
+			}
+			m_back = false;
+			m_ours = false;
+			m_quiet = 0;
+		}
+		return a;
+	}
+
 	TiltTracker::TiltTracker() {
 		m_expectEnd = false;
 		m_flickAt = 0;
@@ -2658,11 +2722,13 @@ namespace Flickit {
 		return m_phase != PH_IDLE || m_queued > 0 || m_grabHeld || m_grindPending || m_tapsLeft > 0 || m_railTap || m_seqStep != SEQ_IDLE || m_offDown;
 	}
 
-	void Recognizer::StartNollieTaps(uint32_t now, const Settings& cfg) {
-		if (m_wind == WIND_NOLLIE && cfg.nollie) {
+	// A crouch up begins. Where the game keeps the stance the stick asks for (Output::stance) it
+	// does the rest; else the Nollie button is pressed as often as it takes from regular to nollie.
+	void Recognizer::StartNollieTaps(const Input& in, const Settings& cfg) {
+		if (m_wind == WIND_NOLLIE && cfg.nollie && !in.keepsStance) {
 			m_tapsLeft = cfg.nollieTaps;
 			m_tapDown = true;
-			m_tapStageStart = now;
+			m_tapStageStart = in.now;
 			m_tapFrames = 0;
 		}
 		else {
@@ -2685,7 +2751,7 @@ namespace Flickit {
 		if (m_holdOllie) {
 			// Crouching again ends the grind hold of the previous pop
 			m_grindPending = false;
-			StartNollieTaps(in.now, cfg);
+			StartNollieTaps(in, cfg);
 		}
 	}
 
@@ -3215,6 +3281,7 @@ namespace Flickit {
 		out.popStrength = -1.0f;
 		out.standUp = false;
 		out.crouchPose = -1.0f;
+		out.stance = STANCE_ANY;
 		out.holding = false;
 		out.flipAgain = false;
 		m_popOut = -1.0f;
@@ -3333,17 +3400,21 @@ namespace Flickit {
 			m_armed = true;
 		}
 
+		// Stick up is a wind-up on a rail, and with Nollie on the ground: the crouch for a nollie. In
+		// the air it leans the board, as it always did.
+		const bool nollieHere = onRail || (cfg.nollie && !inAir);
 		if (m_phase == PH_IDLE && m_armed && mag >= engage) {
 			if (InWindupHalf(angle, WIND_OLLIE, 0.0f)) {
 				BeginWindup(WIND_OLLIE, sector, in, cfg);
 			}
-			else if ((cfg.nollie || onRail) && InWindupHalf(angle, WIND_NOLLIE, 0.0f)) {
+			else if (nollieHere && InWindupHalf(angle, WIND_NOLLIE, 0.0f)) {
 				BeginWindup(WIND_NOLLIE, sector, in, cfg);
 			}
 		}
 
-		if (m_phase == PH_WINDUP && m_wind == WIND_NOLLIE && !cfg.nollie && !onRail) {
-			// With Nollie off, stick up is a wind-up on a rail only
+		if (m_phase == PH_WINDUP && m_wind == WIND_NOLLIE && !nollieHere && !m_holdOllie) {
+			// Off the rail (with Nollie off), or in the air: a wind-up up is over. A crouch up carried
+			// off the ground keeps Ollie down for as long as the game would still jump (below).
 			m_phase = PH_IDLE;
 			m_armed = false;
 		}
@@ -3354,7 +3425,7 @@ namespace Flickit {
 					// Begun in the air or on a rail, and now the board is on the ground: this is a crouch
 					m_holdOllie = true;
 					m_grindPending = false;
-					StartNollieTaps(now, cfg);
+					StartNollieTaps(in, cfg);
 				}
 			}
 			else if (inAir && Since(now, m_airSince) >= kAirReleaseMs) {
@@ -3528,6 +3599,17 @@ namespace Flickit {
 			// As deep as a pop would be now. A flick swings the stick out of the crouch, and the
 			// moment it takes is not the skater standing up.
 			out.crouchPose = m_phase == PH_LEAVE ? m_leaveStrength : CrouchStrength(now, cfg);
+		}
+		// The stance: nollie while the stick crouches up, regular while it crouches down, and
+		// regular again when a crouch up ends without a pop. A pop asks for nothing: the game's jump
+		// from nollie is the nollie, and its landing takes him out of it.
+		if (cfg.nollie) {
+			if ((m_phase == PH_WINDUP || m_phase == PH_LEAVE) && m_holdOllie) {
+				out.stance = m_wind == WIND_NOLLIE ? STANCE_NOLLIE : STANCE_REGULAR;
+			}
+			else if (out.standUp && m_wind == WIND_NOLLIE) {
+				out.stance = STANCE_REGULAR;
+			}
 		}
 
 		if (cfg.triggerGrabs && !onRail) {

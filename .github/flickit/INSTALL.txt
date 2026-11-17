@@ -21,20 +21,46 @@ Back to the centre         stand up, no ollie
 Flick up-right / up-left   kickflip / heelflip (keep the stick there:
                            double, triple, if there is air for it)
 Drag to the right          pop shove-it
+Right stick up             crouch for a nollie, in THUG's nollie stance
+Flick away from up         nollie; the flicks above, upside down, are the
+                           nollie flips (up, flick down-right = nollie
+                           kickflip)
 Triggers                   grabs
 Bumpers                    spin + nollie / spin + revert, both = get off the board
 Flip or Ollie, on the ground   push (tap = a little, hold = a lot)
 Right stick click          Flickit off / on (for looking around)
 
-New in this build: the crouch you see
--------------------------------------
+New in this build: nollies
+--------------------------
+  - Push the right stick up and the skater goes into THUG's nollie stance
+    and crouches, as deep as the stick is pushed (a third of the way is
+    enough; further = a higher nollie).
+  - Flick away from there: a nollie. The flip flicks work from up too,
+    upside down, and do the nollie tricks: up, flick down-right = Nollie
+    Kickflip, up, flick down-left = Nollie Heelflip, and so on. With
+    Skate's skater.pat next to thugsdl.ini, Skate's own nollie flicks
+    (its N_ patterns) are the ones that count.
+  - Back to the centre without a flick: he stands up in regular stance
+    again. The landing after a nollie is regular too, as in THUG.
+  - The stick decides the stance: a crouch down takes him out of nollie
+    if the left bumper (THUG's Nollie button) had put him there.
+  - THUG has no nollie animation for the extra spin of a 360 heelflip,
+    360 hardflip or 360 inward heelflip: from nollie those finish in their
+    regular animation.
+  - Nothing to set: it is on by default. Nollie=0 in the [Flickit] section
+    turns it off (the stick up then does nothing on the ground).
+  - With the console on, the log says "Flickit: the stick crouches up:
+    nollie stance" and "Flickit: back to regular stance".
+
+The crouch you see (the last build)
+-----------------------------------
   - The skater crouches as deep as the stick is pulled: a little at a third
     of the way, THUG's full crouch all the way down, and anything between.
     Easing the stick back up eases him back up. CrouchPose=0 in the
     [Flickit] section gives THUG's one crouch back.
 
-The stick (since the last build)
---------------------------------
+The stick (two builds ago)
+--------------------------
   - Weak flicks count, as in Skate: a crouch starts a third of the way down,
     and a flick 40 percent of the way out pops. If your thugsdl.ini already
     has a [Flickit] section, change these four lines in it (the new section

@@ -470,8 +470,10 @@ static void testWeakThumbs(double hz) {
 	}
 	g_case = "too little to crouch";
 	{
-		// Under a third of the way down nothing crouches, and nothing pops
+		// Under a third of the way down nothing crouches, and nothing pops. (With nollies on, the
+		// stick up at the end would be a crouch up of its own.)
 		Sim s(hz);
+		s.cfg.nollie = 0;
 		s.moveTo(0, -0.3f, 60);
 		s.hold(250);
 		s.moveTo(0, 0.9f, 40);
@@ -899,6 +901,7 @@ static void testNollie(double hz) {
 	// an ordinary pull into the wind-up, so the most it can turn into is a plain ollie.
 	g_case = "nollie off";
 	Sim t(hz);
+	t.cfg.nollie = 0;
 	t.moveTo(0, 1, 60);
 	t.hold(350);
 	CHECK_EQ(t.presses(&Output::ollie).size(), 0);

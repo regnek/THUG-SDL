@@ -160,6 +160,7 @@ struct Sim {
 	bool lt, rt;
 	int state;
 	bool railCatch;
+	bool keepsStance;      // the game keeps the stance the stick asks for
 	bool railOff;          // the game says the board is out of speed on its rail
 	int offSide;
 	FakeGame game;
@@ -169,7 +170,7 @@ struct Sim {
 	std::vector<Tilt> tilts;
 
 	explicit Sim(double rate = 60.0, int startState = STATE_GROUND) : hz(rate), clock(0.0), epoch(5000), x(0), y(0), lt(false), rt(false), state(startState), railCatch(true),
-		railOff(false), offSide(0) {
+		keepsStance(false), railOff(false), offSide(0) {
 		SetDefaults(cfg);
 		// a grind takes its switches about three quarters of a second in
 		game.settleFrames = (int)(0.75 * rate);
@@ -188,6 +189,7 @@ struct Sim {
 		in.rightTrigger = rt;
 		in.state = state;
 		in.railCatch = railCatch;
+		in.keepsStance = keepsStance;
 		in.grind = game.reportedKind;
 		in.grindReady = game.reportedReady;
 		in.grindSerial = game.serial;
@@ -1093,7 +1095,7 @@ static void testRailPop(double hz) {
 	g_case = name;
 	{
 		Sim s(hz);
-		CHECK_EQ(s.cfg.nollie, 0);              // the nollie setting is for the ground
+		s.cfg.nollie = 0;                       // the nollie setting is for the ground
 		ollieIntoAir(s);
 		s.toward(U, 50);
 		s.hold(100);
@@ -1122,6 +1124,7 @@ static void testRailPop(double hz) {
 	{
 		// Off the rail it is not a wind-up
 		Sim s(hz);
+		s.cfg.nollie = 0;
 		ollieIntoAir(s);
 		settleOnRail(s, GRIND_NOSEGRIND);
 		s.toward(U, 60);
@@ -1133,12 +1136,44 @@ static void testRailPop(double hz) {
 		s.hold(200);
 		s.spring();                             // on a rail this would be watched for a flick
 		s.hold(250);
-		s.toward(U, 60);                        // stick up on the ground is nothing
+		s.toward(U, 60);                        // with Nollie=0 stick up on the ground is nothing
 		s.hold(200);
 		s.toward(UL, 35, 0.3f);
 		s.spring();
 		s.hold(250);
 		CHECK_EQ(s.count(&Output::ollie, m), 0);
+		CHECK_EQ(s.count(&Output::nollie, m), 0);
+		CHECK_EQ(s.gestures(m).size(), 0);
+	}
+	{
+		// With nollies on (the default) the wind-up is over in the air all the same: stick up
+		// leans the board there. On the ground again, the stick up once more is the crouch for a
+		// nollie, and nothing pops when it comes back without a flick.
+		Sim s(hz);
+		s.keepsStance = true;
+		ollieIntoAir(s);
+		settleOnRail(s, GRIND_NOSEGRIND);
+		s.toward(U, 60);
+		s.hold(200);
+		s.state = STATE_AIR;                    // the rail ended
+		const size_t air = s.mark();
+		s.hold(50);
+		CHECK_EQ(s.count(&Output::ollie, air), 0);
+		s.state = STATE_GROUND;
+		const size_t m = s.mark();
+		s.hold(200);
+		CHECK_EQ(s.count(&Output::ollie, m), 0);   // still up from the rail: no crouch
+		s.spring();
+		s.hold(250);
+		const size_t up = s.mark();
+		s.toward(U, 60);
+		s.hold(200);
+		CHECK(s.outs.back().ollie);
+		CHECK_EQ(s.outs.back().stance, STANCE_NOLLIE);
+		s.spring();
+		s.hold(250);
+		CHECK(!s.outs.back().ollie);
+		CHECK_EQ(s.count(&Output::standUp, up), 1);
 		CHECK_EQ(s.count(&Output::nollie, m), 0);
 		CHECK_EQ(s.gestures(m).size(), 0);
 	}

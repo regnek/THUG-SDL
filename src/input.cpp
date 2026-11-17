@@ -338,6 +338,7 @@ uint32_t flickitPoseSerial = 0;                          // for the log: the las
 uint32_t flickitPoseLostSerial = 0;                      // for the log: the last time the game dropped the pose kept for a crouch
 uint32_t flickitPoseMissSerial = 0;                      // for the log: the last crouch that found no pose to stand in
 uint32_t flickitPoseUnderSerial = 0;                     // for the log: the last standing pose started under a crouch
+uint32_t flickitStanceSerial = 0;                        // for the log: the last change of stance the stick asked for
 FlickitGame::Skater flickitFlipSkater;                   // the skater as last read, for the log of a held flip trick
 uint32_t flickitFlipToldLevel = 0;                       // the last held flip trick the log said had no air for another rotation
 uint32_t flickitSpinSerial = 0;                          // for the log: the last air Flickit turned the skater in
@@ -643,6 +644,18 @@ static void flickitLogGame(const FlickitGame::Skater& sk, uint32_t now) {
 		Log::TypedLog(CHN_SDL, "Flickit: the crouch had nothing standing to blend with (he is in %s): %s is started under it, and the crouch goes as deep as the stick\n",
 			crouch ? crouch : "a crouch", stand ? stand : "the idle");
 	}
+	if (sk.stanceSerial != flickitStanceSerial) {
+		flickitStanceSerial = sk.stanceSerial;
+		if (sk.stanceTo == Flickit::STANCE_NOLLIE) {
+			Log::TypedLog(CHN_SDL, "Flickit: the stick crouches up: nollie stance%s\n", sk.stancePressure ? " (out of the game's pressure stance)" : "");
+		}
+		else if (sk.stanceLate) {
+			Log::TypedLog(CHN_SDL, "Flickit: the crouch up ended and he is still in nollie on the ground: back to regular stance\n");
+		}
+		else {
+			Log::TypedLog(CHN_SDL, "Flickit: back to regular stance\n");
+		}
+	}
 	if (sk.poseMissSerial != flickitPoseMissSerial) {
 		flickitPoseMissSerial = sk.poseMissSerial;
 		const char* in = FlickitPose::AnimName(sk.poseMissAnim);
@@ -812,6 +825,7 @@ int flickitPoll(device* dev, SDL_GameController* controller, Flickit::Output* ou
 			flickitRolling = skater.rolling;
 			in.state = skater.state;
 			in.railCatch = FlickitGame::Installed() && flickitSettings.grindCatch;
+			in.keepsStance = FlickitGame::Installed();
 			in.grind = skater.grind;
 			in.grindReady = skater.grindReady;
 			in.grindSerial = skater.grindSerial;
@@ -883,6 +897,7 @@ void flickitGameFrame(device* dev, const Flickit::Output& out) {
 	frame.standUp = out.standUp;
 	frame.popStrength = out.popStrength;
 	frame.crouchPose = flickitSettings.crouchPose ? out.crouchPose : -1.0f;
+	frame.stance = out.stance;
 	frame.catchRails = flickitSettings.grindCatch != 0;
 	frame.pickGrind = flickitSettings.grindPick != 0;
 	frame.noBalance = flickitSettings.grindBalance == 0;
