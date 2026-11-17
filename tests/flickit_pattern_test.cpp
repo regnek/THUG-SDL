@@ -259,7 +259,7 @@ struct Step {
 	int hold;     // then stay this long
 };
 
-static Run play(Recognizer& rec, const Settings& cfg, const std::vector<Step>& steps, int hz) {
+static Run play(Recognizer& rec, const Settings& cfg, const std::vector<Step>& steps, int hz, bool switched = false) {
 	Run r;
 	r.pops = r.flipPresses = r.gestures = 0;
 	r.flipDir = DIR_NONE;
@@ -293,6 +293,7 @@ static Run play(Recognizer& rec, const Settings& cfg, const std::vector<Step>& s
 			in.ry = -cy;    // the recognizer takes y up
 			in.leftTrigger = false;
 			in.rightTrigger = false;
+			in.switched = switched;
 			Output out;
 			rec.Update(in, cfg, out);
 			if (out.ollie) {
@@ -393,6 +394,26 @@ static void testRecognizer(int hz) {
 		Run r = play(rec, mirrored, { at(6, 1.0, 60, 300), at(10, 1.0, 35, 120) }, hz);
 		CHECK(r.flipPresses == 1 && r.flipDir == DIR_L && r.lastPattern == "Kickflip");
 	}
+	{   // riding switch mirrors the patterns as KickflipSide does: the kickflip is at 10 o'clock,
+		// and drawn at 2 o'clock it is the heelflip. KickflipSide = 1 on top turns them back.
+		Recognizer rec;
+		rec.UsePatterns(&set);
+		Run r = play(rec, cfg, { at(6, 1.0, 60, 300), at(10, 1.0, 35, 120) }, hz, true);
+		CHECK(r.flipPresses == 1 && r.flipDir == DIR_L && r.lastPattern == "Kickflip");
+		Run h = play(rec, cfg, { at(6, 0.7, 60, 300), at(2, 1.0, 35, 120) }, hz, true);
+		CHECK(h.flipPresses == 1 && h.flipDir == DIR_R && h.lastPattern == "Heelflip");
+		Recognizer both;
+		both.UsePatterns(&set);
+		Settings mirrored = cfg;
+		mirrored.kickflipSide = 1;
+		Run k = play(both, mirrored, { at(6, 1.0, 60, 300), at(2, 1.0, 35, 120) }, hz, true);
+		CHECK(k.flipPresses == 1 && k.flipDir == DIR_L && k.lastPattern == "Kickflip");
+		// and the nollie kickflip, upside down and the other way round
+		Recognizer up;
+		up.UsePatterns(&set);
+		Run n = play(up, cfg, { at(12, 1.0, 60, 300), at(8, 1.0, 35, 120) }, hz, true);
+		CHECK(n.flipPresses == 1 && n.flipDir == DIR_L && n.lastPattern == "N_Kickflip");
+	}
 	{   // with Nollie=0 holding the stick up does nothing, and the patterns that start there are not
 		// followed. Ending low is an ordinary crouch, so letting go is a plain ollie.
 		Recognizer rec;
@@ -459,45 +480,49 @@ static int drawFile(const char* path) {
 	cfg.nollie = 1;
 	Sanitize(cfg);
 
-	int same = 0, sameTrick = 0, other = 0, nothing = 0, unknown = 0;
-	for (int i = 0; i < n; i++) {
-		const Pattern& p = set.At(i);
-		if (!p.known) {
-			unknown++;
-			continue;
+	// Every pattern as it is, and mirrored left / right while riding switch: both come back as themselves
+	for (int switched = 0; switched < 2; switched++) {
+		int same = 0, sameTrick = 0, other = 0, nothing = 0, unknown = 0;
+		std::printf("%s\n", switched ? "drawn mirrored, riding switch:" : "drawn as they are:");
+		for (int i = 0; i < n; i++) {
+			const Pattern& p = set.At(i);
+			if (!p.known) {
+				unknown++;
+				continue;
+			}
+			std::vector<Step> steps;
+			for (int k = 0; k < p.count; k++) {
+				Step s;
+				s.x = switched ? -p.x[k] : p.x[k];
+				s.y = p.y[k];
+				s.ms = (k == 0) ? 60 : 35;
+				s.hold = (k == 0) ? 250 : (k == p.count - 1 ? 120 : 0);
+				steps.push_back(s);
+			}
+			Recognizer rec;
+			rec.UsePatterns(&set);
+			Run r = play(rec, cfg, steps, 60, switched != 0);
+			const Pattern* got = r.lastPattern.empty() ? 0 : Find(set, r.lastPattern.c_str());
+			const int wantPresses = p.slot == DIR_NONE ? 0 : p.taps;
+			if (got && std::strcmp(got->name, p.name) == 0 && r.flipPresses == wantPresses) {
+				same++;
+			}
+			else if (got && got->slot == p.slot && got->taps == p.taps && got->nollie == p.nollie) {
+				sameTrick++;
+			}
+			else if (r.gestures == 0 && r.pops == 0) {
+				nothing++;
+				std::printf("  #%d %-20s nothing happened (start %.2f, %.2f)\n", i, p.name, p.x[0], p.y[0]);
+			}
+			else {
+				other++;
+				std::printf("  #%d %-20s came out as %s, %d flip presses, %d pops\n", i, p.name,
+					r.lastPattern.empty() ? "(no pattern)" : r.lastPattern.c_str(), r.flipPresses, r.pops);
+			}
 		}
-		std::vector<Step> steps;
-		for (int k = 0; k < p.count; k++) {
-			Step s;
-			s.x = p.x[k];
-			s.y = p.y[k];
-			s.ms = (k == 0) ? 60 : 35;
-			s.hold = (k == 0) ? 250 : (k == p.count - 1 ? 120 : 0);
-			steps.push_back(s);
-		}
-		Recognizer rec;
-		rec.UsePatterns(&set);
-		Run r = play(rec, cfg, steps, 60);
-		const Pattern* got = r.lastPattern.empty() ? 0 : Find(set, r.lastPattern.c_str());
-		const int wantPresses = p.slot == DIR_NONE ? 0 : p.taps;
-		if (got && std::strcmp(got->name, p.name) == 0 && r.flipPresses == wantPresses) {
-			same++;
-		}
-		else if (got && got->slot == p.slot && got->taps == p.taps && got->nollie == p.nollie) {
-			sameTrick++;
-		}
-		else if (r.gestures == 0 && r.pops == 0) {
-			nothing++;
-			std::printf("  #%d %-20s nothing happened (start %.2f, %.2f)\n", i, p.name, p.x[0], p.y[0]);
-		}
-		else {
-			other++;
-			std::printf("  #%d %-20s came out as %s, %d flip presses, %d pops\n", i, p.name,
-				r.lastPattern.empty() ? "(no pattern)" : r.lastPattern.c_str(), r.flipPresses, r.pops);
-		}
+		std::printf("recognized as itself: %d, as the same trick: %d, as something else: %d, nothing: %d, names without a trick: %d\n",
+			same, sameTrick, other, nothing, unknown);
 	}
-	std::printf("recognized as itself: %d, as the same trick: %d, as something else: %d, nothing: %d, names without a trick: %d\n",
-		same, sameTrick, other, nothing, unknown);
 	return 0;
 }
 

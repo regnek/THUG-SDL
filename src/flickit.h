@@ -69,6 +69,7 @@ namespace Flickit {
 		int debug;            // 1: log every recognized gesture
 
 		int kickflipSide;     // 0: kickflip = flick up-right, heelflip = up-left. 1: mirrored
+		int switchMirror;     // 1: riding switch mirrors every flick once more (Input::switched), as in Skate
 		int nollie;           // 1: stick up = nollie stance, a flick down from there = nollie (and the nollie flips)
 		int nollieTaps;       // without the game hooks: presses of the Nollie button that get from regular into nollie stance
 		int triggerGrabs;     // 1: left / right trigger = grab
@@ -190,10 +191,13 @@ namespace Flickit {
 		// The game takes Output::stance and keeps the skater in it (StanceKeeper). Without that the
 		// Nollie button is tapped (Settings::nollieTaps) as a crouch up begins.
 		bool keepsStance;
+		// He rides switch, the other foot forward (the game's own Switched). Skate's flicks go by the
+		// rider's feet, so with Settings::switchMirror they are mirrored left / right then.
+		bool switched;
 
 		Input() : now(0), rx(0.0f), ry(0.0f), leftTrigger(false), rightTrigger(false),
 			state(STATE_UNKNOWN), railCatch(false), grind(GRIND_UNKNOWN), grindReady(false), grindSerial(0),
-			railOff(false), offSide(0), flipMore(false), flipLevel(0), keepsStance(false) {}
+			railOff(false), offSide(0), flipMore(false), flipLevel(0), keepsStance(false), switched(false) {}
 	};
 
 	struct Output {
@@ -240,6 +244,9 @@ namespace Flickit {
 		// crouches up, regular while it crouches down and on the frame a crouch up ends without a
 		// pop; STANCE_ANY otherwise, a pop included (the game's jump from nollie is a nollie).
 		int stance;
+		// The flicks are read mirrored left / right on this frame (KickflipSide, and riding switch).
+		// A gesture keeps the side it began on: it changes between gestures only.
+		bool mirrored;
 	};
 
 	// ------------------------------------------------------------------------------------------
@@ -1163,6 +1170,9 @@ namespace Flickit {
 		bool m_lastGrind;
 		bool m_lastNollie;
 		bool m_lastGrab;
+
+		// The flicks are read mirrored left / right (Output::mirrored)
+		bool m_mirror;
 
 		// Stick patterns
 		const PatternSet* m_patterns;

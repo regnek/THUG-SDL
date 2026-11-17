@@ -81,6 +81,7 @@ namespace FlickitGame {
 	struct Skater {
 		int state;              // Flickit::SkaterState
 		bool skating;           // on the board: not on foot, not driving
+		bool switched;          // he rides switch, the other foot forward (the game's Switched)
 		int grind;              // Flickit::Grind the grind script reported, GRIND_UNKNOWN if it has not yet
 		bool grindReady;        // that script takes a switch to another grind now
 		uint32_t grindSerial;   // goes up whenever a grind starts

@@ -339,6 +339,7 @@ uint32_t flickitPoseLostSerial = 0;                      // for the log: the las
 uint32_t flickitPoseMissSerial = 0;                      // for the log: the last crouch that found no pose to stand in
 uint32_t flickitPoseUnderSerial = 0;                     // for the log: the last standing pose started under a crouch
 uint32_t flickitStanceSerial = 0;                        // for the log: the last change of stance the stick asked for
+bool flickitMirrored = false;                            // for the log: the flicks were read mirrored on the last frame
 FlickitGame::Skater flickitFlipSkater;                   // the skater as last read, for the log of a held flip trick
 uint32_t flickitFlipToldLevel = 0;                       // the last held flip trick the log said had no air for another rotation
 uint32_t flickitSpinSerial = 0;                          // for the log: the last air Flickit turned the skater in
@@ -397,6 +398,7 @@ void loadFlickitSettings() {
 	s.debug = (int)GetPrivateProfileInt(FLICKIT_SECTION, "Debug", s.debug, configFile);
 
 	s.kickflipSide = (int)GetPrivateProfileInt(FLICKIT_SECTION, "KickflipSide", s.kickflipSide, configFile);
+	s.switchMirror = (int)GetPrivateProfileInt(FLICKIT_SECTION, "SwitchMirror", s.switchMirror, configFile);
 	s.nollie = (int)GetPrivateProfileInt(FLICKIT_SECTION, "Nollie", s.nollie, configFile);
 	s.nollieTaps = (int)GetPrivateProfileInt(FLICKIT_SECTION, "NollieTaps", s.nollieTaps, configFile);
 	s.triggerGrabs = (int)GetPrivateProfileInt(FLICKIT_SECTION, "TriggerGrabs", s.triggerGrabs, configFile);
@@ -466,8 +468,8 @@ void loadFlickitSettings() {
 		flickitRecognizers[i].UsePatterns(flickitPatterns.Count() > 0 ? &flickitPatterns : nullptr);
 	}
 
-	Log::TypedLog(CHN_SDL, "Flickit %s: kickflip side %d, trigger grabs %d, auto grind %d, nollie %d, tricks from %s\n",
-		s.enabled ? "enabled" : "disabled", s.kickflipSide, s.triggerGrabs, s.autoGrind, s.nollie,
+	Log::TypedLog(CHN_SDL, "Flickit %s: kickflip side %d, switch mirror %d, trigger grabs %d, auto grind %d, nollie %d, tricks from %s\n",
+		s.enabled ? "enabled" : "disabled", s.kickflipSide, s.switchMirror, s.triggerGrabs, s.autoGrind, s.nollie,
 		flickitPatterns.Count() > 0 ? "stick patterns" : "built-in directions");
 	if (s.enabled) {
 		if (hooks) {
@@ -650,10 +652,10 @@ static void flickitLogGame(const FlickitGame::Skater& sk, uint32_t now) {
 			Log::TypedLog(CHN_SDL, "Flickit: the stick crouches up: nollie stance%s\n", sk.stancePressure ? " (out of the game's pressure stance)" : "");
 		}
 		else if (sk.stanceLate) {
-			Log::TypedLog(CHN_SDL, "Flickit: the crouch up ended and he is still in nollie on the ground: back to regular stance\n");
+			Log::TypedLog(CHN_SDL, "Flickit: the crouch up ended and he is still in nollie on the ground: out of nollie stance\n");
 		}
 		else {
-			Log::TypedLog(CHN_SDL, "Flickit: back to regular stance\n");
+			Log::TypedLog(CHN_SDL, "Flickit: out of nollie stance\n");
 		}
 	}
 	if (sk.poseMissSerial != flickitPoseMissSerial) {
@@ -826,6 +828,7 @@ int flickitPoll(device* dev, SDL_GameController* controller, Flickit::Output* ou
 			in.state = skater.state;
 			in.railCatch = FlickitGame::Installed() && flickitSettings.grindCatch;
 			in.keepsStance = FlickitGame::Installed();
+			in.switched = skater.switched;
 			in.grind = skater.grind;
 			in.grindReady = skater.grindReady;
 			in.grindSerial = skater.grindSerial;
@@ -844,6 +847,15 @@ int flickitPoll(device* dev, SDL_GameController* controller, Flickit::Output* ou
 	}
 
 	flickitRecognizers[port].Update(in, flickitSettings, *out);
+
+	if (flickitSettings.debug && port == 0 && out->mirrored != flickitMirrored) {
+		// Riding switch turns the flicks round, as in Skate: the kickflip is on the other side
+		Log::TypedLog(CHN_SDL, "Flickit: %s: the kickflip is the flick up-%s now\n",
+			in.switched ? "riding switch" : "riding regular", out->mirrored ? "left" : "right");
+	}
+	if (port == 0) {
+		flickitMirrored = out->mirrored;
+	}
 
 	if (flickitSettings.debug) {
 		const char* where = (out->state == Flickit::STATE_UNKNOWN) ? "" : (out->state == Flickit::STATE_RAIL) ? ", on a rail" : (out->state == Flickit::STATE_AIR) ? ", in the air" : "";

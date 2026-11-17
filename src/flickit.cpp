@@ -69,6 +69,7 @@ namespace Flickit {
 		s.debug = 1;
 
 		s.kickflipSide = 0;
+		s.switchMirror = 1;
 		s.nollie = 1;
 		s.nollieTaps = 2;
 		s.triggerGrabs = 1;
@@ -128,6 +129,7 @@ namespace Flickit {
 		s.enabled = s.enabled ? 1 : 0;
 		s.debug = s.debug ? 1 : 0;
 		s.kickflipSide = s.kickflipSide ? 1 : 0;
+		s.switchMirror = s.switchMirror ? 1 : 0;
 		s.nollie = s.nollie ? 1 : 0;
 		s.nollieTaps = Clamp(s.nollieTaps, 1, 3);
 		s.triggerGrabs = s.triggerGrabs ? 1 : 0;
@@ -2556,6 +2558,7 @@ namespace Flickit {
 	void Recognizer::Reset() {
 		m_phase = PH_IDLE;
 		m_wind = WIND_OLLIE;
+		m_mirror = false;
 		m_armed = false;   // the stick has to pass through the center before the first wind-up
 		m_start = DIR_NONE;
 		m_cur = DIR_NONE;
@@ -2914,7 +2917,7 @@ namespace Flickit {
 			}
 		}
 
-		const int slot = MapFlip(m_wind, m_start, end, cfg.kickflipSide);
+		const int slot = MapFlip(m_wind, m_start, end, m_mirror ? 1 : 0);
 
 		out.gesture = (slot == DIR_NONE) ? GESTURE_POP : GESTURE_FLIP;
 		out.windup = m_wind;
@@ -3282,6 +3285,7 @@ namespace Flickit {
 		out.standUp = false;
 		out.crouchPose = -1.0f;
 		out.stance = STANCE_ANY;
+		out.mirrored = m_mirror;
 		out.holding = false;
 		out.flipAgain = false;
 		m_popOut = -1.0f;
@@ -3350,6 +3354,16 @@ namespace Flickit {
 			Popped(now, cfg);
 		}
 
+		// Which way round the flicks are read: KickflipSide, and mirrored once more while he rides
+		// switch, since Skate's flicks go by the rider's feet (switch, the kickflip is on the other
+		// side). A gesture keeps the side it began on: the side is taken up between gestures only,
+		// and patterns half drawn the other way round start over.
+		const bool mirror = (cfg.kickflipSide != 0) != (cfg.switchMirror != 0 && in.switched);
+		if (m_phase == PH_IDLE && mirror != m_mirror) {
+			m_mirror = mirror;
+			m_matcher.Reset();
+		}
+
 		// Stick patterns run on a fixed 60 Hz clock, whatever the frame rate is: the stick position of
 		// this frame is fed once per tick that has passed.
 		const bool usePatterns = cfg.patterns && m_patterns != 0 && m_patterns->Count() > 0;
@@ -3378,8 +3392,8 @@ namespace Flickit {
 				m_tickAccum = 0;
 			}
 			m_tickLast = now;
-			// KickflipSide mirrors the stick, so every pattern is mirrored with it
-			const float px = cfg.kickflipSide ? -in.rx : in.rx;
+			// KickflipSide mirrors the stick, and so does riding switch: every pattern is mirrored with it
+			const float px = m_mirror ? -in.rx : in.rx;
 			// On a rail a flick pops in either direction, so the patterns that start at the top count there
 			const bool nolliePatterns = cfg.nollie != 0 || onRail;
 			for (int i = 0; i < ticks; i++) {
@@ -3685,5 +3699,6 @@ namespace Flickit {
 			m_railTapFrames++;
 		}
 		m_lastState = in.state;
+		out.mirrored = m_mirror;
 	}
 }

@@ -174,6 +174,7 @@ namespace FlickitGame {
 		OBJECT_POSITION = 0x40,         // where it is
 		OBJECT_VELOCITY = 0xA0,
 		OBJECT_PLAYER = 0x2BC,          // which player's skater it is
+		OBJECT_GOOFY = 0x134,           // one byte: his profile's stance is goofy
 
 		// CAnimationComponent
 		ANIM_FIRST = 0x24,              // the first of its blend channels: the animation the object is in.
@@ -257,6 +258,7 @@ namespace FlickitGame {
 		STATE_STATE = 0x18,             // 0 ground, 1 air, 2 wall, 3 lip, 4 rail, 5 wallplant
 		STATE_PHYSICS = 0x1C,           // 0 skating, 1 walking
 		STATE_CROUCHED = 0x20,          // one byte: he crouches, the jump button down (what the script command Crouched answers)
+		STATE_FLIPPED = 0x28,           // one byte: his animations are flipped (Flipped); not flipped is goofy's way round
 		STATE_VERT_AIR = 0x30,
 		STATE_BAILING = 0x70,           // one byte: in a bail
 		STATE_DOING_TRICK = 0xD8,
@@ -713,6 +715,10 @@ namespace FlickitGame {
 		{ 0x00578C8C, 7, { 0x3D, 0x0B, 0x9D, 0xAB, 0x9F, 0x74, 0x34 }, "stance commands: InPressure" },
 		{ 0x00578CC7, 12, { 0x33, 0xC0, 0x38, 0x41, 0x1E, 0x5B, 0x0F, 0x95, 0xC0, 0xC2, 0x0C, 0x00 }, "InPressure" },
 		{ 0x00578D25, 13, { 0xC7, 0x06, 0x40, 0x72, 0x64, 0x00, 0xC7, 0x46, 0x04, 0x01, 0x33, 0xFC, 0x21 }, "stance component: its type" },
+		// riding switch: the game's own test, and the script command Switched that answers with it
+		{ 0x00451FE0, 18, { 0x8B, 0x41, 0x0C, 0x80, 0xB8, 0x34, 0x01, 0x00, 0x00, 0x00, 0x74, 0x0B, 0x8B, 0x89, 0xD0, 0x04, 0x00, 0x00 }, "IsSwitched: goofy" },
+		{ 0x00451FF2, 18, { 0x0F, 0xB6, 0x41, 0x28, 0xC3, 0x8B, 0x91, 0xD0, 0x04, 0x00, 0x00, 0x33, 0xC0, 0x38, 0x42, 0x28, 0x0F, 0x94 }, "IsSwitched: flipped" },
+		{ 0x00568248, 17, { 0x81, 0xFF, 0x0B, 0xB8, 0x66, 0x8F, 0x0F, 0x85, 0xA4, 0x09, 0x00, 0x00, 0xE8, 0x87, 0x9D, 0xEE, 0xFF }, "Switched" },
 	};
 
 	static bool s_checked = false;
@@ -1332,6 +1338,9 @@ namespace FlickitGame {
 		}
 		// The game's own test (Skating): not driving, and the physics are the board's
 		out.skating = state[STATE_DRIVING] == 0 && *(const int32_t*)(state + STATE_PHYSICS) == 0;
+		// Riding switch, the other foot forward: the game's own test (IsSwitched, which the script
+		// command Switched answers): flipped for a goofy skater, not flipped for a regular one
+		out.switched = skater[OBJECT_GOOFY] != 0 ? state[STATE_FLIPPED] != 0 : state[STATE_FLIPPED] == 0;
 
 		out.flipMore = false;
 		out.flipDecide = false;
