@@ -364,12 +364,12 @@ static void testRecognizer(int hz) {
 		CHECK(r.pops == 1 && r.flipPresses == 0);
 		CHECK(r.gestures == 1 && r.lastGesture == GESTURE_POP && r.lastPattern == "Ollie");
 	}
-	{   // letting go: still an ollie, decided by no pattern
+	{   // letting go: no pattern, so no pop (as in Skate): Ollie goes up and he stands up again
 		Recognizer rec;
 		rec.UsePatterns(&set);
 		Run r = play(rec, cfg, { at(6, 1.0, 60, 300) }, hz);
-		CHECK(r.pops == 1 && r.flipPresses == 0);
-		CHECK(r.gestures == 1 && r.lastGesture == GESTURE_POP && r.lastPattern.empty());
+		CHECK(r.flipPresses == 0);
+		CHECK(r.gestures == 0);
 	}
 	{   // 360 flip: from the left around to down, flick to 2 o'clock: the varial slot, tapped twice
 		Recognizer rec;

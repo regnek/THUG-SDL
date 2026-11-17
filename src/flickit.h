@@ -8,8 +8,9 @@
 // the controller, calls Update() and merges the answer into the pad data the
 // game sees.
 //
-//   pull the stick down          -> Ollie is held (crouch)
-//   let it go / flick it away    -> Ollie is released (pop)
+//   pull the stick down          -> Ollie is held (crouch); how far is how high the pop goes
+//   flick it away                -> Ollie is released (pop)
+//   let it come back to the centre without a flick -> Ollie is released and he stands up again
 //   where the flick ends         -> direction + Flip is tapped (flip trick slot)
 //   triggers                     -> direction + Grab (left / right hand)
 //   after a pop                  -> Grind is held for a while (no grind button)
@@ -171,10 +172,15 @@ namespace Flickit {
 		uint32_t grindSerial; // changes whenever the game starts a grind
 		bool railOff;         // the board has run out of speed on this rail: time to step off
 		int offSide;          // the side to step off to: -1 left, 1 right, 0 wherever the game finds room
+		// The flip trick the skater is in can be taken round once more now: the game has one more
+		// rotation of it on the trick button, there is time to press for it, and air enough to land
+		// it. flipLevel tells one such chance from the next (it changes with every trick the game starts).
+		bool flipMore;
+		uint32_t flipLevel;
 
 		Input() : now(0), rx(0.0f), ry(0.0f), leftTrigger(false), rightTrigger(false),
 			state(STATE_UNKNOWN), railCatch(false), grind(GRIND_UNKNOWN), grindReady(false), grindSerial(0),
-			railOff(false), offSide(0) {}
+			railOff(false), offSide(0), flipMore(false), flipLevel(0) {}
 	};
 
 	struct Output {
@@ -208,6 +214,13 @@ namespace Flickit {
 		bool stepOff;         // hold that button
 		int stepSide;         // with Left (-1) or Right (1), 0 for neither
 		bool stepStarted;     // set on the frame the press starts, for logging
+
+		// The crouch for an ollie (on the ground)
+		float popStrength;    // on the frame of a pop out of a crouch: how far the stick was pulled, 0 (a quick pop) to 1; -1 otherwise
+		bool standUp;         // on the frame a crouch ends without a pop: the skater stands back up
+		// The stick held at the end of a flip trick's flick
+		bool holding;         // it is held there
+		bool flipAgain;       // on the frame the trick button is pressed once more for another rotation
 	};
 
 	// ------------------------------------------------------------------------------------------
@@ -481,6 +494,10 @@ namespace Flickit {
 
 	// A jump off flat ground with one of THUG's pops (kThugPopTap ...): how high it goes, in
 	// units, and how long it lasts, in seconds
+	// The share of Skate's full pop that a pop out of a crouch this deep gets (0: a quick pop, 1: a
+	// full one). Skate lifts the rider half as high for a quick pop as for a full one.
+	float PopDepthShare(float strength);
+
 	struct FlatJump {
 		float height;
 		float seconds;
@@ -942,7 +959,9 @@ namespace Flickit {
 		const Tilt& GetTilt() const { return m_tilt.Get(); }
 
 	private:
-		enum Phase { PH_IDLE, PH_WINDUP, PH_TRACK };
+		// PH_LEAVE: the stick has left a crouch on the ground, and Ollie is still held. A flick pops;
+		// the stick coming to rest at the centre, or no flick in time, stands him back up.
+		enum Phase { PH_IDLE, PH_WINDUP, PH_TRACK, PH_LEAVE };
 		enum Button { BTN_FLIP, BTN_GRAB };
 		enum { MAX_QUEUE = 4 };
 		// What leaving the wind-up meant: on the ground Ollie was let go (a pop). On a rail and in
@@ -976,6 +995,10 @@ namespace Flickit {
 		void RunRailSwitch(const Input& in, const Settings& cfg, float mag, int sector, Output& out);
 		void RunStepOff(const Input& in, const Settings& cfg, Output& out);
 		void NoteSpeed(const Input& in, const Settings& cfg);
+		void NoteCrouch(uint32_t now, float target);
+		float CrouchStrength(uint32_t now, const Settings& cfg) const;
+		void StandUp(const Input& in, Output& out);
+		void HoldFlip(int slot, int sector, const Input& in);
 		bool WasFast(const Settings& cfg) const;
 
 		int m_phase;
@@ -1010,6 +1033,29 @@ namespace Flickit {
 		int m_histNext;
 		bool m_hasFast;
 		uint32_t m_lastFast;      // the last frame the stick was moving at flick speed
+
+		// How deep the crouch is (0 to 1): it follows the stick, deeper at most so fast, and the last
+		// moments of it
+		float m_crouch;
+		uint32_t m_crouchAt;
+		enum { CROUCH_HISTORY = 32 };
+		uint32_t m_crouchTime[CROUCH_HISTORY];
+		float m_crouchDepth[CROUCH_HISTORY];
+		int m_crouchCount;
+		int m_crouchNext;
+		// Leaving the crouch (PH_LEAVE): since when, how strong the pop would be, since when the
+		// stick has rested at the centre (0: it has not)
+		uint32_t m_leaveStart;
+		float m_leaveStrength;
+		uint32_t m_restSince;
+		bool m_resting;
+		float m_popOut;           // the strength of a pop made on this frame, for Output::popStrength
+		// The stick held at the end of a flip trick's flick: the trick's slot and where the flick
+		// ended, and the game's chance that was last pressed for
+		bool m_hold;
+		int m_holdSlot;
+		int m_holdSector;
+		uint32_t m_holdLevel;
 
 		int m_tapsLeft;
 		bool m_tapDown;

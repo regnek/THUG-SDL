@@ -1278,7 +1278,8 @@ static void testRailPopPatterns(double hz) {
 		CHECK_EQ(s.gestures(m).size(), 0);
 	}
 	{
-		// ... while on the ground it still does
+		// ... and on the ground it crouches, and letting go stands the skater up again: no pop
+		// without a pattern there either
 		Sim s(hz);
 		s.rec.UsePatterns(&set);
 		s.toward(D, 60);
@@ -1286,7 +1287,7 @@ static void testRailPopPatterns(double hz) {
 		s.spring();
 		s.hold(400);
 		CHECK_EQ(s.presses(&Output::ollie).size(), 1);
-		CHECK_EQ(s.gestures().size(), 1);
+		CHECK_EQ(s.gestures().size(), 0);
 	}
 }
 
@@ -1617,10 +1618,18 @@ static void testUnknownState(double hz) {
 	CHECK_EQ(s.presses(&Output::flip).size(), 1);
 	CHECK_EQ(s.presses(&Output::grind).size(), 1);
 	CHECK(!s.rec.GetTilt().valid);
-	// stick down again: crouch, let go: ollie
-	const size_t m = s.mark();
+	// stick down again: crouch, let go: he stands up; flick: ollie
+	size_t m = s.mark();
 	s.toward(D, 60);
 	s.hold(200);
+	s.spring();
+	s.hold(300);
+	CHECK_EQ(s.presses(&Output::ollie, m).size(), 1);
+	CHECK_EQ(s.gestures(m).size(), 0);
+	m = s.mark();
+	s.toward(D, 60);
+	s.hold(200);
+	s.toward(U, 35);
 	s.spring();
 	s.hold(300);
 	CHECK_EQ(s.presses(&Output::ollie, m).size(), 1);

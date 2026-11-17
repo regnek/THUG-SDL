@@ -32,6 +32,16 @@ namespace Flickit {
 	// The speed of the stick is its travel over about this long
 	static const int kSpeedWindowMs = 60;
 
+	// The crouch follows how far the stick is pulled. As Skate's does, it gets deeper over a fifth
+	// of a second at most (from none to a full one), and comes up at once. A pull to this share of
+	// the stick's travel is a full crouch, the most pop there is (Skate: a wind-up starts at 0.9).
+	static const int kCrouchRampMs = 200;
+	static const int kCrouchDropMs = 50;
+	static const float kCrouchFull = 0.9f;
+	// How strong a pop is, is how deep the crouch was just before the flick: the deepest it was in
+	// this long before the stick left it
+	static const int kCrouchPeakMs = 150;
+
 	// Stepping off a rail: how long the button is pressed, and how long the game gets to act on
 	// it before it is pressed again
 	static const int kOffTapMs = 50;
@@ -65,10 +75,10 @@ namespace Flickit {
 		s.autoGrind = 1;
 
 		s.deadzone = 25;
-		s.engage = 60;
-		s.release = 45;
-		s.flick = 50;
-		s.snap = 75;
+		s.engage = 35;
+		s.release = 30;
+		s.flick = 40;
+		s.snap = 60;
 
 		s.flickWindow = 200;
 		s.settle = 50;
@@ -191,6 +201,12 @@ namespace Flickit {
 			diff = 360.0f - diff;
 		}
 		return diff <= 67.5f + marginDeg;
+	}
+
+	// How many of the eight directions lie between two (0 to 4)
+	static int SectorGap(int a, int b) {
+		const int d = (a - b) & 7;
+		return d > 4 ? 8 - d : d;
 	}
 
 	static int MirrorX(int d) {
@@ -1298,6 +1314,20 @@ namespace Flickit {
 		// The speed that lifts Skate's rider by a full pop, for the best pop THUG has
 		const float speed = std::sqrt(2.0f * kSkateGravity * kSkateFullPop) * kUnitsPerMetre;
 		return (float)percent * 0.01f * speed / kThugPopBest;
+	}
+
+	// Skate: how high the rider rises for a quick pop, and for a full one
+	static const float kSkateQuickPop = 0.38f;
+
+	float PopDepthShare(float strength) {
+		if (!(strength > 0.0f)) {
+			strength = 0.0f;
+		}
+		if (strength > 1.0f) {
+			strength = 1.0f;
+		}
+		// The speed of a jump goes with the root of the height
+		return std::sqrt((kSkateQuickPop + (kSkateFullPop - kSkateQuickPop) * strength) / kSkateFullPop);
 	}
 
 	FlatJump JumpOnFlat(float thugPop, int gravityPercent, int popPercent) {
@@ -2532,6 +2562,83 @@ namespace Flickit {
 		m_offWait = false;
 		m_offSent = 0;
 		m_offWaitFrames = 0;
+
+		m_crouch = 0.0f;
+		m_crouchAt = 0;
+		m_crouchCount = 0;
+		m_crouchNext = 0;
+		m_leaveStart = 0;
+		m_leaveStrength = 0.0f;
+		m_restSince = 0;
+		m_resting = false;
+		m_popOut = -1.0f;
+		m_hold = false;
+		m_holdSlot = DIR_NONE;
+		m_holdSector = DIR_NONE;
+		m_holdLevel = 0;
+	}
+
+	// Once a frame while there is a crouch: how deep it is now, for a stick at "target" (0 to 1)
+	void Recognizer::NoteCrouch(uint32_t now, float target) {
+		const int32_t dt = m_crouchCount > 0 ? Since(now, m_crouchAt) : 0;
+		const float step = dt > 0 ? (float)dt : 0.0f;
+		if (target > m_crouch) {
+			const float most = m_crouch + step / (float)kCrouchRampMs;
+			m_crouch = target < most ? target : most;
+		}
+		else {
+			const float least = m_crouch - step / (float)kCrouchDropMs;
+			m_crouch = target > least ? target : least;
+		}
+		m_crouchAt = now;
+		m_crouchTime[m_crouchNext] = now;
+		m_crouchDepth[m_crouchNext] = m_crouch;
+		m_crouchNext = (m_crouchNext + 1) % CROUCH_HISTORY;
+		if (m_crouchCount < CROUCH_HISTORY) {
+			m_crouchCount++;
+		}
+	}
+
+	// How strong a pop out of the crouch is now: the deepest the crouch was over the last moments,
+	// from a pull that only just crouches (0, a quick pop) to a full one (1)
+	float Recognizer::CrouchStrength(uint32_t now, const Settings& cfg) const {
+		float deepest = 0.0f;
+		for (int k = 1; k <= m_crouchCount; k++) {
+			const int i = (m_crouchNext - k + CROUCH_HISTORY) % CROUCH_HISTORY;
+			if (k > 1 && Since(now, m_crouchTime[i]) > kCrouchPeakMs) {
+				break;
+			}
+			if (m_crouchDepth[i] > deepest) {
+				deepest = m_crouchDepth[i];
+			}
+		}
+		const float least = (float)cfg.engage * 0.01f;
+		if (!(kCrouchFull > least)) {
+			return 1.0f;
+		}
+		const float share = (deepest - least) / (kCrouchFull - least);
+		return share < 0.0f ? 0.0f : (share > 1.0f ? 1.0f : share);
+	}
+
+	// The crouch ends without a pop: Ollie goes up, and the game is told that this is no jump
+	void Recognizer::StandUp(const Input& in, Output& out) {
+		m_phase = PH_IDLE;
+		m_holdOllie = false;
+		m_tapsLeft = 0;
+		m_tapDown = false;
+		m_crouchCount = 0;
+		m_crouch = 0.0f;
+		out.standUp = true;
+		(void)in;
+	}
+
+	// A flip trick was asked for: if the stick stays where its flick ended, the trick may be taken
+	// round again (see Input::flipMore)
+	void Recognizer::HoldFlip(int slot, int sector, const Input& in) {
+		m_hold = slot != DIR_NONE && sector != DIR_NONE;
+		m_holdSlot = slot;
+		m_holdSector = sector;
+		m_holdLevel = in.flipLevel;
 	}
 
 	bool Recognizer::Busy() const {
@@ -2611,7 +2718,11 @@ namespace Flickit {
 	// to having been rolled out to a side.
 	void Recognizer::LeaveWindup(const Input& in, const Settings& cfg, bool nearCentre) {
 		if (m_holdOllie) {
-			// The crouch ends: Ollie is let go, and that is the pop
+			// The crouch ends: Ollie is let go, and that is the pop. How strong: how deep the
+			// crouch was just before the stick left it.
+			m_popOut = (m_phase == PH_LEAVE) ? m_leaveStrength : CrouchStrength(in.now, cfg);
+			m_crouchCount = 0;
+			m_crouch = 0.0f;
 			BeginTrack(in.now, TRACK_POP);
 			ArmGrindHold(in, cfg);
 			Popped(in.now, cfg);
@@ -2747,6 +2858,8 @@ namespace Flickit {
 			// Never on the frame of the pop itself: the game has to see Ollie released first.
 			// After a pop on a rail the press waits for the Ollie tap to end (see RunQueue).
 			Enqueue(BTN_FLIP, slot, AfterPop(cfg));
+			// A stick that stays out where the flick ended holds the trick (see Update)
+			HoldFlip(slot, end, in);
 		}
 		m_track = TRACK_POP;
 		m_phase = PH_IDLE;
@@ -2777,6 +2890,9 @@ namespace Flickit {
 			for (int i = 0; i < p.taps; i++) {
 				Enqueue(BTN_FLIP, p.slot, AfterPop(cfg));
 			}
+			// The pattern ends where the stick is: if it stays there, the trick may be held
+			const float mag = std::sqrt(in.rx * in.rx + in.ry * in.ry);
+			HoldFlip(p.slot, mag >= (float)cfg.release * 0.01f ? Sector(in.rx, in.ry) : DIR_NONE, in);
 		}
 		m_track = TRACK_POP;
 		m_phase = PH_IDLE;
@@ -3083,6 +3199,11 @@ namespace Flickit {
 		out.stepOff = false;
 		out.stepSide = 0;
 		out.stepStarted = false;
+		out.popStrength = -1.0f;
+		out.standUp = false;
+		out.holding = false;
+		out.flipAgain = false;
+		m_popOut = -1.0f;
 
 		const uint32_t now = in.now;
 		const float dead = (float)cfg.deadzone * 0.01f;
@@ -3213,7 +3334,7 @@ namespace Flickit {
 			m_armed = false;
 		}
 
-		if (m_phase == PH_WINDUP) {
+		if (m_phase == PH_WINDUP || m_phase == PH_LEAVE) {
 			if (!m_holdOllie) {
 				if (!inAir && !onRail) {
 					// Begun in the air or on a rail, and now the board is on the ground: this is a crouch
@@ -3229,12 +3350,27 @@ namespace Flickit {
 				m_holdOllie = false;
 				m_tapsLeft = 0;
 				m_tapDown = false;
+				if (m_phase == PH_LEAVE) {
+					m_phase = PH_IDLE;
+				}
 			}
 		}
 
 		if (m_phase == PH_WINDUP) {
 			const bool inHalf = hasAngle && InWindupHalf(angle, m_wind, kHalfMargin);
-			if (mag < release || !inHalf) {
+			if (m_holdOllie) {
+				// The crouch follows the stick
+				NoteCrouch(now, inHalf ? mag : 0.0f);
+			}
+			if ((mag < release || !inHalf) && m_holdOllie) {
+				// The stick leaves the crouch. Ollie stays down: a flick pops (below), the stick
+				// coming to rest at the centre stands him up again without one.
+				m_leaveStrength = CrouchStrength(now, cfg);
+				m_phase = PH_LEAVE;
+				m_leaveStart = now;
+				m_resting = false;
+			}
+			else if (mag < release || !inHalf) {
 				LeaveWindup(in, cfg, mag < release);
 			}
 			else if (InWindupHalf(angle, m_wind, 0.0f)) {
@@ -3248,17 +3384,27 @@ namespace Flickit {
 			}
 		}
 
+		if (m_phase == PH_LEAVE) {
+			NoteCrouch(now, 0.0f);
+			// Out of the crouch and well away from it in any other direction: the flick, and the pop.
+			// With patterns only a pattern pops, as in Skate.
+			const bool away = hasAngle && !InWindupHalf(angle, m_wind, 0.0f) && mag >= flick;
+			if (!usePatterns && away) {
+				LeaveWindup(in, cfg, true);
+			}
+		}
+
 		if (usePatterns) {
-			if (matched && (m_phase == PH_WINDUP || m_phase == PH_TRACK)) {
+			if (matched && (m_phase == PH_WINDUP || m_phase == PH_TRACK || m_phase == PH_LEAVE)) {
 				const Pattern& p = m_patterns->At(match.index);
 				// In the air, with nothing held, only a pattern that ends across the stick is a flip.
 				// One that ends at a side or back where it began was the board being tilted.
-				const bool inAirGesture = (m_phase == PH_WINDUP) ? (!m_holdOllie && !onRail) : (m_track == TRACK_AIR);
+				const bool inAirGesture = (m_phase == PH_WINDUP || m_phase == PH_LEAVE) ? (!m_holdOllie && !onRail) : (m_track == TRACK_AIR);
 				const bool across = hasAngle && InWindupHalf(angle, 1 - m_wind, 0.0f);
 				if ((p.nollie != 0) == (m_wind == WIND_NOLLIE) && (!inAirGesture || across)) {
-					if (m_phase == PH_WINDUP) {
-						// The pattern ended inside the wind-up area: this is the pop
-						LeaveWindup(in, cfg, false);
+					if (m_phase == PH_WINDUP || m_phase == PH_LEAVE) {
+						// The pattern is complete: this is the pop
+						LeaveWindup(in, cfg, m_phase == PH_LEAVE);
 					}
 					// Where nothing was held, a pattern drawn slowly is not a flick
 					if (m_track == TRACK_POP || WasFast(cfg)) {
@@ -3313,12 +3459,55 @@ namespace Flickit {
 			}
 		}
 
-		// The frame a pop out of a grind lets go of Ollie, the button is up whatever else is going on
-		out.ollie = !tapEnded && ((m_phase == PH_WINDUP && m_holdOllie) || m_railTap);
+		if (m_phase == PH_LEAVE) {
+			if (hasAngle && mag >= engage && InWindupHalf(angle, m_wind, 0.0f)) {
+				// Back into the crouch
+				m_phase = PH_WINDUP;
+				if (sector != m_cur) {
+					m_cur = sector;
+					m_curSince = now;
+				}
+			}
+			else {
+				// At rest in the centre, or no flick in time: he stands up again
+				if (mag < dead) {
+					if (!m_resting) {
+						m_resting = true;
+						m_restSince = now;
+					}
+				}
+				else {
+					m_resting = false;
+				}
+				if ((m_resting && Since(now, m_restSince) >= cfg.settle) || Since(now, m_leaveStart) >= cfg.flickWindow) {
+					StandUp(in, out);
+					m_armed = mag < dead;
+				}
+			}
+		}
 
-		if (m_phase == PH_WINDUP && m_holdOllie) {
+		// The frame a pop out of a grind lets go of Ollie, the button is up whatever else is going on
+		out.ollie = !tapEnded && (((m_phase == PH_WINDUP || m_phase == PH_LEAVE) && m_holdOllie) || m_railTap);
+
+		if ((m_phase == PH_WINDUP || m_phase == PH_LEAVE) && m_holdOllie) {
 			RunTaps(now, out);
 		}
+
+		// The stick held where a flip trick's flick ended: while the game has another rotation of the
+		// trick to give (see Input::flipMore), the trick button is pressed once more for it
+		if (m_hold) {
+			const bool still = hasAngle && mag >= release && m_holdSector != DIR_NONE && SectorGap(sector, m_holdSector) <= 1;
+			if (!still || m_phase == PH_WINDUP || m_phase == PH_LEAVE) {
+				m_hold = false;
+			}
+			else if (in.flipMore && in.flipLevel != m_holdLevel) {
+				Enqueue(BTN_FLIP, m_holdSlot, now);
+				m_holdLevel = in.flipLevel;
+				out.flipAgain = true;
+			}
+		}
+		out.holding = m_hold;
+		out.popStrength = m_popOut;
 
 		if (cfg.triggerGrabs && !onRail) {
 			uint32_t grabStart = now;

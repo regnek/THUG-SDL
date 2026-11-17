@@ -12,6 +12,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -257,6 +258,27 @@ static void testJumps() {
 		// the pop alone leaves the time in the air to the game's gravity
 		const FlatJump low = JumpOnFlat(kThugPopBest, 0, 100);
 		CHECK(near(low.seconds / JumpOnFlat(kThugPopBest, 0, 0).seconds, JumpPopFactor(100), 1e-4));
+	}
+
+	g_case = "jumps: the pop out of a crouch goes with its depth";
+	{
+		// Skate's quick pop lifts the rider half as high as its full pop (0.38 against 0.76 m), and
+		// in between in proportion to the depth: the speed of the jump goes with the root of that
+		CHECK(near(PopDepthShare(1.0f), 1.0, 1e-6));
+		CHECK(near(PopDepthShare(0.0f), sqrt(0.5), 1e-5));
+		CHECK(near(PopDepthShare(0.5f), sqrt(0.75), 1e-5));
+		CHECK(near(PopDepthShare(-1.0f), sqrt(0.5), 1e-5));
+		CHECK(near(PopDepthShare(2.0f), 1.0, 1e-6));
+		CHECK(near(PopDepthShare(std::numeric_limits<float>::quiet_NaN()), sqrt(0.5), 1e-5));
+		const float full = JumpOnFlat(kThugPopBest, 100, 100).height;
+		for (int i = 0; i <= 10; i++) {
+			const float a = i / 10.0f;
+			const float share = PopDepthShare(a);
+			// a jump at this share of the full pop's speed rises this share squared of its height
+			const double rise = full * share * share / kUnitsPerMetre;
+			CHECK(near(rise, 0.38 + 0.38 * a, 0.002));
+			if (i > 0) CHECK(share > PopDepthShare((i - 1) / 10.0f));
+		}
 	}
 
 	g_case = "jumps: a jump stepped the way the game steps it";

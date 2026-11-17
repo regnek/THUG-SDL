@@ -100,8 +100,9 @@ Flickit puts the board on the right stick, the way the Skate games do. The stick
 
 | Input | What happens |
 | --- | --- |
-| Right stick down | Crouch (Ollie is held) |
-| Let the stick go, or flick it away | Ollie |
+| Right stick down | Crouch (Ollie is held). A third of the way down is enough, as in Skate. How far down is how high the ollie goes |
+| Flick it away from there | Ollie |
+| Let it come back to the centre, or let go of it | He stands up again: no ollie |
 | Down, flick up-right | Kickflip (Left + Flip) |
 | Down, flick up-left | Heelflip (Right + Flip) |
 | Down, drag to the right | Pop Shove-It (Down + Flip) |
@@ -110,6 +111,7 @@ Flickit puts the board on the right stick, the way the Skate games do. The stick
 | Down-right, flick up-left | Varial Heelflip (DownRight + Flip) |
 | Down-right, flick up | Hardflip (UpLeft + Flip) |
 | Down-left, flick up | Inward Heelflip (UpRight + Flip) |
+| A flip trick, and the stick kept where the flick ended | One more rotation each time the game has one to give and there is air enough to land it: Double and Triple Kickflip, Heelflip and Impossible, 360 and 540 Shove-It (see Holding a flip below) |
 | Left trigger / right trigger | Grab with that hand (Left + Grab / Right + Grab), held as long as the trigger is |
 | Nothing | Grind: rails and ledges catch the board by themselves, and the right stick says which grind it is (see Grinds below) |
 | Left bumper / right bumper | Spin left + nollie / spin right + revert and switch, both together: caveman |
@@ -119,6 +121,17 @@ Flickit puts the board on the right stick, the way the Skate games do. The stick
 | Right stick click | Flickit on / off, for looking around. On foot and in a car it stands down by itself |
 
 The tricks named above are the default trick slots. Flickit presses the slot, so whatever is assigned to it in the Edit Tricks menu is what comes out. Manuals are unchanged (up, down on the movement stick).
+
+### The crouch, the pop and standing up
+- As in Skate, a gesture does not need the stick at its end: a crouch starts a third of the way down (`Engage=35`), and a flick that gets 40 percent of the way out of it pops (`Flick=40`). Skate's own patterns start about that far down and end under half way out; drawn through these rules, 77 of the 78 in its `skater.pat` come out as themselves.
+- The pop is a flick: the stick going out of the crouch and on, in any other direction. Easing the stick back to the centre, or letting go of it so that it springs back, is not one: Ollie goes up and the skater stands up again, without a jump. So does a stick left part way out for longer than `FlickWindow`. Skate needs the flick as well: its ollie is a pattern that ends half way up the stick.
+- How far the stick is pulled down is how high the ollie goes, as in Skate: from Skate's quick pop at a third of the way (the rider rises 0.38 m) to its full pop at nine tenths (0.76 m), in between in proportion. The crouch gets deeper over a fifth of a second at most, so a flick straight out of a pull is a smaller pop; easing off before the flick makes it smaller too. THUG's own pop goes by how long the jump button was down instead; with Flickit that is set aside for a pop out of the stick's crouch. The crouch the skater shows is still THUG's one crouch, whatever the depth.
+
+### Holding a flip
+In Skate a kickflip or a heelflip whose stick stays where the flick ended keeps turning: a second rotation if the rider has 0.53 s of air left, a third with 0.8 s, up to four. THUG has the same tricks with one rotation more on another press of the trick button while the trick starts (its extra tricks: Double Kickflip on a Kickflip, Triple on a Double, and so on), and Flickit presses for them while the stick is held: Double and Triple Kickflip, Heelflip and Impossible, 360 and 540 Shove-It and FS Shove-It, and the back foot doubles. Skate does this for its flips only; the shove-its are THUG's.
+- The press for another rotation comes a little over a tenth of a second into the trick, if the stick is still within one direction of where the flick ended and out at least 30 percent. Let it go, or roll it on round, and the trick lands as it is.
+- A rotation is only pressed for when there is air enough to land it: the game's own time left in the air, against how long the longer trick's animation runs before a landing no longer bails. The log says so either way ("the stick is held: one more rotation ..." or "... not air enough for ...").
+- Tricks that turn into another trick on that press (a Varial Kickflip into a 360 Flip, a Hardflip into a 360 Hardflip) are not held: holding them changes nothing.
 
 ### Grinds
 There is no grind button to hold: a rail or ledge under the board catches it. Which grind it is depends on how the board leans when it touches down, and in the air the board is leaned with the right stick, the way Skate does it. Two things count: where the stick was pushed first, and where it is at touchdown. "Toward" is the side the rail is on.
@@ -242,7 +255,7 @@ THUG turns the skater in the air at 6.85 to 7.75 radians a second (by his spin s
 Flip tricks are not touched. In both games how long a flip takes is in its animation: THUG plays it 1.16 to 1.3 times as fast as it was made, by the skater's flip stat, and bails a landing that comes more than 25 frames before its end; Skate blends the flip's animation by the height of the pop. Neither game's animations were measured, and how the speed of the flick enters Skate's was not worked out.
 
 ### What the mod changes in the game
-For the grinds the mod looks at the skater's state and changes five places in the game's rail code: the test for the Grind button before a rail is caught, the search for a rail that follows it, the pick of the grind, the balance of a grind (the drag is applied in the same place, once per frame of the game's rail physics), and the speed the game adds when the board lands on a rail. For the jumps it stands in for the game's own answer to "what is the gravity in the air", and scales the speed of a jump at the point where the game has worked it out. For rolling it stands in for four things in the game's physics of the ground (the test for braking, the test for a kick, the friction and the turning) and for three commands of the game's scripts (CanKick in the nollie loop, Held when it is asked about the Flip button, and AnimFinished when the scripts wait for the end of a landing, a skate-off or a bump while a push asks for its animation) and for the wait of a script for the end of a push animation that gives way to a crouch or to Down, it holds the game's "auto kick" setting off for the skater, and with `PushOverTurn=1` it keeps Left and Right from the game's scripts while a push asks for its animation and they are in their loop for the ground (the game's physics see both as they are). For these it reads which script the skater's is in, and which one called it, and whether he crouches. For the push it also reads two things without changing them: which animation the skater is in and how far into it, and where his two feet are, through the game's own function for the place of a bone. For spinning it stands around the game's turning in the air, which for that one call sees Left or Right held the way the stick's turning goes, and answers for the skater's rate when the game asks for it there. The code at every address it uses is compared with what is expected there first. If anything differs nothing is touched and grinds work as in earlier versions, with the Grind button held for a moment after each pop. `GameHooks=0` does the same on purpose. All of it applies to the first player's skater, while he is on his board and Flickit is on.
+For the grinds the mod looks at the skater's state and changes five places in the game's rail code: the test for the Grind button before a rail is caught, the search for a rail that follows it, the pick of the grind, the balance of a grind (the drag is applied in the same place, once per frame of the game's rail physics), and the speed the game adds when the board lands on a rail. For the jumps it stands in for the game's own answer to "what is the gravity in the air", and scales the speed of a jump at the point where the game has worked it out. For rolling it stands in for four things in the game's physics of the ground (the test for braking, the test for a kick, the friction and the turning) and for three commands of the game's scripts (CanKick in the nollie loop, Held when it is asked about the Flip button, and AnimFinished when the scripts wait for the end of a landing, a skate-off or a bump while a push asks for its animation) and for the wait of a script for the end of a push animation that gives way to a crouch or to Down, it holds the game's "auto kick" setting off for the skater, and with `PushOverTurn=1` it keeps Left and Right from the game's scripts while a push asks for its animation and they are in their loop for the ground (the game's physics see both as they are). For these it reads which script the skater's is in, and which one called it, and whether he crouches. For the push it also reads two things without changing them: which animation the skater is in and how far into it, and where his two feet are, through the game's own function for the place of a bone. For the crouch it sets, before the jump, how long the game thinks the jump button was down, scales the speed of the jump with the depth of the crouch, and takes a crouch back before the physics see the button go up when the stick came back without a flick. For a held flip trick it reads the tricks the trick in progress can turn into, the game's clock, the time left in the air and the length of an animation, all without changing them. For spinning it stands around the game's turning in the air, which for that one call sees Left or Right held the way the stick's turning goes, and answers for the skater's rate when the game asks for it there. The code at every address it uses is compared with what is expected there first. If anything differs nothing is touched and grinds work as in earlier versions, with the Grind button held for a moment after each pop. `GameHooks=0` does the same on purpose. All of it applies to the first player's skater, while he is on his board and Flickit is on.
 
 The settings live in the `[Flickit]` section of `thugsdl.ini`. Thresholds are percent of full stick deflection, times are milliseconds. Press F9 in game to re-read the section without restarting.
 
@@ -258,10 +271,10 @@ The settings live in the `[Flickit]` section of `thugsdl.ini`. Thresholds are pe
 | ReloadKey | 66 | SDL scancode that re-reads this section (66 = F9, 0 = none) |
 | Debug | 1 | Log every recognized flick. Needs the console switched on (`Console=1` under `[Logger]`); with `WriteFile=1` as well the same lines go to `debug.txt`. `WriteFile=1` alone logs nothing |
 | Deadzone | 25 | Below this the stick counts as centered |
-| Engage, Release | 60, 45 | A crouch starts above Engage and pops below Release |
-| Flick, Snap | 50, 75 | How far the flick has to reach, and how far for it to be accepted at once |
-| FlickWindow | 200 | How long after the pop the flick may arrive |
-| Settle | 50 | How long a drag to the side has to rest to count |
+| Engage, Release | 35, 30 | A crouch starts above Engage and is left below Release (Skate's gestures start about a third of the way down) |
+| Flick, Snap | 40, 60 | How far the flick out of a crouch has to reach to pop, and how far for its direction to be taken at once |
+| FlickWindow | 200 | How long after the pop the flick may arrive. Also how long the stick may stay part way out of a crouch before the skater stands up without a pop |
+| Settle | 50 | How long a drag to the side has to rest to count. Also how long the stick has to rest at the centre after a crouch for him to stand up |
 | Dwell | 60 | How long the stick has to rest in down-left / down-right to make it the start |
 | AfterPop, DirLead, Pulse | 10, 15, 30 | Timing of the synthetic direction + button press |
 | Patterns | 1 | Decide tricks from a stick pattern file when one is found (see below). 0: always use the built-in directions |

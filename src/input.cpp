@@ -333,6 +333,8 @@ uint32_t flickitFootSerial = 0;                          // for the log: the las
 uint32_t flickitBlindSerial = 0;                         // for the log: the last time the pushes went over to the clock
 uint32_t flickitCutSerial = 0;                           // for the log: the last animation of the game's a push cut short
 uint32_t flickitWaySerial = 0;                           // for the log: the last push animation that gave way to something before it
+FlickitGame::Skater flickitFlipSkater;                   // the skater as last read, for the log of a held flip trick
+uint32_t flickitFlipToldLevel = 0;                       // the last held flip trick the log said had no air for another rotation
 uint32_t flickitSpinSerial = 0;                          // for the log: the last air Flickit turned the skater in
 uint32_t flickitFrameAt = 0;                             // SDL's clock at the last frame handed to the game hooks
 bool flickitFrameSeen = false;
@@ -780,6 +782,9 @@ int flickitPoll(device* dev, SDL_GameController* controller, Flickit::Output* ou
 			in.grindSerial = skater.grindSerial;
 			in.railOff = skater.railOff;
 			in.offSide = skater.offSide;
+			in.flipMore = skater.flipMore;
+			in.flipLevel = skater.flipLevel;
+			flickitFlipSkater = skater;
 			if (flickitSettings.debug) {
 				flickitLogGame(skater, in.now);
 			}
@@ -800,6 +805,22 @@ int flickitPoll(device* dev, SDL_GameController* controller, Flickit::Output* ou
 			Log::TypedLog(CHN_SDL, "Flickit: out of speed on the rail, stepping off %s\n",
 				out->stepSide < 0 ? "to the left, where the board came from" : out->stepSide > 0 ? "to the right, where the board came from" : "wherever the game finds room");
 		}
+		if (out->popStrength >= 0.0f) {
+			Log::TypedLog(CHN_SDL, "Flickit: pop out of a crouch %.0f%% deep\n", out->popStrength * 100.0f);
+		}
+		if (out->standUp) {
+			Log::TypedLog(CHN_SDL, "Flickit: out of the crouch without a flick: he stands up\n");
+		}
+		if (port == 0 && flickitSeesSkater) {
+			const FlickitGame::Skater& sk = flickitFlipSkater;
+			if (out->flipAgain) {
+				Log::TypedLog(CHN_SDL, "Flickit: the stick is held: one more rotation, %s (%.2f s of air left, %.2f s needed)\n", sk.flipNext, sk.flipAirLeft, sk.flipNeed);
+			}
+			else if (out->holding && sk.flipDecide && !sk.flipMore && sk.flipLevel != flickitFlipToldLevel) {
+				flickitFlipToldLevel = sk.flipLevel;
+				Log::TypedLog(CHN_SDL, "Flickit: the stick is held, but there is not air enough for a %s (%.2f s left, %.2f s needed)\n", sk.flipNext, sk.flipAirLeft, sk.flipNeed);
+			}
+		}
 		if (out->gesture == Flickit::GESTURE_GRAB) {
 			Log::TypedLog(CHN_SDL, "Flickit: grab, %s trigger\n", out->slot == Flickit::DIR_L ? "left" : "right");
 		}
@@ -819,11 +840,13 @@ int flickitPoll(device* dev, SDL_GameController* controller, Flickit::Output* ou
 
 // Tells the game's rail code what Flickit wants on this frame. Runs after the real buttons are in the pad
 // data and before Flickit's own, so the Grind button seen here is the player's.
-void flickitGameFrame(device* dev) {
+void flickitGameFrame(device* dev, const Flickit::Output& out) {
 	if (dev->port != 0 || !flickitSeesSkater || !FlickitGame::Installed()) {
 		return;
 	}
 	FlickitGame::Frame frame;
+	frame.standUp = out.standUp;
+	frame.popStrength = out.popStrength;
 	frame.catchRails = flickitSettings.grindCatch != 0;
 	frame.pickGrind = flickitSettings.grindPick != 0;
 	frame.noBalance = flickitSettings.grindBalance == 0;
@@ -1348,7 +1371,7 @@ void pollController(device* dev, SDL_GameController* controller) {
 
 				// With Flickit the camera stick is the board: it never reaches the game as camera input
 				if (flickit) {
-					flickitGameFrame(dev);
+					flickitGameFrame(dev, flickitOut);
 					flickitApply(dev, flickitOut);
 				}
 			}

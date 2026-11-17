@@ -40,6 +40,15 @@
 //     ground has it: the scripts stop waiting for the push animation to end (the wait for an
 //     animation, for the push animations only), and play no push while he crouches (Held)
 //
+// For the crouch and the jump, in the hooks above: a jump out of a crouch of Flickit's is as high
+// as the crouch was deep (the jump hook sets how long the game thinks the jump button was down,
+// the jump speed hook scales the result), and a crouch that ends without a flick is taken back
+// before the game's physics see the button go up (the pad update), so that he stands up instead.
+// A flip trick held on the stick is taken round once more with another press of its button,
+// where the game has that trick with one rotation more and air enough to land it: for that the
+// mod reads the trick's extra tricks, the game's clock, the air left and the length of the
+// animation (only read).
+//
 // For spinning the way Skate's skater does, two more, in the physics of the air:
 //
 //   - which way the skater turns in the air and whether he does (the game's own turning, which
@@ -119,6 +128,14 @@ namespace FlickitGame {
 		int wayTo;              // to what (Flickit::GiveWay),
 		float wayShare;         // and how far into it the skater was
 
+		// A flip trick held on the stick (Flickit::Input::flipMore)
+		bool flipMore;          // it can be taken round once more: press its button now
+		bool flipDecide;        // now is the moment for it, air enough or not
+		uint32_t flipLevel;     // changes with every trick the game starts
+		const char* flipNext;   // what the game calls the trick it would turn into
+		float flipAirLeft;      // seconds until he is down again
+		float flipNeed;         // seconds that trick needs until a landing does not bail
+
 		// Spinning
 		uint32_t spinSerial;    // goes up when an air in which Flickit turned the skater is over
 		float spinTurned;       // that air: radians Flickit asked for, to the right when positive
@@ -160,6 +177,8 @@ namespace FlickitGame {
 		float steer;            // the movement stick, -1 (left) to 1 (right)
 		int spin;               // turning in the air in percent of Skate's, 0: the game's own
 		float seconds;          // since the look at the controller before this one
+		bool standUp;           // a crouch of Flickit's ended without a pop on this frame
+		float popStrength;      // a pop out of a crouch on this frame, and how deep it was (0 to 1); -1: none
 	};
 
 	// Once per frame, before player one's controller is read: nothing is on for this frame

@@ -131,6 +131,20 @@ namespace FlickitGame {
 	// script for the end of an object's animation asks it about the first channel.
 	typedef bool(__thiscall* ChannelOver_t)(void* channel);
 	static const ChannelOver_t ChannelOver = (ChannelOver_t)0x004703B0;
+	// The game's clock, in milliseconds (its frames, at 60 a second)
+	typedef int(__cdecl* GameMs_t)();
+	static const GameMs_t GameMs = (GameMs_t)0x00582C20;
+	// CSkaterCorePhysicsComponent: how long until a skater at height y, going up at vy, is down at
+	// "floor", under the gravity of the air (the call inside it to that gravity is Flickit's). The
+	// script command GetAirTimeLeft asks it with the floor below the skater.
+	typedef float(__thiscall* TimeToHeight_t)(void* core, float floor, float y, float vy);
+	static const TimeToHeight_t TimeToHeight = (TimeToHeight_t)0x0055E730;
+	// CAnimationComponent: whether the object has an animation of that name, and how long it is
+	// (seconds, at its own speed). The script command GetAnimLength asks these two.
+	typedef bool(__thiscall* AnimExists_t)(void* anim, uint32_t name);
+	static const AnimExists_t AnimExists = (AnimExists_t)0x00430650;
+	typedef float(__thiscall* AnimLength_t)(void* anim, uint32_t name);
+	static const AnimLength_t AnimLength = (AnimLength_t)0x00430630;
 
 	enum {
 		// any component
@@ -141,6 +155,7 @@ namespace FlickitGame {
 		OBJECT_LEFT = 0x60,             // the way its left side points (the first row of its matrix; "Move x = 1" in a script goes there)
 		OBJECT_MATRIX = 0x60,           // that matrix
 		OBJECT_FORWARD = 0x80,          // the way it faces (the third row)
+		OBJECT_POSITION = 0x40,         // where it is
 		OBJECT_VELOCITY = 0xA0,
 		OBJECT_PLAYER = 0x2BC,          // which player's skater it is
 
@@ -152,6 +167,7 @@ namespace FlickitGame {
 		CHANNEL_START = 0x14,           // seconds: where its animation starts,
 		CHANNEL_TIME = 0x18,            // where it is,
 		CHANNEL_END = 0x1C,             // and where it ends
+		CHANNEL_SPEED = 0x20,           // how fast it runs, per 60th of a second
 		CHANNEL_BACKWARDS = 0x24,       // not 0: it runs from the end to the start
 		CHANNEL_NAME = 0x30,            // the checksum of the animation's name
 
@@ -173,6 +189,7 @@ namespace FlickitGame {
 		CORE_AUTO_KICK = 0x2D0,         // one byte: he kicks without being asked (the game's option)
 		CORE_NO_KICK = 0x2D8,           // one byte: a script has forbidden kicking (CanKickOff, in a revert)
 		CORE_ROLLING_FRICTION = 0x2DC,  // what the wheels lose; scripts raise it to brake
+		CORE_TENSE_TIME = 0x33C,        // ms the jump button was down for the jump that comes (the game's clock)
 		CORE_VELOCITY_LOCKED = 0x34C,   // one byte: turning does not turn the direction of travel
 		CORE_TURNING_LEFT = 0x365,      // one byte: the last turn on the ground went to the left
 		CORE_GRIND_TWEAK = 0x368,
@@ -206,6 +223,7 @@ namespace FlickitGame {
 		INPUT_RIGHT_PRESSED = 0x80,
 		BUTTON_PRESSED_AT = 0x04,       // in a button of the pad: the game's clock (ms) when it went down
 		INPUT_GRIND_PRESSED = 0x1A0,    // the Grind button (Triangle) is down
+		INPUT_JUMP_PRESSED = 0x1C0,     // the jump button (X) is
 		INPUT_DISABLED = 0x498,         // one byte: a script has taken the controls away (DisablePlayerInput)
 		INPUT_NET_DISABLED = 0x499,     // one byte: the same for a network game
 
@@ -221,6 +239,17 @@ namespace FlickitGame {
 		STATE_BAILING = 0x70,           // one byte: in a bail
 		STATE_DOING_TRICK = 0xD8,
 		STATE_DRIVING = 0x114,
+		STATE_HEIGHT = 0x118,           // in the air: how far above the ground below him he is
+
+		// CTrickComponent: the tricks the trick in progress can turn into on a press of a button
+		// (SetExtraTricks), for a while
+		TRICK_EXTRA_ON = 0x12C8,        // one byte: there are some
+		TRICK_EXTRA_FOREVER = 0x12C9,   // one byte: for as long as the trick lasts (no Duration)
+		TRICK_EXTRA_LENGTH = 0x12CC,    // else for this many ms (the game's clock) ...
+		TRICK_EXTRA_START = 0x12D0,     // ... from this moment
+		TRICK_EXTRA_COUNT = 0x12D4,     // how many lists of them,
+		TRICK_EXTRA_NAMES = 0x12D8,     // the name of each list, one after the other
+		TRICK_EXTRA_MOST = 0x0A,        // room for this many
 
 		// the balance record of a rail (CSkaterBalanceTrickComponent + 0x7C)
 		BALANCE_RECORD = 0x7C,
@@ -317,6 +346,36 @@ namespace FlickitGame {
 		{ 0x89E80A4D, "FlailRightCrouched3" },
 	};
 	enum { PUSH_CUTS = sizeof(kPushCuts) / sizeof(kPushCuts[0]) };
+
+	// The flip tricks the game takes round once more on another press of the trick button, and
+	// which are that same trick with one rotation more: what the trick in progress is given to
+	// turn into (its ExtraTricks), and the animation of that trick, riding regular and nollie
+	// (airtricks.q). A 360 flip out of a varial kickflip, say, is another trick, and not here.
+	struct HeldFlip {
+		uint32_t extra;
+		const char* text;
+		uint32_t anim;
+		const char* animText;
+		uint32_t nollie;
+		const char* nollieText;
+		const char* title;      // what the game calls the trick
+	};
+	static const HeldFlip kHeldFlips[] = {
+		{ 0xB35FC553, "DoubleKickflip", 0xB35FC553, "DoubleKickflip", 0xB6834A5A, "DoubleNollieKickflip", "Double Kickflip" },
+		{ 0xD94EE2EC, "TripleKickflip", 0xD94EE2EC, "TripleKickflip", 0xD94EE2EC, "TripleKickflip", "Triple Kickflip" },
+		{ 0x9E0997C9, "DoubleHeelflip", 0x9E0997C9, "DoubleHeelflip", 0x9BD518C0, "DoubleNollieHeelflip", "Double Heelflip" },
+		{ 0xF418B076, "TripleHeelflip", 0xF418B076, "TripleHeelflip", 0xF418B076, "TripleHeelflip", "Triple Heelflip" },
+		{ 0x7F634D04, "DoubleImpossible", 0x7F634D04, "DoubleImpossible", 0x7F634D04, "DoubleImpossible", "Double Impossible" },
+		{ 0xB9342009, "TripleImpossible", 0xB9342009, "TripleImpossible", 0xB9342009, "TripleImpossible", "Triple Impossible" },
+		{ 0x39BD0DC1, "Extra360ShoveIt", 0xE54680B2, "_360ShoveIt", 0x424B04FA, "NollieBS360ShoveIt", "360 Shove-It" },
+		{ 0x1A555500, "Extra540ShoveIt", 0xC6AED873, "_540ShoveIt", 0xC6AED873, "_540ShoveIt", "540 Shove-It" },
+		{ 0x73BD4833, "ExtraFS360ShoveIt", 0xBEFD23C9, "FS360ShoveIt", 0x2050BFF9, "Nollie360ShoveIt", "360 FS Shove-It" },
+		{ 0x505510F2, "ExtraFS540ShoveIt", 0x9D157B08, "FS540ShoveIt", 0x9D157B08, "FS540ShoveIt", "540 FS Shove-It" },
+		{ 0x3F05C386, "Extra_DBackfootKickflip", 0xB6834A5A, "DoubleNollieKickflip", 0xB6834A5A, "DoubleNollieKickflip", "Double Back Foot Flip" },
+		{ 0x1253911C, "Extra_DBackfootHeelflip", 0x9BD518C0, "DoubleNollieHeelflip", 0x9BD518C0, "DoubleNollieHeelflip", "Double Back Foot Heelflip" },
+		{ 0x53F2E1B9, "Extra_360BackfootShoveIt", 0x424B04FA, "NollieBS360ShoveIt", 0x424B04FA, "NollieBS360ShoveIt", "360 Back Foot Shove-It" },
+	};
+	enum { HELD_FLIPS = sizeof(kHeldFlips) / sizeof(kHeldFlips[0]) };
 
 	// Where the game's code is changed
 	static uint8_t* const kCatchTest1 = (uint8_t*)0x0056CB60;   // cmp byte ptr [eax+1A0h], 0   in maybe_stick_to_rail
@@ -548,6 +607,32 @@ namespace FlickitGame {
 		{ 0x0062F340, 4, { 0xA0, 0x1D, 0x43, 0x00 }, "animation component: its wait" },
 		// what the script command Crouched answers
 		{ 0x00567B91, 14, { 0x8B, 0x8E, 0xD0, 0x04, 0x00, 0x00, 0x33, 0xC0, 0x38, 0x41, 0x20, 0x0F, 0x95, 0xC0 }, "Crouched" },
+		// the jump is the higher the longer the jump button was down, up to Skater_max_tense_time
+		{ 0x005605FE, 5, { 0x68, 0x97, 0xC0, 0x33, 0xF7 }, "do_jump: Skater_max_tense_time" },
+		{ 0x00560608, 6, { 0x8B, 0x8E, 0x3C, 0x03, 0x00, 0x00 }, "do_jump: how long the jump button was down" },
+		{ 0x005606B0, 6, { 0xDB, 0x86, 0x3C, 0x03, 0x00, 0x00 }, "do_jump: the share of the longest" },
+		// SetExtraTricks, and the check that ends them when their time is up
+		{ 0x004551C1, 14, { 0xC6, 0x86, 0xC8, 0x12, 0x00, 0x00, 0x01, 0xC6, 0x86, 0xC9, 0x12, 0x00, 0x00, 0x01 }, "SetExtraTricks: on, for as long as the trick lasts" },
+		{ 0x004551D8, 6, { 0x88, 0x9E, 0xC9, 0x12, 0x00, 0x00 }, "SetExtraTricks: for a Duration" },
+		{ 0x004551ED, 6, { 0x89, 0x86, 0xD0, 0x12, 0x00, 0x00 }, "SetExtraTricks: from now" },
+		{ 0x00455217, 6, { 0x89, 0x8E, 0xCC, 0x12, 0x00, 0x00 }, "SetExtraTricks: this long" },
+		{ 0x00455245, 16, { 0xC7, 0x86, 0xD4, 0x12, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x89, 0x86, 0xD8, 0x12, 0x00, 0x00 }, "SetExtraTricks: one list, its name" },
+		{ 0x0062EA00, 8, { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x59, 0x40 }, "SetExtraTricks: 100 ..." },
+		{ 0x0062FA28, 8, { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x18, 0x40 }, "SetExtraTricks: ... over 6 (frames to ms)" },
+		{ 0x004550EB, 11, { 0x8B, 0xBE, 0xD0, 0x12, 0x00, 0x00, 0xE8, 0x2A, 0xDB, 0x12, 0x00 }, "extra tricks: how long they have been on" },
+		{ 0x004550F6, 10, { 0x2B, 0xC7, 0x3B, 0x86, 0xCC, 0x12, 0x00, 0x00, 0x76, 0x0A }, "extra tricks: the time is up" },
+		{ 0x00582C20, 14, { 0x83, 0xEC, 0x0C, 0xA1, 0x68, 0xC8, 0x7C, 0x00, 0xD9, 0x05, 0x74, 0xA2, 0x68, 0x00 }, "the game clock" },
+		// the time until the skater is down, as GetAirTimeLeft asks it
+		{ 0x0055E736, 13, { 0xD9, 0xE0, 0xD9, 0x1C, 0x24, 0xD9, 0x44, 0x24, 0x10, 0xD9, 0x44, 0x24, 0x0C }, "time to a height" },
+		{ 0x0055E780, 4, { 0x59, 0xC2, 0x0C, 0x00 }, "time to a height: its answer" },
+		{ 0x0056772C, 6, { 0xD8, 0xA2, 0x18, 0x01, 0x00, 0x00 }, "GetAirTimeLeft: the height above the ground" },
+		{ 0x0056773D, 5, { 0xE8, 0xEE, 0x6F, 0xFF, 0xFF }, "GetAirTimeLeft: the time to it" },
+		// an animation of the object's, and how long it is
+		{ 0x00430630, 17, { 0x8B, 0x41, 0x38, 0x03, 0x44, 0x24, 0x04, 0x6A, 0x00, 0x50, 0xE8, 0x31, 0x7F, 0x04, 0x00, 0xD9, 0x00 }, "animation length" },
+		{ 0x00430650, 15, { 0x8B, 0x41, 0x38, 0x03, 0x44, 0x24, 0x04, 0x6A, 0x00, 0x50, 0xE8, 0x11, 0x7F, 0x04, 0x00 }, "animation exists" },
+		{ 0x0043065F, 9, { 0x83, 0xC4, 0x08, 0x85, 0xC0, 0x0F, 0x95, 0xC0, 0xC2 }, "animation exists: its answer" },
+		{ 0x00470410, 10, { 0x51, 0xD9, 0x41, 0x20, 0xDC, 0x0D, 0xA8, 0xEE, 0x62, 0x00 }, "channel speed" },
+		{ 0x0062EEA8, 8, { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x4E, 0x40 }, "channel speed: per 60th of a second" },
 		// a script calls another: the name of the one running goes into the next place for a
 		// call, and the return takes it back from the last one
 		{ 0x0040E7E6, 14, { 0x8B, 0x4D, 0x30, 0x8B, 0x95, 0xBC, 0x00, 0x00, 0x00, 0x8B, 0xC1, 0x6B, 0xC0, 0x2C }, "script call: the depth, the name" },
@@ -595,6 +680,12 @@ namespace FlickitGame {
 				s_available = false;
 			}
 		}
+		for (int i = 0; i < HELD_FLIPS; i++) {
+			if (Flickit::NameChecksum(kHeldFlips[i].text) != kHeldFlips[i].extra || Flickit::NameChecksum(kHeldFlips[i].animText) != kHeldFlips[i].anim
+				|| Flickit::NameChecksum(kHeldFlips[i].nollieText) != kHeldFlips[i].nollie) {
+				s_available = false;
+			}
+		}
 		static const struct { uint32_t name; const char* text; } scripts[] = {
 			{ kGroundLoop, "OnGroundAi" }, { kNollieLoop, "OnGroundNollieAI" }, { kWaitOneFrame, "WaitOneGameFrame" },
 			{ kWaitAnimChecking, "WaitAnimWhilstChecking" }, { kLand2, "Land2" }, { kSkateInLand, "SkateInLand" },
@@ -622,6 +713,16 @@ namespace FlickitGame {
 
 	static bool s_active = false;
 	static Frame s_frame;
+	// Frames handed over so far, for how fresh something said on one of them is
+	static uint32_t s_frames = 0;
+	// A crouch that ended without a pop: the game is to see no jump in it (PadUpdateHook)
+	static bool s_standUp = false;
+	// A pop out of a crouch: how deep the crouch was (Flickit::Output::popStrength), and on which frame
+	static float s_popStrength = -1.0f;
+	static uint32_t s_popFrame = 0;
+	// A jump from such a pop gets this share of a full one (JumpSpeedHook)
+	static float s_popShare = 1.0f;
+	static const uint32_t kPopFresh = 30;
 
 	static bool s_hasPick = false;
 	static Pick s_pick;
@@ -632,6 +733,14 @@ namespace FlickitGame {
 	void SetFrame(const Frame& frame) {
 		s_frame = frame;
 		s_active = true;
+		s_frames++;
+		if (frame.standUp) {
+			s_standUp = true;
+		}
+		if (frame.popStrength >= 0.0f) {
+			s_popStrength = frame.popStrength;
+			s_popFrame = s_frames;
+		}
 		// With Flickit's push the skater does not kick by himself
 		HoldAutoKick(frame.push > 0);
 		// The stick is watched on the ground too: a flick just before a jump makes the spin
@@ -1006,6 +1115,87 @@ namespace FlickitGame {
 		return state && state[STATE_CROUCHED] != 0;
 	}
 
+	static const HeldFlip* HeldFlipOf(uint32_t extra) {
+		for (int i = 0; i < HELD_FLIPS; i++) {
+			if (kHeldFlips[i].extra == extra) {
+				return &kHeldFlips[i];
+			}
+		}
+		return 0;
+	}
+
+	// Pressing for another rotation of a flip trick: not before this long into the trick (so that
+	// the stick has been held), and not later than this before the game stops taking the press
+	static const int32_t kHeldDecideMs = 120;
+	static const int32_t kHeldLeaveMs = 70;
+	// A flip trick bails a landing until its animation is this close to its end (FlipTrick:
+	// grindslack, 25 frames of the animation), and a rotation more is only pressed for with this
+	// much air to spare beyond that
+	static const float kFlipSlack = 25.0f / 60.0f;
+	static const float kFlipSpare = 2.0f / 60.0f;
+
+	// In the air: can the flip trick the skater is in be taken round once more now? It can when
+	// the game has given it a trick to turn into on another press of the trick button, that trick
+	// is the same one with one rotation more (kHeldFlips), the game still takes the press, and
+	// the air left (as the script command GetAirTimeLeft has it) lasts until that trick's
+	// animation no longer bails a landing. Skate keeps a held kickflip going on the same terms:
+	// another rotation while there is air enough to land it.
+	static void ReadHeldFlip(uint8_t* skater, Skater& out) {
+		const uint8_t* trick = (const uint8_t*)GetComponent(skater, kTrick);
+		if (!trick) {
+			return;
+		}
+		out.flipLevel = *(const uint32_t*)(trick + TRICK_EXTRA_START);
+		if (trick[TRICK_EXTRA_ON] == 0 || trick[TRICK_EXTRA_FOREVER] != 0) {
+			return;
+		}
+		const int32_t count = *(const int32_t*)(trick + TRICK_EXTRA_COUNT);
+		const HeldFlip* next = 0;
+		for (int i = 0; i < count && i < TRICK_EXTRA_MOST && !next; i++) {
+			next = HeldFlipOf(*(const uint32_t*)(trick + TRICK_EXTRA_NAMES + 4 * i));
+		}
+		if (!next) {
+			return;
+		}
+		const int32_t into = GameMs() - *(const int32_t*)(trick + TRICK_EXTRA_START);
+		if (into < kHeldDecideMs || into > *(const int32_t*)(trick + TRICK_EXTRA_LENGTH) - kHeldLeaveMs) {
+			return;
+		}
+		out.flipDecide = true;
+		out.flipNext = next->title;
+		// Where the animation of the trick is, how fast it runs: the next one goes on from there
+		uint8_t* anim = (uint8_t*)GetComponent(skater, kAnimation);
+		const uint8_t* channel = anim ? *(const uint8_t* const*)(anim + ANIM_FIRST) : 0;
+		if (!channel || *(const int32_t*)(channel + CHANNEL_SELF) == -1 || *(const int32_t*)(channel + CHANNEL_BACKWARDS) != 0) {
+			return;
+		}
+		const float speed = *(const float*)(channel + CHANNEL_SPEED) * 60.0f;
+		const float at = *(const float*)(channel + CHANNEL_TIME) - *(const float*)(channel + CHANNEL_START);
+		float length = 0.0f;
+		const uint32_t anims[2] = { next->anim, next->nollie };
+		for (int i = 0; i < 2; i++) {
+			if (AnimExists(anim, anims[i])) {
+				const float l = std::fabs(AnimLength(anim, anims[i]));
+				if (l > length) {
+					length = l;
+				}
+			}
+		}
+		if (!(speed > 0.01f) || !(length > 0.0f) || !(at >= 0.0f)) {
+			return;
+		}
+		out.flipNeed = (length - kFlipSlack - at) / speed + kFlipSpare;
+		uint8_t* core = (uint8_t*)GetComponent(skater, kSkaterCorePhysics);
+		const uint8_t* state = (const uint8_t*)GetComponent(skater, kSkaterState);
+		if (!core || !state) {
+			return;
+		}
+		const float y = ((const float*)(skater + OBJECT_POSITION))[1];
+		const float vy = ((const float*)(skater + OBJECT_VELOCITY))[1];
+		out.flipAirLeft = TimeToHeight(core, y - *(const float*)(state + STATE_HEIGHT), y, vy);
+		out.flipMore = out.flipAirLeft >= out.flipNeed;
+	}
+
 	bool ReadSkater(Skater& out) {
 		if (!Available()) {
 			return false;
@@ -1031,6 +1221,16 @@ namespace FlickitGame {
 		}
 		// The game's own test (Skating): not driving, and the physics are the board's
 		out.skating = state[STATE_DRIVING] == 0 && *(const int32_t*)(state + STATE_PHYSICS) == 0;
+
+		out.flipMore = false;
+		out.flipDecide = false;
+		out.flipLevel = 0;
+		out.flipNext = "";
+		out.flipAirLeft = 0.0f;
+		out.flipNeed = 0.0f;
+		if (s_installed && out.state == Flickit::STATE_AIR && out.skating && state[STATE_BAILING] == 0) {
+			ReadHeldFlip(skater, out);
+		}
 
 		// The board has just touched a rail: what the script of the last grind said is history
 		if (skater != s_lastSkater || (out.state == Flickit::STATE_RAIL && s_lastState != Flickit::STATE_RAIL)) {
@@ -1268,8 +1468,19 @@ namespace FlickitGame {
 
 	// Stands where the game calls do_jump. Same convention: this in ecx, one argument, which the
 	// callee takes off the stack.
+	//
+	// The game makes a jump the higher the longer the jump button was down, up to a fifth of a
+	// second (Skater_max_tense_time). Out of a crouch of Flickit's it is how deep the crouch was,
+	// the way Skate's pop is: the game is given the whole fifth of a second, so that it works out
+	// the skater's best jump, and that is scaled for the crouch below.
 	static void __fastcall JumpHook(uint8_t* core, void* /*edx*/, void* params) {
 		s_jumping = (s_active && s_frame.pop > 0 && IsLocal(core)) ? core : 0;
+		s_popShare = 1.0f;
+		if (s_jumping && s_popStrength >= 0.0f && s_frames - s_popFrame <= kPopFresh) {
+			*(int32_t*)(core + CORE_TENSE_TIME) = 0x7FFFFFFF;   // the game takes the lesser of this and its most
+			s_popShare = Flickit::PopDepthShare(s_popStrength);
+		}
+		s_popStrength = -1.0f;
 		DoJump(core, params);
 		s_jumping = 0;
 	}
@@ -1280,7 +1491,7 @@ namespace FlickitGame {
 	static bool __fastcall JumpSpeedHook(void* params, void* /*edx*/, uint32_t name, float* speed, int assert) {
 		const bool given = StructGetFloat(params, name, speed, assert);
 		if (s_jumping && speed) {
-			*speed *= Flickit::JumpPopFactor(s_frame.pop);
+			*speed *= Flickit::JumpPopFactor(s_frame.pop) * s_popShare;
 		}
 		return given;
 	}
@@ -1565,7 +1776,7 @@ namespace FlickitGame {
 		if (s_turnKept && s_turnKept + INPUT_PAD == pad) {
 			s_turnKept = 0;     // the game has just written both anew
 		}
-		if (!s_active || s_frame.push <= 0 || !s_frame.pushOverTurn || !s_push.Animating()) {
+		if (!s_active || (!s_standUp && (s_frame.push <= 0 || !s_frame.pushOverTurn || !s_push.Animating()))) {
 			return;
 		}
 		uint8_t* skater = LocalSkater();
@@ -1573,6 +1784,19 @@ namespace FlickitGame {
 		uint8_t* input = core ? *(uint8_t* const*)(core + CORE_INPUT) : 0;
 		if (!input || input + INPUT_PAD != pad) {
 			return;
+		}
+		if (s_standUp) {
+			// A crouch of Flickit's ended without a flick. The jump button is up on this frame, and
+			// the game jumps when it goes up after a crouch: so the crouch goes too, before the
+			// physics get to look, and he stands up again. A button the player holds stays his.
+			s_standUp = false;
+			uint8_t* state = (uint8_t*)GetComponent(skater, kSkaterState);
+			if (state && input[INPUT_JUMP_PRESSED] == 0) {
+				state[STATE_CROUCHED] = 0;
+			}
+			if (s_frame.push <= 0 || !s_frame.pushOverTurn || !s_push.Animating()) {
+				return;
+			}
 		}
 		// The scripts look at Left and Right, and get to the push, in a loop of the ground (they
 		// wait for the next frame in WaitOneGameFrame). While they are busy elsewhere (with a

@@ -39,10 +39,13 @@ struct Sim {
 	uint32_t epoch;
 	float x, y;
 	bool lt, rt;
+	int state;            // what the game says the skater is doing (STATE_UNKNOWN: nothing)
+	bool flipMore;        // the game has one more rotation of the flip trick to give
+	uint32_t flipLevel;
 	std::vector<Output> outs;
 	std::vector<uint32_t> times;
 
-	explicit Sim(double rate = 60.0, uint32_t start = 1000, bool centered = true) : hz(rate), clock(0.0), epoch(start), x(0), y(0), lt(false), rt(false) {
+	explicit Sim(double rate = 60.0, uint32_t start = 1000, bool centered = true) : hz(rate), clock(0.0), epoch(start), x(0), y(0), lt(false), rt(false), state(STATE_UNKNOWN), flipMore(false), flipLevel(0) {
 		SetDefaults(cfg);
 		if (centered) {
 			hold(50);     // the stick rests at the center before anything happens, as it does in play
@@ -58,6 +61,9 @@ struct Sim {
 		in.ry = y;
 		in.leftTrigger = lt;
 		in.rightTrigger = rt;
+		in.state = state;
+		in.flipMore = flipMore;
+		in.flipLevel = flipLevel;
 		Output o;
 		rec.Update(in, cfg, o);
 		outs.push_back(o);
@@ -358,16 +364,354 @@ static void testMirror() {
 
 static void testSlowRelease(double hz) {
 	g_case = "slow release";
-	Sim s(hz);
-	s.moveTo(0, -1, 60);
-	s.hold(250);
-	s.moveTo(0, 0, 300);     // ease the stick back
-	s.hold(600);
-	CHECK(s.popFrame() >= 0);
-	CHECK_EQ(s.presses(&Output::flip).size(), 0);
-	std::vector<Output> g = s.gestures();
-	CHECK_EQ(g.size(), 1);
-	if (g.size() == 1) CHECK_EQ(g[0].gesture, GESTURE_POP);
+	{
+		// Easing the stick back to the centre is no pop: Ollie goes up, and he stands up again
+		Sim s(hz);
+		s.moveTo(0, -1, 60);
+		s.hold(250);
+		s.moveTo(0, 0, 300);     // ease the stick back
+		s.hold(600);
+		CHECK(s.popFrame() >= 0);
+		CHECK_EQ(s.presses(&Output::ollie).size(), 1);
+		CHECK_EQ(s.presses(&Output::flip).size(), 0);
+		CHECK_EQ(s.gestures().size(), 0);
+		int ups = 0, at = -1;
+		for (size_t i = 0; i < s.outs.size(); i++) {
+			if (s.outs[i].standUp) { ups++; at = (int)i; }
+			CHECK(s.outs[i].popStrength < 0.0f);
+		}
+		CHECK_EQ(ups, 1);
+		CHECK_EQ(at, s.popFrame());    // on the frame Ollie goes up
+		CHECK(!s.rec.Busy());
+	}
+	g_case = "letting go of the stick";
+	{
+		// The stick let go springs back to the centre: no pop either
+		Sim s(hz);
+		s.moveTo(0, -1, 60);
+		s.hold(250);
+		s.spring(30);
+		s.hold(400);
+		CHECK_EQ(s.presses(&Output::ollie).size(), 1);
+		CHECK_EQ(s.gestures().size(), 0);
+		int ups = 0;
+		for (size_t i = 0; i < s.outs.size(); i++) if (s.outs[i].standUp) ups++;
+		CHECK_EQ(ups, 1);
+		// standing up takes as long as the stick needs to come to rest, and no more than a flick window
+		const int up = s.popFrame();
+		CHECK(up >= 0);
+		// and a flick after that is a wind-up and a pop again
+		flick(s, D, U);
+		CHECK_EQ(s.presses(&Output::ollie).size(), 2);
+		CHECK_EQ(s.gestures().size(), 1);
+	}
+	g_case = "out of the crouch, and stopped short";
+	{
+		// Out of the crouch but neither flicked nor at rest: he stands up once a flick would have
+		// had to come
+		const float spots[][2] = { { 0.0f, -0.28f }, { -0.36f, 0.0f }, { 0.25f, 0.18f } };
+		for (int k = 0; k < 3; k++) {
+			Sim s(hz);
+			s.moveTo(0, -1, 60);
+			s.hold(250);
+			s.moveTo(spots[k][0], spots[k][1], 40);
+			s.hold(500);
+			CHECK_EQ(s.gestures().size(), 0);
+			int ups = 0, at = -1, left = -1;
+			for (size_t i = 0; i < s.outs.size(); i++) {
+				if (s.outs[i].standUp) { ups++; at = (int)i; }
+				if (left < 0 && i > 0 && s.outs[i - 1].ollie && s.outs[i].ollie && s.times[i] >= s.times[0] + 50 + 60 + 250 + 40 - 20) left = (int)i;
+			}
+			CHECK_EQ(ups, 1);
+			CHECK(at >= 0 && s.msBetween(0, at) >= 50 + 60 + 250 + 200 - 34 && s.msBetween(0, at) <= 50 + 60 + 250 + 40 + 200 + 34);
+		}
+	}
+	g_case = "a slow flick out of the crouch";
+	{
+		// Across the centre and up, but over half a second: no flick, he stands up on the way
+		Sim s(hz);
+		s.moveTo(0, -1, 60);
+		s.hold(250);
+		s.moveTo(0, 1, 600);
+		s.spring();
+		s.hold(400);
+		CHECK_EQ(s.gestures().size(), 0);
+		CHECK_EQ(s.presses(&Output::flip).size(), 0);
+	}
+}
+
+static void testWeakThumbs(double hz) {
+	// Skate's gestures start a third of the way down and end not half way out: so do these
+	struct Case { const char* name; float from, pull, to, reach; int slot, end; };
+	const Case cases[] = {
+		{ "weak ollie", D, 0.4f, U, 0.45f, DIR_NONE, DIR_U },
+		{ "weak kickflip", D, 0.4f, UR, 0.45f, DIR_L, DIR_UR },
+		{ "weak heelflip", D, 0.45f, UL, 0.5f, DIR_R, DIR_UL },
+		{ "weak varial kickflip", DL, 0.45f, UR, 0.5f, DIR_DL, DIR_UR },
+	};
+	for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+		g_case = cases[i].name;
+		Sim s(hz);
+		const float a = cases[i].from * kPi / 180.0f, b = cases[i].to * kPi / 180.0f;
+		s.moveTo(cases[i].pull * cosf(a), cases[i].pull * sinf(a), 60);
+		s.hold(250);
+		s.moveTo(cases[i].reach * cosf(b), cases[i].reach * sinf(b), 40);
+		s.spring();
+		s.hold(400);
+		std::vector<Output> g = s.gestures();
+		CHECK_EQ(g.size(), 1);
+		if (g.size() == 1) {
+			CHECK_EQ(g[0].gesture, cases[i].slot == DIR_NONE ? GESTURE_POP : GESTURE_FLIP);
+			CHECK_EQ(g[0].end, cases[i].end);
+			CHECK_EQ(g[0].slot, cases[i].slot);
+		}
+		std::vector<Press> flips = s.presses(&Output::flip);
+		CHECK_EQ(flips.size(), cases[i].slot == DIR_NONE ? 0u : 1u);
+	}
+	g_case = "too little to crouch";
+	{
+		// Under a third of the way down nothing crouches, and nothing pops
+		Sim s(hz);
+		s.moveTo(0, -0.3f, 60);
+		s.hold(250);
+		s.moveTo(0, 0.9f, 40);
+		s.spring();
+		s.hold(400);
+		CHECK_EQ(s.presses(&Output::ollie).size(), 0);
+		CHECK_EQ(s.gestures().size(), 0);
+	}
+}
+
+static void testCrouchDepth(double hz) {
+	// How strong the pop is: how far the stick was pulled, after the crouch has had a fifth of a
+	// second to get there
+	struct Case { const char* name; float pull; double holdMs; float least, most; };
+	const Case cases[] = {
+		{ "full pull", 1.0f, 300, 0.999f, 1.0f },
+		{ "nine tenths", 0.9f, 300, 0.97f, 1.0f },
+		{ "half way", 0.6f, 300, (0.6f - 0.35f) / 0.55f - 0.03f, (0.6f - 0.35f) / 0.55f + 0.03f },
+		{ "only just", 0.37f, 300, 0.0f, 0.06f },
+		{ "a quick flick", 1.0f, 40, 0.0f, 0.45f },
+	};
+	for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+		g_case = cases[i].name;
+		Sim s(hz);
+		s.moveTo(0, -cases[i].pull, 30);
+		s.hold(cases[i].holdMs);
+		s.moveTo(0, 1, 30);
+		s.spring();
+		s.hold(300);
+		int pops = 0;
+		float strength = -1.0f;
+		for (size_t k = 0; k < s.outs.size(); k++) {
+			if (s.outs[k].popStrength >= 0.0f) { pops++; strength = s.outs[k].popStrength; }
+		}
+		CHECK_EQ(pops, 1);
+		CHECK(strength >= cases[i].least && strength <= cases[i].most);
+		const int pop = s.popFrame();
+		CHECK(pop >= 0 && s.outs[pop].popStrength >= 0.0f);   // reported on the frame Ollie goes up
+	}
+	g_case = "deeper is stronger";
+	{
+		float last = -1.0f;
+		const float pulls[] = { 0.4f, 0.5f, 0.6f, 0.7f, 0.8f };
+		for (int i = 0; i < 5; i++) {
+			Sim s(hz);
+			s.moveTo(0, -pulls[i], 30);
+			s.hold(300);
+			s.moveTo(0, 1, 30);
+			s.spring();
+			s.hold(300);
+			float strength = -1.0f;
+			for (size_t k = 0; k < s.outs.size(); k++) if (s.outs[k].popStrength >= 0.0f) strength = s.outs[k].popStrength;
+			CHECK(strength > last);
+			last = strength;
+		}
+	}
+	g_case = "a late flick out of a full crouch";
+	{
+		// How deep the crouch was is taken as the stick leaves it: a flick that comes late, but in
+		// time, is still a full pop
+		Sim s(hz);
+		s.moveTo(0, -1, 30);
+		s.hold(300);
+		s.moveTo(0, -0.28f, 20);
+		s.hold(170);
+		s.moveTo(0, 1, 25);
+		s.spring();
+		s.hold(300);
+		float strength = -1.0f;
+		for (size_t k = 0; k < s.outs.size(); k++) if (s.outs[k].popStrength >= 0.0f) strength = s.outs[k].popStrength;
+		CHECK(strength >= 0.999f);
+		CHECK_EQ(s.gestures().size(), 1);
+	}
+	g_case = "eased off before the flick";
+	{
+		// Pulled all the way, then eased to half way and held there: a half-way pop
+		Sim s(hz);
+		s.moveTo(0, -1, 30);
+		s.hold(300);
+		s.moveTo(0, -0.6f, 40);
+		s.hold(300);
+		s.moveTo(0, 1, 30);
+		s.spring();
+		s.hold(300);
+		float strength = -1.0f;
+		for (size_t k = 0; k < s.outs.size(); k++) if (s.outs[k].popStrength >= 0.0f) strength = s.outs[k].popStrength;
+		CHECK(strength > 0.4f && strength < 0.5f);
+	}
+}
+
+static void testHeldFlip(double hz) {
+	g_case = "held flip";
+	{
+		// A kickflip with the stick kept where the flick ended: each time the game has another
+		// rotation to give, the trick button is pressed once more, in the trick's own direction
+		Sim s(hz);
+		s.state = STATE_GROUND;
+		s.moveTo(0, -1, 60);
+		s.hold(250);
+		const float b = UR * kPi / 180.0f;
+		s.moveTo(cosf(b), sinf(b), 35);
+		s.state = STATE_AIR;
+		s.hold(100);
+		CHECK(s.outs.back().holding);
+		s.flipLevel = 7;          // the game starts the kickflip; a while later it could take another
+		s.hold(50);
+		CHECK_EQ(s.presses(&Output::flip).size(), 1);    // nothing until the game says so
+		s.flipMore = true;
+		s.hold(30);
+		s.flipMore = false;
+		s.hold(80);
+		s.flipLevel = 8;          // the double kickflip
+		s.hold(50);
+		s.flipMore = true;
+		s.hold(30);
+		s.flipMore = false;
+		s.hold(100);
+		std::vector<Press> flips = s.presses(&Output::flip);
+		CHECK_EQ(flips.size(), 3);
+		for (size_t i = 0; i < flips.size(); i++) CHECK_EQ(flips[i].dir, DIR_L);
+		int again = 0;
+		for (size_t i = 0; i < s.outs.size(); i++) if (s.outs[i].flipAgain) again++;
+		CHECK_EQ(again, 2);
+		// let go: no more
+		s.spring();
+		s.flipLevel = 9;
+		s.flipMore = true;
+		s.hold(100);
+		CHECK_EQ(s.presses(&Output::flip).size(), 3);
+		CHECK(!s.outs.back().holding);
+	}
+	g_case = "flip let go";
+	{
+		// The same kickflip with the stick let go: the game's chance comes and goes
+		Sim s(hz);
+		s.state = STATE_GROUND;
+		s.moveTo(0, -1, 60);
+		s.hold(250);
+		const float b = UR * kPi / 180.0f;
+		s.moveTo(cosf(b), sinf(b), 35);
+		s.state = STATE_AIR;
+		s.spring();
+		s.flipLevel = 7;
+		s.flipMore = true;
+		s.hold(200);
+		CHECK_EQ(s.presses(&Output::flip).size(), 1);
+		CHECK(!s.outs.back().holding);
+	}
+	g_case = "let go, and pushed out again";
+	{
+		// The stick sprang back after the flick: putting it back out where the flick ended is
+		// not the flip held
+		Sim s(hz);
+		s.state = STATE_GROUND;
+		s.moveTo(0, -1, 60);
+		s.hold(250);
+		const float b = UR * kPi / 180.0f;
+		s.moveTo(cosf(b), sinf(b), 35);
+		s.state = STATE_AIR;
+		s.spring();
+		s.hold(40);
+		s.moveTo(cosf(b), sinf(b), 40);
+		s.hold(40);
+		s.flipLevel = 7;
+		s.flipMore = true;
+		s.hold(150);
+		CHECK_EQ(s.presses(&Output::flip).size(), 1);
+		int again = 0;
+		for (size_t i = 0; i < s.outs.size(); i++) if (s.outs[i].flipAgain) again++;
+		CHECK_EQ(again, 0);
+		CHECK(!s.outs.back().holding);
+	}
+	g_case = "a held shove-it, and the next wind-up";
+	{
+		// A pop shove-it held out at the side, then rolled down into a new wind-up: that is the
+		// next trick coming, and the shove-it is no longer held
+		Sim s(hz);
+		s.state = STATE_GROUND;
+		s.moveTo(0, -1, 60);
+		s.hold(250);
+		s.arcTo(R, 40);
+		s.state = STATE_AIR;
+		s.hold(150);
+		CHECK_EQ(s.presses(&Output::flip).size(), 1);
+		CHECK(s.outs.back().holding);
+		s.arcTo(DR, 40);
+		s.hold(40);
+		s.flipLevel = 7;
+		s.flipMore = true;
+		s.hold(150);
+		int again = 0;
+		for (size_t i = 0; i < s.outs.size(); i++) if (s.outs[i].flipAgain) again++;
+		CHECK_EQ(again, 0);
+		CHECK(!s.outs.back().holding);
+	}
+	g_case = "held, but eased off";
+	{
+		// Still in the same direction, but most of the way back: not held
+		Sim s(hz);
+		s.state = STATE_GROUND;
+		s.moveTo(0, -1, 60);
+		s.hold(250);
+		const float b = UR * kPi / 180.0f;
+		s.moveTo(cosf(b), sinf(b), 35);
+		s.state = STATE_AIR;
+		s.hold(60);
+		s.moveTo(0.2f * cosf(b), 0.2f * sinf(b), 40);
+		s.flipLevel = 7;
+		s.flipMore = true;
+		s.hold(100);
+		CHECK_EQ(s.presses(&Output::flip).size(), 1);
+		CHECK(!s.outs.back().holding);
+	}
+	g_case = "held, but drifted";
+	{
+		// Rolled on round the rim from where the flick ended: no longer held
+		Sim s(hz);
+		s.state = STATE_GROUND;
+		s.moveTo(0, -1, 60);
+		s.hold(250);
+		const float b = UR * kPi / 180.0f;
+		s.moveTo(cosf(b), sinf(b), 35);
+		s.state = STATE_AIR;
+		s.hold(60);
+		s.arcTo(L, 80);
+		s.flipLevel = 7;
+		s.flipMore = true;
+		s.hold(100);
+		CHECK_EQ(s.presses(&Output::flip).size(), 1);
+	}
+	g_case = "an ollie is not held";
+	{
+		Sim s(hz);
+		s.state = STATE_GROUND;
+		flick(s, D, U, 250, 35, 300);
+		s.flipLevel = 7;
+		s.flipMore = true;
+		s.hold(100);
+		CHECK_EQ(s.presses(&Output::flip).size(), 0);
+	}
 }
 
 static void testStartDwell() {
@@ -619,16 +963,21 @@ static void testRepull() {
 	Sim s;
 	s.moveTo(0, -1, 60);
 	s.hold(200);
-	s.moveTo(0, -0.3f, 50);       // eases below the release point: that is a pop
+	s.moveTo(0, -0.2f, 50);       // eases out of the crouch: no pop yet
 	s.hold(34);
-	s.moveTo(0, -1, 50);          // and straight back down: crouching again
+	s.moveTo(0, -1, 50);          // and straight back down: crouching on
 	s.hold(200);
-	CHECK_EQ(s.presses(&Output::ollie).size(), 2);
+	CHECK_EQ(s.presses(&Output::ollie).size(), 1);
 	CHECK(s.outs.back().ollie);
 	CHECK_EQ(s.presses(&Output::flip).size(), 0);
-	// there is at least one frame with Ollie up between the two holds
-	std::vector<Press> o = s.presses(&Output::ollie);
-	if (o.size() == 2) CHECK(o[1].first - (o[0].first + o[0].frames) >= 1);
+	CHECK_EQ(s.gestures().size(), 0);
+	// the flick from there pops
+	const float b = UR * kPi / 180.0f;
+	s.moveTo(cosf(b), sinf(b), 35);
+	s.spring();
+	s.hold(400);
+	CHECK_EQ(s.presses(&Output::ollie).size(), 1);
+	CHECK_EQ(s.presses(&Output::flip).size(), 1);
 }
 
 static void testIdleNoise() {
@@ -769,6 +1118,9 @@ int main() {
 		testFlips(hz);
 		testShoveIts(hz);
 		testSlowRelease(hz);
+		testWeakThumbs(hz);
+		testCrouchDepth(hz);
+		testHeldFlip(hz);
 		testNollie(hz);
 		testGrabs(hz);
 		testDoubleFlick(hz);

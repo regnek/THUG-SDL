@@ -14,14 +14,30 @@ Install
 
 In a level
 ----------
-Right stick down           crouch
-Let go, or flick           ollie
-Flick up-right / up-left   kickflip / heelflip
+Right stick down           crouch (a third of the way is enough; deeper = higher)
+Flick away from there      ollie
+Back to the centre         stand up, no ollie
+Flick up-right / up-left   kickflip / heelflip (keep the stick there:
+                           double, triple, if there is air for it)
 Drag to the right          pop shove-it
 Triggers                   grabs
 Bumpers                    spin + nollie / spin + revert, both = get off the board
 Flip or Ollie, on the ground   push (tap = a little, hold = a lot)
 Right stick click          Flickit off / on (for looking around)
+
+New in this build: the stick
+----------------------------
+  - Weak flicks count, as in Skate: a crouch starts a third of the way down,
+    and a flick 40 percent of the way out pops. If your thugsdl.ini already
+    has a [Flickit] section, change these four lines in it (the new section
+    is in flickit-ini-section.txt):
+      Engage=35   Release=30   Flick=40   Snap=60
+  - How far down the stick goes is how high the ollie goes (Skate's quick
+    pop to its full pop). The crouch the skater shows is still THUG's one.
+  - The stick back to the centre without a flick: he stands up, no ollie.
+  - Keep the stick where a kickflip's flick ended and it turns again:
+    Double, then Triple Kickflip, if there is air to land it. The same for
+    heelflips, impossibles and the 360 / 540 shove-its.
 
 The face buttons still work, except that the Ollie button pushes while the
 board rolls on the ground. The full table is in the README, section FLICKIT.
@@ -69,7 +85,7 @@ Rolling
 The board is pushed, rolls out and steers the way Skate's does. Three parts,
 three settings.
 
-  Pushing (new in this build: a crouch takes over from a push)
+  Pushing
   - The skater no longer kicks by himself. The Flip button pushes (THUG's own
     kick button), and so does the Ollie button while the board rolls on the
     ground. In the air, on a rail and in a manual both are what they were.
