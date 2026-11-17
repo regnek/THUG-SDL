@@ -17,6 +17,11 @@
 // time) once the game has started the animation he stands in, and blending is switched back
 // to what it was. A pop starts its animation without a blend, and the game drops every channel.
 //
+// Some crouches start with nothing standing to blend with: a short drop lands in THUG's crouch
+// bump, and the crouch idle follows it. Then the game side starts the idle he stands in under the
+// crouch (WantsStanding, Adopt): the crouch animation plays on as it was, and the standing pose
+// takes its share over a fifth of a second.
+//
 // What it relies on, read from THUG-SDL.exe:
 // - the switch: a byte at +0x34 of the component, 0 when it is made; PlayAnim drops every
 //   channel first when it is 0 or the blend has no time (0x00432281)
@@ -116,6 +121,19 @@ namespace FlickitPose {
 		{ 0xFC69157A, "NollieSkatingIdle" },
 		{ 0x2D6396B4, "NollieSkatingTurnLeft" },
 		{ 0xE9FA0017, "NollieSkatingTurnRight" },
+		{ 0xCE215C07, "SlowDownBrake" },
+		{ 0x299EE86B, "SlowDownBrake_Mongo" },
+		{ 0x6656FE62, "BrakeIdle" },
+		{ 0xDB200042, "MongoBrakeIdle" },
+		{ 0x47273509, "IdleBump" },
+		{ 0xC51801BC, "CessSlide180_FS" },
+		{ 0xA174C4B8, "CessSlide180_BS" },
+		{ 0x860F4FD8, "PushCycleArms1" },
+		{ 0x1F061E62, "PushCycleArms2" },
+		{ 0x68012EF4, "PushCycleArms3" },
+		{ 0xF665BB57, "PushCycleArms4" },
+		{ 0x81628BC1, "PushCycleArms5" },
+		{ 0x4C99321E, "SkateIdle" },
 	};
 	static const int STAND_ANIMS = (int)(sizeof(kStandAnims) / sizeof(kStandAnims[0]));
 
@@ -189,6 +207,18 @@ namespace FlickitPose {
 
 	// A crouch that has looked for the channel he stood in this long without finding it is reported
 	static const uint32_t kMissMs = 300;
+	// A standing pose started under a crouch takes its share at this pace (all of it in this long)
+	static const uint32_t kAdoptMs = 200;
+
+	// A channel's own fields, as the channel's Set (0x00470440) writes them
+	enum ChannelTimes {
+		CHANNEL_START = 0x14,           // where its animation starts (the lesser of start and end),
+		CHANNEL_TIME = 0x18,            // where it is,
+		CHANNEL_END = 0x1C,             // where it ends,
+		CHANNEL_SPEED = 0x20,           // how fast, per 60th of a second,
+		CHANNEL_BACKWARDS = 0x24,       // not 0: from the end to the start,
+		CHANNEL_LOOP = 0x28,            // 0 once, 1 Cycle, 2 PingPong, 3 wobble
+	};
 
 	class Keeper {
 	public:
@@ -205,6 +235,12 @@ namespace FlickitPose {
 			m_looking = false;
 			m_lookingSince = 0;
 			m_missTold = false;
+			m_wantsStanding = false;
+			m_lookingAnim = 0;
+			m_standingTried = false;
+			m_seen = 0;
+			m_seenName = 0;
+			m_seenOnGround = false;
 		}
 
 		// Once a frame, for the first player's skater: his animation component (0 for none),
@@ -212,6 +248,7 @@ namespace FlickitPose {
 		// on the ground), whether the game has him crouched, how deep the stick's crouch is (0,
 		// only just, to 1, all the way), and the game's clock
 		void Frame(uint8_t* anim, bool ground, bool stick, bool crouched, float depth, uint32_t now, Report& report) {
+			m_wantsStanding = false;
 			report.started = false;
 			report.from = 0;
 			report.lost = m_lostSeen;
@@ -227,8 +264,15 @@ namespace FlickitPose {
 				Forget();
 			}
 			uint8_t* const head = n > 0 ? channels[0] : 0;
+			// Where the animation playing was started: one of the air, still playing on the frame he
+			// lands, is not one he stands in
+			if (head != m_seen || (head && NameOf(head) != m_seenName)) {
+				m_seen = head;
+				m_seenName = head ? NameOf(head) : 0;
+				m_seenOnGround = ground;
+			}
 			// The animation he stands in: the one to come back to from a crouch
-			if (head && ground && StateOf(head) == CHANNEL_PLAYING && !IsCrouchAnim(NameOf(head))) {
+			if (head && ground && m_seenOnGround && StateOf(head) == CHANNEL_PLAYING && !IsCrouchAnim(NameOf(head))) {
 				m_lastAnim = anim;
 				m_last = head;
 				m_lastName = NameOf(head);
@@ -248,6 +292,9 @@ namespace FlickitPose {
 				m_missTold = false;
 			}
 			if (!crouch) {
+				m_standingTried = false;
+			}
+			if (!crouch) {
 				if (m_channel && !m_fading) {
 					m_fading = true;
 					m_fadeFrom = m_share;
@@ -264,6 +311,10 @@ namespace FlickitPose {
 				// The crouch has begun: the channel he stood in blends out behind the crouch's
 				const int at = (m_last && m_lastAnim == anim) ? Index(channels, n, m_last) : -1;
 				if (at < 1 || StateOf(m_last) != CHANNEL_LEAVING || NameOf(m_last) != m_lastName) {
+					// The game plays its crouch and nothing he stood in is left: a standing pose can
+					// be started under it (once a crouch)
+					m_wantsStanding = head && IsCrouchAnim(NameOf(head)) && !m_standingTried;
+					m_lookingAnim = anim;
 					if (!m_looking) {
 						m_looking = true;
 						m_lookingSince = now;
@@ -286,10 +337,56 @@ namespace FlickitPose {
 			m_fading = false;
 			const float d = depth > 0.0f ? (depth < 1.0f ? depth : 1.0f) : 0.0f;
 			const float share = 1.0f - d;
-			m_share = share > kLeastShare ? share : kLeastShare;
+			float want = share > kLeastShare ? share : kLeastShare;
+			if (m_adopting) {
+				// A standing pose started under the crouch comes in over a moment
+				const float most = m_adoptFrom + (float)(uint32_t)(now - m_adoptAt) / (float)kAdoptMs;
+				if (want > most) {
+					want = most;
+				}
+				else {
+					m_adopting = false;
+				}
+			}
+			m_share = want;
 			Hold();
 			KeepSecond(anim, channels, n);
 		}
+
+		// Whether the last frame's crouch found nothing standing to blend with while the game plays
+		// its crouch, so that a standing pose is to be started under it (see Adopt)
+		bool WantsStanding(const uint8_t* anim) const { return m_wantsStanding && anim == m_lookingAnim; }
+
+		// The game side has started a standing animation under the crouch: the channel it is in
+		// (second in the list, blending out) is the one to keep from now. Its share comes in from
+		// nothing at kAdoptMs. Returns false if that channel is not one to keep.
+		bool Adopt(uint8_t* anim, uint8_t* channel, uint32_t now) {
+			m_standingTried = true;
+			m_wantsStanding = false;
+			if (m_channel || !anim || !channel) {
+				return false;
+			}
+			uint8_t* channels[kMostChannels];
+			const int n = Channels(anim, channels);
+			if (Index(channels, n, channel) < 1 || StateOf(channel) != CHANNEL_LEAVING) {
+				return false;
+			}
+			m_anim = anim;
+			m_channel = channel;
+			m_name = NameOf(channel);
+			m_fading = false;
+			m_adopting = true;
+			m_adoptFrom = kLeastShare;
+			m_adoptAt = now;
+			m_share = kLeastShare;
+			m_looking = false;
+			Hold();
+			KeepSecond(anim, channels, n);
+			return true;
+		}
+
+		// Whether the last frame's crouch tried to start a standing pose already (once a crouch)
+		bool StandingTried() const { return m_standingTried; }
 
 		// The game is about to start a blend in the channels of "anim". The kept channel is put
 		// second, so that the start of the blend keeps it, and weighs nothing while the blend
@@ -408,10 +505,21 @@ namespace FlickitPose {
 		uint32_t m_fadeAt;          // when its share began to go
 		bool m_fadeStarted;
 
+		const uint8_t* m_seen;      // the channel playing on the last frame, its animation,
+		uint32_t m_seenName;
+		bool m_seenOnGround;        // and whether it was first seen with him on the ground
+
 		uint8_t* m_lastAnim;        // the channel playing when he last stood on the ground
 		uint8_t* m_last;
 		uint32_t m_lastName;
 		bool m_lostSeen;            // the channel was dropped between two frames
+
+		bool m_adopting;            // the kept channel was started under the crouch: its share comes in,
+		float m_adoptFrom;          // from this,
+		uint32_t m_adoptAt;         // at this time
+		bool m_wantsStanding;       // the crouch found nothing standing to blend with,
+		uint8_t* m_lookingAnim;     // in this component,
+		bool m_standingTried;       // and a standing pose has been tried for this crouch
 
 		uint8_t* m_switchAnim;      // the component whose blending the Keeper switched on,
 		uint8_t m_switchWas;        // and what the switch was before
@@ -430,6 +538,9 @@ namespace FlickitPose {
 			m_channel = 0;
 			m_name = 0;
 			m_share = 1.0f;
+			m_adopting = false;
+			m_adoptFrom = 0.0f;
+			m_adoptAt = 0;
 			m_fading = false;
 			m_fadeFrom = 0.0f;
 			m_fadeAsked = 0;

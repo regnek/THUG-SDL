@@ -141,6 +141,12 @@ namespace FlickitGame {
 	// its skeleton. Once a frame, in the component's update.
 	typedef void(__thiscall* PoseBlend_t)(void* anim);
 	static const PoseBlend_t PoseBlend = (PoseBlend_t)0x00431B60;
+	// CAnimationComponent: start an animation, what PlayAnim does once it has read its parameters:
+	// the name, whether to tell the other players of a net game, where it starts and ends
+	// (seconds), how it loops (0 once, 1 Cycle, 2 PingPong, 3 wobble), the blend's time, and its
+	// speed. The blend starts in it (BlendStartHook).
+	typedef void(__thiscall* PlayAnimCore_t)(void* anim, uint32_t name, int net, float from, float to, int loop, float blend, float speed);
+	static const PlayAnimCore_t PlayAnimCore = (PlayAnimCore_t)0x004320E0;
 	// The game's clock, in milliseconds (its frames, at 60 a second)
 	typedef int(__cdecl* GameMs_t)();
 	static const GameMs_t GameMs = (GameMs_t)0x00582C20;
@@ -284,6 +290,12 @@ namespace FlickitGame {
 	static const uint32_t kNollieLoop = 0xF8D9EFB4;           // OnGroundNollieAI
 	static const uint32_t kGroundLoop = 0x1DDE4804;           // OnGroundAi
 	static const uint32_t kWaitOneFrame = 0x18B3B291;         // WaitOneGameFrame: where the loops of the ground wait for the next frame
+	// The animations started under a crouch for it to blend with: the one the skater rolls in, and
+	// the one he rolls in in nollie stance
+	static const uint32_t kStandIdle = 0x23DB4AEA;          // Idle
+	static const uint32_t kStandNollieIdle = 0xFC69157A;    // NollieSkatingIdle
+	// the blend they start with (the game's own blend time; the Keeper sets the shares)
+	static const float kStandBlend = 0.3f;
 	static const uint32_t kWaitAnimChecking = 0x64DF5E4C;     // WaitAnimWhilstChecking
 	static const uint32_t kLand2 = 0x6D8A1BC1;                // Land2: the skater lands
 	static const uint32_t kSkateInLand = 0xE08E71D3;          // SkateInLand: he skates off a rail onto the ground
@@ -508,6 +520,12 @@ namespace FlickitGame {
 		{ 0x004307A2, 16, { 0x85, 0xED, 0xD9, 0x44, 0x24, 0x10, 0xD8, 0x64, 0x24, 0x54, 0x89, 0x6C, 0x24, 0x18, 0xD9, 0x1A }, "pose: the playing channel weighs the rest" },
 		{ 0x00431B60, 16, { 0x83, 0xEC, 0x08, 0x80, 0x3D, 0x60, 0xC8, 0x7C, 0x00, 0x00, 0x53, 0x8B, 0xD9, 0x0F, 0x85, 0xB8 }, "pose" },
 		{ 0x00430F20, 12, { 0x6A, 0xFF, 0x68, 0xEB, 0x2B, 0x62, 0x00, 0x64, 0xA1, 0x00, 0x00, 0x00 }, "blend start" },
+		{ 0x004320E0, 12, { 0x81, 0xEC, 0x4C, 0x05, 0x00, 0x00, 0xA1, 0xB0, 0x4A, 0x69, 0x00, 0x33 }, "PlayAnim's start of an animation" },
+		{ 0x0043210D, 8, { 0x80, 0xBC, 0x24, 0x5C, 0x05, 0x00, 0x00, 0x00 }, "PlayAnim's start: the other players are told when asked" },
+		{ 0x00432345, 3, { 0xC2, 0x1C, 0x00 }, "PlayAnim's start pops seven" },
+		{ 0x0047045F, 15, { 0xD9, 0x44, 0x24, 0x08, 0xD9, 0x59, 0x14, 0xD9, 0x51, 0x18, 0xD8, 0xD1, 0xDF, 0xE0, 0xF6 }, "a channel's Set: start and time" },
+		{ 0x00470480, 18, { 0xD9, 0x44, 0x24, 0x08, 0xD9, 0x59, 0x1C, 0xD9, 0x44, 0x24, 0x18, 0xDC, 0x35, 0xA8, 0xEE, 0x62, 0x00, 0xD9 }, "a channel's Set: end and speed" },
+		{ 0x004704A4, 18, { 0x8B, 0x54, 0x24, 0x04, 0x89, 0x41, 0x24, 0x8B, 0x44, 0x24, 0x10, 0x89, 0x41, 0x28, 0xC6, 0x41, 0x2C, 0x00 }, "a channel's Set: backwards and the loop" },
 		// the functions that get called
 		{ 0x004F94F0, 12, { 0x53, 0x56, 0x57, 0x8B, 0xF9, 0x33, 0xF6, 0xE8, 0x84, 0xC0, 0xF3, 0xFF }, "GetLocalSkater" },
 		{ 0x0041BDC0, 12, { 0x8B, 0x81, 0xF0, 0x00, 0x00, 0x00, 0x85, 0xC0, 0x74, 0x12, 0x8B, 0x4C }, "GetComponent" },
@@ -717,6 +735,20 @@ namespace FlickitGame {
 			if (Flickit::NameChecksum(kPushCuts[i].text) != kPushCuts[i].name) {
 				s_available = false;
 			}
+		}
+		// the crouch pose's names (flickit_pose.h) and the ones started under a crouch
+		for (int i = 0; i < FlickitPose::CROUCH_ANIMS; i++) {
+			if (Flickit::NameChecksum(FlickitPose::kCrouchAnims[i].name) != FlickitPose::kCrouchAnims[i].crc) {
+				s_available = false;
+			}
+		}
+		for (int i = 0; i < FlickitPose::STAND_ANIMS; i++) {
+			if (Flickit::NameChecksum(FlickitPose::kStandAnims[i].name) != FlickitPose::kStandAnims[i].crc) {
+				s_available = false;
+			}
+		}
+		if (Flickit::NameChecksum("Idle") != kStandIdle || Flickit::NameChecksum("NollieSkatingIdle") != kStandNollieIdle) {
+			s_available = false;
 		}
 		for (int i = 0; i < HELD_FLIPS; i++) {
 			if (Flickit::NameChecksum(kHeldFlips[i].text) != kHeldFlips[i].extra || Flickit::NameChecksum(kHeldFlips[i].animText) != kHeldFlips[i].anim
@@ -928,6 +960,10 @@ namespace FlickitGame {
 	static int s_poseMissChannels = 0;
 	static uint32_t s_poseMissLast = 0;
 	static int s_poseMissBlending = 0;
+	// and when a standing pose was started under a crouch that had none, under what
+	static uint32_t s_poseUnderSerial = 0;
+	static uint32_t s_poseUnderCrouch = 0;
+	static uint32_t s_poseUnderStand = 0;
 	// The clock that stands in where the game is told to play a push and no push animation is
 	// seen on the skater (Flickit::PushClock), and for the log the animation he was in instead
 	// when it took over
@@ -1392,6 +1428,9 @@ namespace FlickitGame {
 		out.poseMissChannels = s_poseMissChannels;
 		out.poseMissLast = s_poseMissLast;
 		out.poseMissBlending = s_poseMissBlending;
+		out.poseUnderSerial = s_poseUnderSerial;
+		out.poseUnderCrouch = s_poseUnderCrouch;
+		out.poseUnderStand = s_poseUnderStand;
 		out.spinSerial = s_spinSerial;
 		out.spinTurned = s_spinTurned;
 		out.spinFlick = s_spinFlick;
@@ -1830,6 +1869,7 @@ namespace FlickitGame {
 	// physics do: the physics get both back (GiveBackTurn) and turn the board as if nothing had
 	// happened.
 	static void ShowCrouch(uint8_t* skater);
+	static uint8_t* StandUnder(uint8_t* anim, uint32_t stand);
 
 	static void __fastcall PadUpdateHook(uint8_t* pad, void* /*edx*/, void* data) {
 		PadUpdate(pad, data);
@@ -2286,6 +2326,25 @@ namespace FlickitGame {
 		s_poseNow = (uint32_t)GameMs();
 		FlickitPose::Report report;
 		s_keeper.Frame(anim, ground, stick, crouched, s_frame.crouchPose, s_poseNow, report);
+		if (anim && s_keeper.WantsStanding(anim)) {
+			// The game plays its crouch and nothing he stood in is left to blend with (a short drop
+			// lands in the crouch's bump, and the crouch idle comes after it). Between frames of the
+			// loop of the ground no script waits for an animation: there a standing pose is started
+			// under the crouch.
+			const ScriptAt at = ScriptOf(skater);
+			const bool nollie = at.running == kNollieLoop || (at.running == kWaitOneFrame && at.caller == kNollieLoop);
+			const bool loop = nollie || at.running == kGroundLoop || (at.running == kWaitOneFrame && at.caller == kGroundLoop);
+			if (loop) {
+				const uint8_t* head = *(const uint8_t* const*)(anim + ANIM_FIRST);
+				const uint32_t crouchAnim = head ? *(const uint32_t*)(head + CHANNEL_NAME) : 0;
+				uint8_t* standing = StandUnder(anim, nollie ? kStandNollieIdle : kStandIdle);
+				if (s_keeper.Adopt(anim, standing, s_poseNow)) {
+					s_poseUnderCrouch = crouchAnim;
+					s_poseUnderStand = nollie ? kStandNollieIdle : kStandIdle;
+					s_poseUnderSerial++;
+				}
+			}
+		}
 		if (report.started) {
 			s_poseFrom = report.from;
 			s_poseSerial++;
@@ -2300,6 +2359,43 @@ namespace FlickitGame {
 			s_poseMissBlending = anim ? anim[FlickitPose::ANIM_BLENDING] : 0;
 			s_poseMissSerial++;
 		}
+	}
+
+	// Under a crouch with nothing standing to blend with, the animation he stands in is started with
+	// a blend, and the crouch animation again on top of it, where it was: for the scripts the crouch
+	// goes on as before. Returns the channel of the standing animation, or 0 if it was not started.
+	static uint8_t* StandUnder(uint8_t* anim, uint32_t stand) {
+		const uint8_t* head = *(const uint8_t* const*)(anim + ANIM_FIRST);
+		if (!head || *(const int32_t*)(head + CHANNEL_SELF) == -1 || anim[FlickitPose::ANIM_BLENDING] == 0
+			|| *(const int32_t*)(head + CHANNEL_BACKWARDS) != 0) {
+			return 0;
+		}
+		const uint32_t crouch = *(const uint32_t*)(head + CHANNEL_NAME);
+		const float start = *(const float*)(head + CHANNEL_START);
+		const float end = *(const float*)(head + CHANNEL_END);
+		const float time = *(const float*)(head + CHANNEL_TIME);
+		const float speed = *(const float*)(head + CHANNEL_SPEED) * 60.0f;
+		const int loop = *(const int32_t*)(head + FlickitPose::CHANNEL_LOOP);
+		if (!(end >= start) || !(time >= start && time <= end) || !(speed > 0.0f) || loop < 0 || loop > 3
+			|| !AnimExists(anim, stand)) {
+			return 0;
+		}
+		const float length = AnimLength(anim, stand);
+		if (!(length > 0.0f)) {
+			return 0;
+		}
+		PlayAnimCore(anim, stand, 0, 0.0f, length, 1, kStandBlend, 1.0f);
+		PlayAnimCore(anim, crouch, 0, start, end, loop, kStandBlend, speed);
+		uint8_t* again = *(uint8_t* const*)(anim + ANIM_FIRST);
+		if (!again || *(const int32_t*)(again + CHANNEL_SELF) == -1 || *(const uint32_t*)(again + CHANNEL_NAME) != crouch) {
+			return 0;
+		}
+		*(float*)(again + CHANNEL_TIME) = time;
+		uint8_t* second = FlickitPose::NextOf(again);
+		if (!second || *(const int32_t*)(second + CHANNEL_SELF) == -1 || *(const uint32_t*)(second + CHANNEL_NAME) != stand) {
+			return 0;
+		}
+		return second;
 	}
 
 	// Stands in PlayAnim's start of an animation, where the blend starts. Same convention: this

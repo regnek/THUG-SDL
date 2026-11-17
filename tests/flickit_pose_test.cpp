@@ -45,6 +45,7 @@ static const uint32_t kCrouchTurnLeftIdle = 0xBC6C0B31;
 static const uint32_t kCrouchedLand = 0xBC825547;
 static const uint32_t kOllie = 0x9B65D7B8;
 static const uint32_t kPushCycle = 0x4266D67F;
+static const uint32_t kCrouchBumpDown = 0x50159F24;
 
 static const uint8_t kFreed = 0xDD;
 
@@ -372,6 +373,7 @@ static void testCrouchFollowsTheStick(bool scriptsFirst) {
 	uint8_t* standing = r.anim.First();
 	// the stick goes down: the game crouches, and plays its crouch with its usual blend
 	r.Frame(true, 0.0f);
+	CHECK(!r.keeper.WantsStanding(r.anim.mem));      // he still stands in his own: nothing to start
 	r.Frame(true, 0.05f, kCrouchIdle, 0.3f);
 	for (int i = 0; i < 2; i++) {
 		r.Frame(true, 0.1f + 0.05f * i);
@@ -841,6 +843,140 @@ static void testBlendingSwitch() {
 	}
 }
 
+// What the game side does when the Keeper wants a standing pose: the idle under the crouch, and
+// the crouch animation again on top of it
+static uint8_t* StandUnder(Anim& a) {
+	const uint32_t crouch = NameOf(a.First());
+	a.PlayAnim(kIdle, 0.3f);
+	a.PlayAnim(crouch, 0.3f);
+	return NextOf(a.First());
+}
+
+static void testLandedInTheCrouch() {
+	g_case = "landed in the crouch";
+	// A short drop with the stick already down: the game lands him in its crouch bump and goes on to
+	// its crouch idle, and nothing he stood in is left. A standing pose is started under the crouch,
+	// and comes in over a fifth of a second.
+	Run r;
+	r.ground = false;
+	r.Frame(false, -1.0f, kOllie, 0.0f);
+	for (int i = 0; i < 20; i++) {
+		r.Frame(false, -1.0f);
+	}
+	r.ground = true;
+	r.Frame(true, 0.6f, kCrouchBumpDown, 0.3f);
+	for (int i = 0; i < 5; i++) {
+		r.Frame(true, 0.8f);
+	}
+	// (the bump plays in the landing's script, which waits for it: the game side starts nothing then)
+	r.Frame(true, 0.8f, kCrouchIdle, 0.3f);
+	r.Frame(true, 0.8f);
+	CHECK(r.keeper.Kept() == 0);
+	CHECK(r.keeper.WantsStanding(r.anim.mem));
+	uint8_t* standing = StandUnder(r.anim);
+	CHECK(NameOf(standing) == kIdle && StateOf(standing) == CHANNEL_LEAVING);
+	CHECK(r.keeper.Adopt(r.anim.mem, standing, r.now));
+	CHECK(!r.keeper.WantsStanding(r.anim.mem));
+	CHECK(r.keeper.Kept() == standing);
+	float last = 0.0f;
+	bool rising = true;
+	int frames = 0;
+	for (int i = 0; i < 30; i++) {
+		r.Frame(true, 0.8f);
+		const float share = r.ShareOf(standing);
+		rising = rising && share >= last - 1e-6f && r.SharesSane();
+		last = share;
+		if (share < 0.2f - 1e-4f) frames++;
+	}
+	CHECK(rising);
+	CHECK_NEAR(r.ShareOf(standing), 0.2, 2e-5);
+	CHECK(frames * 17 >= 34 && frames * 17 <= (int)kAdoptMs + 17);   // it came in over a moment
+	CHECK(r.anim.most <= 3);
+	// eased back: up he comes
+	for (int i = 0; i < 10; i++) {
+		r.Frame(true, 0.3f);
+	}
+	CHECK_NEAR(r.ShareOf(standing), 0.7, 2e-5);
+	// an animation of the air, still playing on the frame he lands, is not one he stood in
+	{
+		Run a;
+		a.ground = false;
+		a.Frame(false, -1.0f, kOllie, 0.0f);
+		for (int i = 0; i < 3; i++) {
+			a.Frame(false, -1.0f);
+		}
+		a.ground = true;
+		a.Frame(true, 0.5f, kCrouchBumpDown, 0.3f);
+		a.Frame(true, 0.5f, kCrouchIdle, 0.3f);
+		a.Frame(true, 0.5f);
+		CHECK(a.keeper.Kept() == 0);
+		CHECK(a.started == 0);
+	}
+	// only once a crouch
+	Run q;
+	q.ground = false;
+	q.Frame(false, -1.0f, kOllie, 0.0f);
+	for (int i = 0; i < 3; i++) {
+		q.Frame(false, -1.0f);
+	}
+	q.ground = true;
+	q.Frame(true, 0.5f, kCrouchBumpDown, 0.3f);
+	q.Frame(true, 0.5f, kCrouchIdle, 0.3f);
+	q.Frame(true, 0.5f);
+	CHECK(q.keeper.WantsStanding(q.anim.mem));
+	CHECK(!q.keeper.Adopt(q.anim.mem, q.anim.First(), q.now));   // not one to keep: the one playing
+	q.Frame(true, 0.5f);
+	CHECK(!q.keeper.WantsStanding(q.anim.mem));
+	CHECK(q.keeper.Kept() == 0);
+	// one that has just run out is not one to keep
+	{
+		Run b;
+		b.ground = false;
+		b.Frame(false, -1.0f, kOllie, 0.0f);
+		for (int i = 0; i < 3; i++) {
+			b.Frame(false, -1.0f);
+		}
+		b.ground = true;
+		b.Frame(true, 0.5f, kCrouchBumpDown, 0.3f);
+		b.Frame(true, 0.5f, kCrouchIdle, 0.3f);
+		b.Frame(true, 0.5f);
+		uint8_t* gone = StandUnder(b.anim);
+		StateOf(gone) = CHANNEL_DONE;
+		CHECK(!b.keeper.Adopt(b.anim.mem, gone, b.now));
+		CHECK(b.keeper.Kept() == 0);
+	}
+	// and the next crouch landed in tries again
+	{
+		Run c;
+		for (int k = 0; k < 2; k++) {
+			c.ground = false;
+			c.Frame(false, -1.0f, kOllie, 0.0f);
+			for (int i = 0; i < 3; i++) {
+				c.Frame(false, -1.0f);
+			}
+			c.ground = true;
+			c.Frame(true, 0.5f, kCrouchBumpDown, 0.3f);
+			c.Frame(true, 0.5f, kCrouchIdle, 0.3f);
+			c.Frame(true, 0.5f);
+			CHECK(c.keeper.WantsStanding(c.anim.mem));
+			CHECK(c.keeper.Adopt(c.anim.mem, StandUnder(c.anim), c.now));
+			for (int i = 0; i < 20; i++) {
+				c.Frame(true, 0.5f);
+			}
+			CHECK_NEAR(c.ShareOf(c.keeper.Kept()), 0.5, 2e-5);
+			c.Frame(false, -1.0f, kOllie, 0.0f);          // the pop
+		}
+	}
+	// a new crouch may try again
+	q.Frame(false, -1.0f, kIdle, 0.3f);
+	q.Frame(false, -1.0f);
+	q.Frame(true, 0.0f);
+	q.Frame(true, 0.2f, kCrouchIdle, 0.3f);
+	q.Frame(true, 0.4f);
+	CHECK(q.keeper.Kept() != 0);
+	CHECK(q.from == kIdle);
+}
+
 int main() {
 	testCrouchFollowsTheStick(false);
 	testCrouchFollowsTheStick(true);
@@ -858,6 +994,7 @@ int main() {
 	testFadeWithoutFrames();
 	testListCleared();
 	testBlendingSwitch();
+	testLandedInTheCrouch();
 	std::printf("%d checks, %d failures\n", g_checks, g_failures);
 	return g_failures == 0 ? 0 : 1;
 }

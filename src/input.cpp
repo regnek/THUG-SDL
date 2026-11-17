@@ -337,6 +337,7 @@ uint32_t flickitWaySerial = 0;                           // for the log: the las
 uint32_t flickitPoseSerial = 0;                          // for the log: the last crouch that showed the stick's depth
 uint32_t flickitPoseLostSerial = 0;                      // for the log: the last time the game dropped the pose kept for a crouch
 uint32_t flickitPoseMissSerial = 0;                      // for the log: the last crouch that found no pose to stand in
+uint32_t flickitPoseUnderSerial = 0;                     // for the log: the last standing pose started under a crouch
 FlickitGame::Skater flickitFlipSkater;                   // the skater as last read, for the log of a held flip trick
 uint32_t flickitFlipToldLevel = 0;                       // the last held flip trick the log said had no air for another rotation
 uint32_t flickitSpinSerial = 0;                          // for the log: the last air Flickit turned the skater in
@@ -634,6 +635,13 @@ static void flickitLogGame(const FlickitGame::Skater& sk, uint32_t now) {
 	if (sk.poseLostSerial != flickitPoseLostSerial) {
 		flickitPoseLostSerial = sk.poseLostSerial;
 		Log::TypedLog(CHN_SDL, "Flickit: the game started an animation without a blend in the crouch: for the rest of it he crouches as the game has it\n");
+	}
+	if (sk.poseUnderSerial != flickitPoseUnderSerial) {
+		flickitPoseUnderSerial = sk.poseUnderSerial;
+		const char* crouch = FlickitPose::AnimName(sk.poseUnderCrouch);
+		const char* stand = FlickitPose::AnimName(sk.poseUnderStand);
+		Log::TypedLog(CHN_SDL, "Flickit: the crouch had nothing standing to blend with (he is in %s): %s is started under it, and the crouch goes as deep as the stick\n",
+			crouch ? crouch : "a crouch", stand ? stand : "the idle");
 	}
 	if (sk.poseMissSerial != flickitPoseMissSerial) {
 		flickitPoseMissSerial = sk.poseMissSerial;

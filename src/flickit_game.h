@@ -135,6 +135,9 @@ namespace FlickitGame {
 		int poseMissChannels;   // how many channels his animation had,
 		uint32_t poseMissLast;  // the animation he last stood in (0: none seen),
 		int poseMissBlending;   // and his animation component's blending switch
+		uint32_t poseUnderSerial;// goes up when a standing pose was started under such a crouch:
+		uint32_t poseUnderCrouch;// the crouch animation,
+		uint32_t poseUnderStand; // and the animation started under it
 
 		// A flip trick held on the stick (Flickit::Input::flipMore)
 		bool flipMore;          // it can be taken round once more: press its button now
