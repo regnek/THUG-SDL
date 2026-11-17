@@ -384,6 +384,14 @@ static PushLog runPush(double rate, double seconds, double speed, const Press* p
 	const int frames = (int)(seconds * rate + 0.5);
 	for (int frame = 0; frame < frames; frame++) {
 		const double t = frame * dt;
+		// the game's picture of the pad, before the scripts: they are free to play the push
+		// in their loop, not while they wait for an animation or are busy elsewhere
+		const bool free = game.freeFrom >= 0.0 && t >= game.freeFrom - 1e-9 && !(game.script == SCRIPT_FLAT && waiting);
+		if (run.HideTurn(free, (float)dt)) {
+			CHECK(run.Animating());
+			CHECK(free);
+			log.hiding += dt;
+		}
 		// the game's scripts, before the physics
 		bool start = false;
 		if (game.cutAt >= 0.0 && !cut && anim.current && anim.running && clock / game.length >= game.cutAt) {
@@ -481,10 +489,6 @@ static PushLog runPush(double rate, double seconds, double speed, const Press* p
 			log.pushes++;
 		}
 		if (run.Animating()) log.asking += dt;
-		if (run.HideTurn()) {
-			CHECK(run.Animating());
-			log.hiding += dt;
-		}
 		// a push that has an animation is that animation's
 		if (run.Phase() >= PUSH_INTO) {
 			CHECK(anim.current);
@@ -549,12 +553,12 @@ struct Clip {
 };
 static const Clip kClip = { 0.8, 0.12, 0.30, 0.30, 0.60, 0.66, 0.88, 14.0, 14.0, 0.0, false, false, 0.0, 0.0 };
 
-static double jitter(int& seed) {
-	seed = seed * 1103515245 + 12345;
+static double jitter(uint32_t& seed) {
+	seed = seed * 1103515245u + 12345u;
 	return ((seed >> 16) & 0x7FFF) / 16383.5 - 1.0;
 }
 
-static void clipFeet(const Clip& c, double share, float* left, float* right, int* seed) {
+static void clipFeet(const Clip& c, double share, float* left, float* right, uint32_t* seed) {
 	const double deck = 5.7, ground = 1.2;
 	const double rest[3] = { 3.0, deck, -9.0 };
 	const double land[3] = { 9.0, ground, -9.0 + c.ahead - c.start };
@@ -619,7 +623,7 @@ static void clipFeet(const Clip& c, double share, float* left, float* right, int
 // The feet of one play of a clip, looked at so many times a second from the first share to the last
 static FootResult watchClip(const Clip& c, double fps, double firstShare, double lastShare, int* looks) {
 	FootWatch watch;
-	int seed = 7;
+	uint32_t seed = 7;
 	int n = 0;
 	for (int k = 0;; k++) {
 		const double share = k / fps / c.length;
@@ -1470,7 +1474,7 @@ static void testPushing() {
 		PushRun run;
 		PushAnim idle = { false, false, 5, 0.0f, 0.0f };
 		CHECK(!run.Animating());
-		CHECK(!run.HideTurn());
+		CHECK(!run.HideTurn(true, f60));
 		CHECK(!run.Active());
 		CHECK(!run.AnimCurrent());
 		CHECK_EQ(run.Phase(), PUSH_NONE);
@@ -1482,10 +1486,11 @@ static void testPushing() {
 			CHECK_EQ(run.Phase(), PUSH_ASKED);
 			CHECK(run.Animating());
 			CHECK(run.Active());
-			const double into = fmod((frame + 1) * frame60, 0.8);
-			if (into > 0.001 && into < 0.199) CHECK(run.HideTurn());
-			if (into > 0.201 && into < 0.799) CHECK(!run.HideTurn());
-			if (run.HideTurn()) hidden++;
+			const double into = fmod(frame * frame60, 0.8);
+			const bool hide = run.HideTurn(true, f60);
+			if (into > 0.001 && into < 0.199) CHECK(hide);
+			if (into > 0.201 && into < 0.799) CHECK(!hide);
+			if (hide) hidden++;
 		}
 		CHECK(hidden >= 40 && hidden <= 44);    // 2.5 s: three times a fifth of a second, and the first tenth of the fourth
 		// A push animation that was running before the button went down, and has its foot
@@ -1499,7 +1504,7 @@ static void testPushing() {
 		CHECK(waits.Step(f60, 200.0f, true, 100, busy, foot) == 0.0f);
 		CHECK_EQ(waits.Phase(), PUSH_ASKED);
 		CHECK(!waits.Animating());
-		CHECK(!waits.HideTurn());
+		CHECK(!waits.HideTurn(true, f60));
 		CHECK(waits.AnimCurrent());
 		CHECK(waits.Active());
 		// One that has stopped at its end is still the skater's animation. The game is asked
@@ -1509,14 +1514,14 @@ static void testPushing() {
 		CHECK(waits.Step(f60, 200.0f, true, 100, ended, foot) == 0.0f);
 		CHECK_EQ(waits.Phase(), PUSH_ASKED);
 		CHECK(waits.Animating());
-		CHECK(waits.HideTurn());
+		CHECK(waits.HideTurn(true, f60));
 		CHECK(waits.AnimCurrent());
 		// The game starts a push: the push takes up with it and asks no more
 		PushAnim fresh = { true, true, 7, 0.0f, 0.8f };
 		CHECK(run.Step(f60, 200.0f, true, 100, fresh, foot) == 0.0f);
 		CHECK_EQ(run.Phase(), PUSH_INTO);
 		CHECK(!run.Animating());
-		CHECK(!run.HideTurn());
+		CHECK(!run.HideTurn(true, f60));
 		CHECK(run.Active());
 		CHECK(run.AnimCurrent());
 		CHECK_EQ((int)run.Play(), 7);
@@ -1538,7 +1543,7 @@ static void testPushing() {
 		CHECK(run.Step(f60, 200.0f, true, 100, idle, foot) == 0.0f);
 		CHECK_EQ(run.Phase(), PUSH_ASKED);
 		CHECK(run.Animating());
-		CHECK(run.HideTurn());
+		CHECK(run.HideTurn(true, f60));
 		CHECK(!run.AnimCurrent());
 		// an animation of no length is no animation
 		PushRun other;
@@ -1595,6 +1600,64 @@ static void testPushing() {
 		patient.Step(f60, 100.0f, false, 100, nothing, foot);
 		CHECK_EQ(patient.Phase(), PUSH_ASKED);
 		CHECK(patient.Animating());
+	}
+
+	g_case = "rolling: Left and Right are kept from the scripts only while they could play the push";
+	{
+		// The push is wanted while the scripts are busy with a landing for half a second:
+		// meanwhile they see Left and Right as they are, and that time does not count. Once
+		// they are back in the loop of the ground the first fifth of a second is kept from them.
+		PushRun run;
+		PushAnim idle = { false, false, 1, 0.0f, 0.0f };
+		for (int frame = 0; frame < 30; frame++) {
+			run.Step(f60, 200.0f, true, 100, idle, foot);
+			CHECK(run.Animating());
+			CHECK(!run.HideTurn(false, f60));
+		}
+		int hidden = 0;
+		for (int frame = 0; frame < 48; frame++) {
+			run.Step(f60, 200.0f, true, 100, idle, foot);
+			const bool hide = run.HideTurn(true, f60);
+			CHECK_EQ(hide ? 1 : 0, frame < 12 ? 1 : 0);
+			if (hide) hidden++;
+		}
+		CHECK_EQ(hidden, 12);
+		// busy again in the middle of a fifth: it goes on where it stopped
+		PushRun again;
+		again.Step(f60, 200.0f, true, 100, idle, foot);
+		for (int frame = 0; frame < 6; frame++) CHECK(again.HideTurn(true, f60));
+		for (int frame = 0; frame < 20; frame++) CHECK(!again.HideTurn(false, f60));
+		for (int frame = 0; frame < 6; frame++) CHECK(again.HideTurn(true, f60));
+		CHECK(!again.HideTurn(true, f60));
+		// A frame that is no frame does not count, a long one counts a tenth of a second
+		PushRun odd;
+		odd.Step(f60, 200.0f, true, 100, idle, foot);
+		CHECK(odd.HideTurn(true, 0.0f));
+		CHECK(odd.HideTurn(true, -1.0f));
+		CHECK(odd.HideTurn(true, nan));
+		CHECK(odd.HideTurn(true, 5.0f));    // now 0.1 s of it
+		CHECK(odd.HideTurn(true, 0.05f));   // 0.15
+		CHECK(odd.HideTurn(true, 0.04f));   // 0.19
+		CHECK(odd.HideTurn(true, 0.04f));   // 0.23
+		CHECK(!odd.HideTurn(true, f60));
+		// a new push starts its own fifth of a second
+		PushAnim anim = { true, true, 2, 0.0f, 0.8f };
+		odd.Step(f60, 200.0f, true, 100, anim, foot);
+		CHECK(!odd.Animating());
+		CHECK(!odd.HideTurn(true, f60));
+		PushAnim later = { false, false, 3, 0.0f, 0.0f };
+		odd.Step(f60, 200.0f, true, 100, later, foot);
+		CHECK(odd.Animating());
+		CHECK(odd.HideTurn(true, f60));
+		// in a run with the scripts busy for the first 0.4 s: the push is played as soon as
+		// they are free, and they are kept from Left and Right for the frame that takes
+		Game late = kGame;
+		late.freeFrom = 0.4;
+		const Press hold[] = { { 0.0, 1.0 } };
+		const PushLog log = runPush(60.0, 2.0, 100.0, hold, 1, 100, foot, 0, late);
+		CHECK_EQ(log.plays, 1);
+		CHECK(near(log.took[0], 0.4, 1e-6));
+		CHECK(near(log.hiding, frame60, 1e-6));
 	}
 
 	g_case = "rolling: a push for an animation that is already running";
@@ -1833,7 +1896,7 @@ static void testPushing() {
 			CHECK_EQ(run.Phase(), PUSH_NONE);
 			CHECK(!run.Active());
 			CHECK(!run.Animating());
-			CHECK(!run.HideTurn());
+			CHECK(!run.HideTurn(true, f60));
 			for (int k = at[i] + 1; k <= 48; k++) {
 				anim.time = (float)(k * frame60);
 				CHECK(run.Step(f60, (float)speed, false, 100, anim, foot) == 0.0f);
@@ -1860,11 +1923,11 @@ static void testPushing() {
 		PushRun asked;
 		asked.Step(f60, 0.0f, true, 100, idle, foot);
 		CHECK_EQ(asked.Phase(), PUSH_ASKED);
-		CHECK(asked.HideTurn());
+		CHECK(asked.HideTurn(true, f60));
 		asked.Reset();
 		CHECK_EQ(asked.Phase(), PUSH_NONE);
 		CHECK(!asked.Animating());
-		CHECK(!asked.HideTurn());
+		CHECK(!asked.HideTurn(true, f60));
 		// With the button still down after it (Down let go again): the game is asked anew, and
 		// a foot that is in its stroke already is not this push's foot
 		PushRun again;
@@ -2592,7 +2655,7 @@ static void testFeet() {
 		FootWatch w;
 		float out[7 * 128];
 		CHECK_EQ(w.Looks(out, 128), 0);
-		int seed = 3;
+		uint32_t seed = 3;
 		for (int k = 47; k >= 0; k--) {     // in any order: they come out by their share
 			float left[3], right[3];
 			clipFeet(kClip, k / 48.0, left, right, &seed);

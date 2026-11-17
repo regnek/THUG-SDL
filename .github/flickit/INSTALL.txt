@@ -69,7 +69,7 @@ Rolling
 The board is pushed, rolls out and steers the way Skate's does. Three parts,
 three settings.
 
-  Pushing (new in this build: the push goes with the animation)
+  Pushing (new in this build: no wait after a landing or a bump)
   - The skater no longer kicks by himself. The Flip button pushes (THUG's own
     kick button), and so does the Ollie button while the board rolls on the
     ground. In the air, on a rail and in a manual both are what they were.
@@ -98,6 +98,10 @@ three settings.
     instead). PushMeasure=0 switches the
     watching off; then PushFootDown and PushFootUp alone say where in the
     animation the foot pushes, in percent of its length.
+  - After a landing, a skate-off from a rail or a bump into a wall the push
+    no longer waits for that animation to end: it cuts it short, a sixth of
+    a second after the landing (the game's window for a revert or a manual
+    stays). The log says "Flickit: the push cut the game's ... short".
   - The push is shown in a turn too (THUG shows only the turn). If that looks
     wrong, PushOverTurn=0 is THUG's way: the turn is shown, and there is no
     push while the stick is held to one side.

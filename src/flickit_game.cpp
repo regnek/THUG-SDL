@@ -123,6 +123,10 @@ namespace FlickitGame {
 	// goes through it. It only reads.
 	typedef bool(__thiscall* BonePosition_t)(void* skeleton, uint32_t bone, float* out);
 	static const BonePosition_t BonePosition = (BonePosition_t)0x00487100;
+	// CAnimationComponent: is the object's animation over (its first blend channel at its
+	// end, and not one that loops). The script command AnimFinished answers with it.
+	typedef bool(__thiscall* AnimOver_t)(void* anim);
+	static const AnimOver_t AnimOver = (AnimOver_t)0x004310D0;
 
 	enum {
 		// any component
@@ -152,6 +156,10 @@ namespace FlickitGame {
 
 		// Script::CScript
 		SCRIPT_PARAMS = 0x14,           // the parameters of the script that is running
+		SCRIPT_DEPTH = 0x30,            // how many calls deep it is
+		SCRIPT_CALLS = 0x8C,            // where the calls are kept, one after the other: ...
+		SCRIPT_CALL_SIZE = 0x2C,        // ... this long each, the name of the caller first
+		SCRIPT_CALLS_MOST = 0x10,       // there is room for this many
 		SCRIPT_NAME = 0xBC,             // and the checksum of its name
 
 		// CSkaterCorePhysicsComponent
@@ -230,6 +238,13 @@ namespace FlickitGame {
 	static const uint32_t kSquare = 0x321C9756;               // Square: the Flip button, the game's own button for a kick
 	static const uint32_t kRollingFriction = 0x78F80EC4;      // Physics_Rolling_Friction
 	static const uint32_t kNollieLoop = 0xF8D9EFB4;           // OnGroundNollieAI
+	static const uint32_t kGroundLoop = 0x1DDE4804;           // OnGroundAi
+	static const uint32_t kWaitOneFrame = 0x18B3B291;         // WaitOneGameFrame: where the loops of the ground wait for the next frame
+	static const uint32_t kWaitAnimChecking = 0x64DF5E4C;     // WaitAnimWhilstChecking
+	static const uint32_t kLand2 = 0x6D8A1BC1;                // Land2: the skater lands
+	static const uint32_t kSkateInLand = 0xE08E71D3;          // SkateInLand: he skates off a rail onto the ground
+	static const uint32_t kFlailLeft = 0xB4101D70;            // FlailLeft: he bumps into a wall
+	static const uint32_t kFlailRight = 0x756A7535;           // FlailRight
 	static const uint32_t kAirRotation = 0x4957DB43;          // Physics_Air_Rotation_stat
 	static const uint32_t kAnimation = 0x72AD7B23;            // Animation: the component that plays an object's animations
 	static const uint32_t kSkeleton = 0x222756D5;             // Skeleton: the component that has its bones
@@ -256,6 +271,46 @@ namespace FlickitGame {
 		{ 0x991F66BC, 2, "CrouchPush1" },
 	};
 	enum { PUSH_CLIPS = sizeof(kPushClips) / sizeof(kPushClips[0]) };
+
+	// The animations the game's scripts play when the skater lands (Land2, PlayLandAnim),
+	// skates off a rail onto the ground (SkateInLand) or bumps into a wall (FlailLeft,
+	// FlailRight), and then wait for to the end (WaitAnimWhilstChecking) before they go back
+	// to the loop that plays the push. A push of Flickit's cuts them short.
+	struct CutClip {
+		uint32_t name;
+		const char* text;
+	};
+	static const CutClip kPushCuts[] = {
+		{ 0x50159F24, "CrouchBumpDown" },
+		{ 0x47273509, "IdleBump" },
+		{ 0xBC825547, "CrouchedLand" },
+		{ 0xB9DA565C, "CrouchedLand1" },
+		{ 0x20D307E6, "CrouchedLand2" },
+		{ 0x57D43770, "CrouchedLand3" },
+		{ 0x01C6C9A9, "CrouchedLand1_small" },
+		{ 0x302ED334, "CrouchedLand2_small" },
+		{ 0x9659D880, "CrouchedLand3_small" },
+		{ 0xA6B243EA, "CrouchedLandTurn" },
+		{ 0x11A7B91F, "CrouchedLandTurn1" },
+		{ 0x88AEE8A5, "CrouchedLandTurn2" },
+		{ 0xFFA9D833, "CrouchedLandTurn3" },
+		{ 0x490A6675, "StretchLegsLand" },
+		{ 0xC72E8DD2, "SketchyLand" },
+		{ 0x39C49D4F, "SketchyLand1" },
+		{ 0x05AE68AE, "SketchyCrouchLand" },
+		{ 0x57FF2A27, "Land" },
+		{ 0xB4101D70, "FlailLeft" },
+		{ 0x986630A1, "FlailLeft2" },
+		{ 0x718F0623, "FlailLeftCrouched_small" },
+		{ 0xFB4885E9, "FlailLeftCrouched2" },
+		{ 0x8C4FB57F, "FlailLeftCrouched3" },
+		{ 0x756A7535, "FlailRight" },
+		{ 0x9E11FFD6, "FlailRight2" },
+		{ 0x4E3F0CA9, "FlailRightCrouched_small" },
+		{ 0xFEEF3ADB, "FlailRightCrouched2" },
+		{ 0x89E80A4D, "FlailRightCrouched3" },
+	};
+	enum { PUSH_CUTS = sizeof(kPushCuts) / sizeof(kPushCuts[0]) };
 
 	// Where the game's code is changed
 	static uint8_t* const kCatchTest1 = (uint8_t*)0x0056CB60;   // cmp byte ptr [eax+1A0h], 0   in maybe_stick_to_rail
@@ -297,6 +352,8 @@ namespace FlickitGame {
 	// call the turning in the air, in the physics of the air (0x0056BAD0), and inside that turning
 	// the two calls that ask how fast the skater turns: one for Left, one for Right
 	static uint8_t* const kAirTurnCall = (uint8_t*)0x0056BB46;
+	// in the script command AnimFinished, the call that asks whether the animation is over
+	static uint8_t* const kAnimFinishedCall = (uint8_t*)0x00432EF3;
 	static uint8_t* const kSpinLeftCall = (uint8_t*)0x0055F2FD;
 	static uint8_t* const kSpinRightCall = (uint8_t*)0x0055F361;
 
@@ -338,6 +395,8 @@ namespace FlickitGame {
 		{ 0x004566C9, 8, { 0x50, 0x8B, 0xCE, 0xE8, 0x9F, 0xB3, 0xFF, 0xFF }, "Held" },
 		{ 0x00437E9A, 9, { 0x57, 0x8D, 0x4E, 0x20, 0xE8, 0x0D, 0x30, 0x0E, 0x00 }, "pad update" },
 		{ 0x0056BB44, 7, { 0x8B, 0xCE, 0xE8, 0x05, 0x35, 0xFF, 0xFF }, "turning in the air" },
+		{ 0x00432EC1, 7, { 0x3D, 0xD5, 0x99, 0xCC, 0x76, 0x74, 0x2B }, "AnimFinished" },
+		{ 0x00432EF3, 11, { 0xE8, 0xD8, 0xE1, 0xFF, 0xFF, 0xF6, 0xD8, 0x1B, 0xC0, 0xF7, 0xD8 }, "AnimFinished: is the animation over" },
 		{ 0x0055F2F5, 13, { 0x8B, 0x4E, 0x0C, 0x68, 0x43, 0xDB, 0x57, 0x49, 0xE8, 0xCE, 0x77, 0xFB, 0xFF }, "spin rate for Left" },
 		{ 0x0055F359, 13, { 0x8B, 0x4E, 0x0C, 0x68, 0x43, 0xDB, 0x57, 0x49, 0xE8, 0x6A, 0x77, 0xFB, 0xFF }, "spin rate for Right" },
 		// the functions that get called
@@ -465,6 +524,17 @@ namespace FlickitGame {
 		{ 0x0044D41F, 10, { 0x8B, 0x4F, 0x18, 0x56, 0x50, 0xE8, 0xD7, 0x9C, 0x03, 0x00 }, "skeleton: the command's way to a bone" },
 		{ 0x00487100, 16, { 0x81, 0xEC, 0xC0, 0x00, 0x00, 0x00, 0x53, 0x8B, 0x9C, 0x24, 0xC8, 0x00, 0x00, 0x00, 0x56, 0x57 }, "bone position" },
 		{ 0x004871F6, 10, { 0xB0, 0x01, 0x81, 0xC4, 0xC0, 0x00, 0x00, 0x00, 0xC2, 0x08 }, "bone position: its answer" },
+		// is the animation over: the first channel, unless the list is empty, and the
+		// channel's own test (above)
+		{ 0x004310D0, 16, { 0x8B, 0x41, 0x24, 0x83, 0x78, 0x04, 0xFF, 0x74, 0x04, 0x85, 0xC0, 0x75, 0x03, 0x32, 0xC0, 0xC3 }, "animation over" },
+		{ 0x004310E0, 17, { 0x8B, 0x48, 0x04, 0x83, 0xE9, 0xFF, 0xF7, 0xD9, 0x1B, 0xC9, 0x23, 0xC8, 0xE9, 0xBF, 0xF2, 0x03, 0x00 }, "animation over: the channel's test" },
+		// a script calls another: the name of the one running goes into the next place for a
+		// call, and the return takes it back from the last one
+		{ 0x0040E7E6, 14, { 0x8B, 0x4D, 0x30, 0x8B, 0x95, 0xBC, 0x00, 0x00, 0x00, 0x8B, 0xC1, 0x6B, 0xC0, 0x2C }, "script call: the depth, the name" },
+		{ 0x0040E7F4, 14, { 0x03, 0x85, 0x8C, 0x00, 0x00, 0x00, 0x83, 0xC1, 0x01, 0x89, 0x4D, 0x30, 0x89, 0x10 }, "script call: the place for it" },
+		{ 0x0040EFF9, 15, { 0x8B, 0x7E, 0x30, 0x6B, 0xFF, 0x2C, 0x03, 0xBE, 0x8C, 0x00, 0x00, 0x00, 0x53, 0x8B, 0x0F }, "script return: the last call" },
+		{ 0x0040F008, 6, { 0x89, 0x8E, 0xBC, 0x00, 0x00, 0x00 }, "script return: the name" },
+		{ 0x0040E7A8, 5, { 0x68, 0xC0, 0x02, 0x00, 0x00 }, "script call: room for 16 calls" },
 		// the game's own "is he skating" test: the two offsets ReadSkater uses for it
 		{ 0x0044F8A0, 18, { 0x8B, 0x41, 0x2C, 0x80, 0xB8, 0x14, 0x01, 0x00, 0x00, 0x00, 0x75, 0x0C, 0x83, 0x78, 0x1C, 0x00, 0x75, 0x06 }, "skating test" },
 	};
@@ -497,6 +567,21 @@ namespace FlickitGame {
 		}
 		for (int i = 0; i < PUSH_CLIPS; i++) {
 			if (Flickit::NameChecksum(kPushClips[i].text) != kPushClips[i].name) {
+				s_available = false;
+			}
+		}
+		for (int i = 0; i < PUSH_CUTS; i++) {
+			if (Flickit::NameChecksum(kPushCuts[i].text) != kPushCuts[i].name) {
+				s_available = false;
+			}
+		}
+		static const struct { uint32_t name; const char* text; } scripts[] = {
+			{ kGroundLoop, "OnGroundAi" }, { kNollieLoop, "OnGroundNollieAI" }, { kWaitOneFrame, "WaitOneGameFrame" },
+			{ kWaitAnimChecking, "WaitAnimWhilstChecking" }, { kLand2, "Land2" }, { kSkateInLand, "SkateInLand" },
+			{ kFlailLeft, "FlailLeft" }, { kFlailRight, "FlailRight" },
+		};
+		for (size_t i = 0; i < sizeof(scripts) / sizeof(scripts[0]); i++) {
+			if (Flickit::NameChecksum(scripts[i].text) != scripts[i].name) {
 				s_available = false;
 			}
 		}
@@ -655,6 +740,10 @@ namespace FlickitGame {
 	static int s_footTraceLooks = 0;
 	// A foot that pushes this much earlier or later than last time (as a share of the animation) is news
 	static const float kFootNews = 0.03f;
+	// For the log: goes up when a push has cut one of the game's animations short, which, and how far it had got
+	static uint32_t s_cutSerial = 0;
+	static int s_cutClip = 0;
+	static float s_cutShare = 0.0f;
 	// The clock that stands in where the game is told to play a push and no push animation is
 	// seen on the skater (Flickit::PushClock), and for the log the animation he was in instead
 	// when it took over
@@ -850,6 +939,41 @@ namespace FlickitGame {
 		}
 	}
 
+	// Where an object's script is: the name of the script that is running, and of the one that
+	// called it (0 when none did)
+	struct ScriptAt {
+		uint32_t running;
+		uint32_t caller;
+	};
+	static ScriptAt ScriptOf(const uint8_t* object) {
+		ScriptAt at = { 0, 0 };
+		const uint8_t* script = *(const uint8_t* const*)(object + OBJECT_SCRIPT);
+		if (!script) {
+			return at;
+		}
+		at.running = *(const uint32_t*)(script + SCRIPT_NAME);
+		const int32_t depth = *(const int32_t*)(script + SCRIPT_DEPTH);
+		const uint8_t* calls = *(const uint8_t* const*)(script + SCRIPT_CALLS);
+		if (calls && depth > 0 && depth <= SCRIPT_CALLS_MOST) {
+			at.caller = *(const uint32_t*)(calls + (depth - 1) * SCRIPT_CALL_SIZE);
+		}
+		return at;
+	}
+
+	// A push button pushes: the skater is on his board on the ground with nothing balanced (the
+	// game does not kick in a manual either), he is not in a bail, no script has forbidden
+	// kicking and none has taken the controls away
+	static bool CanPush(const uint8_t* skater) {
+		const uint8_t* state = (const uint8_t*)GetComponent((void*)skater, kSkaterState);
+		const uint8_t* core = (const uint8_t*)GetComponent((void*)skater, kSkaterCorePhysics);
+		const uint8_t* balance = core ? *(const uint8_t* const*)(core + CORE_BALANCE) : 0;
+		const uint8_t* input = core ? *(const uint8_t* const*)(core + CORE_INPUT) : 0;
+		return state && *(const int32_t*)(state + STATE_STATE) == 0 && state[STATE_DRIVING] == 0
+			&& *(const int32_t*)(state + STATE_PHYSICS) == 0 && state[STATE_BAILING] == 0
+			&& balance != 0 && *(const uint32_t*)(balance + BALANCE_TYPE) == 0 && core[CORE_NO_KICK] == 0
+			&& input != 0 && input[INPUT_DISABLED] == 0 && input[INPUT_NET_DISABLED] == 0;
+	}
+
 	bool ReadSkater(Skater& out) {
 		if (!Available()) {
 			return false;
@@ -933,13 +1057,7 @@ namespace FlickitGame {
 			s_groundIdle++;
 		}
 		s_groundSeen = false;
-		const uint8_t* core = (const uint8_t*)GetComponent(skater, kSkaterCorePhysics);
-		const uint8_t* balance = core ? *(const uint8_t* const*)(core + CORE_BALANCE) : 0;
-		const uint8_t* input = core ? *(const uint8_t* const*)(core + CORE_INPUT) : 0;
-		out.rolling = out.skating && out.state == Flickit::STATE_GROUND && state[STATE_BAILING] == 0
-			&& balance != 0 && *(const uint32_t*)(balance + BALANCE_TYPE) == 0 && core[CORE_NO_KICK] == 0
-			&& input != 0 && input[INPUT_DISABLED] == 0 && input[INPUT_NET_DISABLED] == 0
-			&& s_groundIdle <= kPushIdleMost;
+		out.rolling = CanPush(skater) && s_groundIdle <= kPushIdleMost;
 		const float* velocity = (const float*)(skater + OBJECT_VELOCITY);
 		out.speed = std::sqrt(velocity[0] * velocity[0] + velocity[1] * velocity[1] + velocity[2] * velocity[2]);
 		if (!out.rolling) {
@@ -977,6 +1095,9 @@ namespace FlickitGame {
 		out.footTraceLooks = s_footTraceLooks;
 		out.blindSerial = s_clock.Serial();
 		out.blindAnim = s_clockAnim;
+		out.cutSerial = s_cutSerial;
+		out.cutAnim = kPushCuts[s_cutClip].text;
+		out.cutShare = s_cutShare;
 		out.spinSerial = s_spinSerial;
 		out.spinTurned = s_spinTurned;
 		out.spinFlick = s_spinFlick;
@@ -1398,22 +1519,32 @@ namespace FlickitGame {
 	//
 	// The game's ground scripts look at Left and Right first, and play the turn for them; only
 	// when neither is down do they get as far as the push. In Skate the board is pushed in a turn
-	// like anywhere else. So while a push of Flickit's asks for its animation, the scripts see
-	// neither Left nor Right (not for long at a time: a push the game does not show must not
-	// keep the turn from being shown). They run before the physics do: the physics get both
-	// back (GiveBackTurn) and turn the board as if nothing had happened.
+	// like anywhere else. So while a push of Flickit's asks for its animation and the scripts
+	// are in the loop of the ground, they see neither Left nor Right (not for long at a time: a
+	// push the game does not show must not keep the turn from being shown). They run before the
+	// physics do: the physics get both back (GiveBackTurn) and turn the board as if nothing had
+	// happened.
 	static void __fastcall PadUpdateHook(uint8_t* pad, void* /*edx*/, void* data) {
 		PadUpdate(pad, data);
 		if (s_turnKept && s_turnKept + INPUT_PAD == pad) {
 			s_turnKept = 0;     // the game has just written both anew
 		}
-		if (!s_active || s_frame.push <= 0 || !s_frame.pushOverTurn || !s_push.HideTurn()) {
+		if (!s_active || s_frame.push <= 0 || !s_frame.pushOverTurn || !s_push.Animating()) {
 			return;
 		}
 		uint8_t* skater = LocalSkater();
 		const uint8_t* core = skater ? (const uint8_t*)GetComponent(skater, kSkaterCorePhysics) : 0;
 		uint8_t* input = core ? *(uint8_t* const*)(core + CORE_INPUT) : 0;
-		if (!input || input + INPUT_PAD != pad || (input[INPUT_LEFT_PRESSED] == 0 && input[INPUT_RIGHT_PRESSED] == 0)) {
+		if (!input || input + INPUT_PAD != pad) {
+			return;
+		}
+		// The scripts look at Left and Right, and get to the push, in a loop of the ground (they
+		// wait for the next frame in WaitOneGameFrame). While they are busy elsewhere (with a
+		// landing, say) the time does not count.
+		const ScriptAt at = ScriptOf(skater);
+		const bool loop = at.running == kGroundLoop || at.running == kNollieLoop
+			|| (at.running == kWaitOneFrame && (at.caller == kGroundLoop || at.caller == kNollieLoop));
+		if (!s_push.HideTurn(loop, s_frame.seconds) || (input[INPUT_LEFT_PRESSED] == 0 && input[INPUT_RIGHT_PRESSED] == 0)) {
 			return;
 		}
 		s_turnLeft = input[INPUT_LEFT_PRESSED];
@@ -1720,6 +1851,54 @@ namespace FlickitGame {
 		return true;
 	}
 
+	static int PushCutOf(uint32_t name) {
+		for (int i = 0; i < PUSH_CUTS; i++) {
+			if (kPushCuts[i].name == name) {
+				return i;
+			}
+		}
+		return -1;
+	}
+
+	// Stands where the script command AnimFinished asks whether the object's animation is
+	// over. Same convention: this (the animation component) in ecx, no arguments, the answer
+	// in al. After a landing, a skate-off from a rail onto the ground or a bump into a wall the
+	// scripts wait for their animation to end (WaitAnimWhilstChecking) before they go back to
+	// the loop of the ground, which is where the push is played. In Skate a push does not wait
+	// for that. So for the skater Flickit drives, while a push of Flickit's wants its animation
+	// and he could be pushed, the animation of one of those is over as soon as it is asked
+	// about in that wait.
+	static bool __fastcall AnimFinishedHook(uint8_t* anim) {
+		const bool over = AnimOver(anim);
+		if (over || !s_active || s_frame.push <= 0 || !s_push.Animating()) {
+			return over;
+		}
+		uint8_t* skater = LocalSkater();
+		if (!skater || (uint8_t*)GetComponent(skater, kAnimation) != anim || !CanPush(skater)) {
+			return over;
+		}
+		const ScriptAt at = ScriptOf(skater);
+		if (at.running != kWaitAnimChecking
+			|| (at.caller != kLand2 && at.caller != kSkateInLand && at.caller != kFlailLeft && at.caller != kFlailRight)) {
+			return over;
+		}
+		const uint8_t* channel = *(const uint8_t* const*)(anim + ANIM_FIRST);
+		if (!channel || *(const int32_t*)(channel + CHANNEL_SELF) == -1) {
+			return over;
+		}
+		const int cut = PushCutOf(*(const uint32_t*)(channel + CHANNEL_NAME));
+		if (cut < 0) {
+			return over;
+		}
+		const float start = *(const float*)(channel + CHANNEL_START);
+		const float end = *(const float*)(channel + CHANNEL_END);
+		const float time = *(const float*)(channel + CHANNEL_TIME);
+		s_cutClip = cut;
+		s_cutShare = end > start ? (time - start) / (end - start) : 0.0f;
+		s_cutSerial++;
+		return true;
+	}
+
 	/******************************************************************/
 	/*                                                                */
 	/*  Rolling: the board loses speed the way Skate's does           */
@@ -1892,6 +2071,7 @@ namespace FlickitGame {
 		patchCall(kFrictionCall, (void*)&FrictionHook);
 		patchCall(kTurnCall, (void*)&TurnHook);
 		patchCall(kPadUpdateCall, (void*)&PadUpdateHook);
+		patchCall(kAnimFinishedCall, (void*)&AnimFinishedHook);
 		patchCall(kAirTurnCall, (void*)&AirTurnHook);
 		patchCall(kSpinLeftCall, (void*)&SpinRateHook);
 		patchCall(kSpinRightCall, (void*)&SpinRateHook);
@@ -1899,7 +2079,7 @@ namespace FlickitGame {
 		s_installed = true;
 		Log::TypedLog(CHN_SDL, "Flickit: grind hooks are in (rail catch, rail search, grind pick, rail balance, rail boost)\n");
 		Log::TypedLog(CHN_SDL, "Flickit: jump hooks are in (gravity in the air, jump, jump speed)\n");
-		Log::TypedLog(CHN_SDL, "Flickit: rolling hooks are in (brake test, kick test, friction, turning, CanKick, Held, pad update)\n");
+		Log::TypedLog(CHN_SDL, "Flickit: rolling hooks are in (brake test, kick test, friction, turning, CanKick, Held, pad update, AnimFinished)\n");
 		Log::TypedLog(CHN_SDL, "Flickit: spin hooks are in (turning in the air, spin rate)\n");
 		return true;
 	}

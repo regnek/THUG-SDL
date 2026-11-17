@@ -1528,6 +1528,7 @@ namespace Flickit {
 		m_share = 0.0f;
 		m_shareStep = 0.0f;
 		m_askTime = 0.0f;
+		m_hideTime = 0.0f;
 		m_asking = false;
 		m_tracking = false;
 		m_target = 0.0f;
@@ -1542,8 +1543,15 @@ namespace Flickit {
 		return m_phase == PUSH_ASKED && !m_animRunning;
 	}
 
-	bool PushRun::HideTurn() const {
-		return Animating() && std::fmod(m_askTime, kHidePeriod) < kHideFor;
+	bool PushRun::HideTurn(bool free, float dt) {
+		if (!Animating() || !free) {
+			return false;
+		}
+		const bool hide = std::fmod(m_hideTime, kHidePeriod) < kHideFor;
+		if (dt > 0.0f) {
+			m_hideTime += dt > kLongFrame ? kLongFrame : dt;
+		}
+		return hide;
 	}
 
 	// While the foot pushes the board is taken up to the speed the push is for, by as much of
@@ -1618,6 +1626,7 @@ namespace Flickit {
 			if (speed + add < last) {
 				m_phase = PUSH_ASKED;
 				m_askTime = 0.0f;
+				m_hideTime = 0.0f;
 				m_askPlay = seen;
 				// The press this push comes from: the one that is down, or a tap that is over
 				m_tracking = held;

@@ -17,7 +17,7 @@
 //   - the gravity in the air
 //   - the speed of a jump
 //
-// And for rolling the way Skate's board does, seven more: four in the physics of the ground, two
+// And for rolling the way Skate's board does, eight more: four in the physics of the ground, three
 // commands of the game's scripts, and the place where the game takes in the controller.
 //
 //   - the skater does not kick by himself: a push comes from Flickit, on a button (the game's own
@@ -33,6 +33,8 @@
 //   - they play it in a turn as well: while a push asks for its animation they do not see
 //     Left and Right (the game's picture of the pad, between the look at the controller and the
 //     physics, which get both back)
+//   - they play it after a landing, a skate-off from a rail and a bump into a wall without
+//     waiting for that animation to end (the command AnimFinished, for those animations only)
 //
 // For spinning the way Skate's skater does, two more, in the physics of the air:
 //
@@ -105,6 +107,9 @@ namespace FlickitGame {
 		int footTraceLooks;     // seven numbers each (Flickit::FootWatch::Looks), and how many. Else 0
 		uint32_t blindSerial;   // goes up when the game was told to play a push again and again and no push animation was seen
 		uint32_t blindAnim;     // the animation the skater was in instead (the checksum of its name)
+		uint32_t cutSerial;     // goes up when a push has cut short an animation the game's scripts were waiting for,
+		const char* cutAnim;    // which,
+		float cutShare;         // and how far into it the skater was
 
 		// Spinning
 		uint32_t spinSerial;    // goes up when an air in which Flickit turned the skater is over

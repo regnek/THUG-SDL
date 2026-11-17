@@ -599,9 +599,11 @@ namespace Flickit {
 		bool AnimCurrent() const { return m_animCurrent; }
 		// The play of the animation the push goes with (PushAnim::play), from PUSH_INTO on
 		uint32_t Play() const { return m_play; }
-		// The game's scripts should not see Left and Right now, so that they get as far as the
-		// push: for a fifth of a second, then not for the next three fifths, and so on
-		bool HideTurn() const;
+		// Once a frame, before the game's scripts run. free: they are in the loop that plays
+		// the push (not busy with a landing, say). Whether they should not see Left and Right
+		// on this frame, so that they get as far as the push: for a fifth of a second of
+		// their being free, then not for the next three fifths, and so on.
+		bool HideTurn(bool free, float dt);
 		// For the log. The serial goes up when a foot has pushed.
 		uint32_t Serial() const { return m_serial; }
 		float HeldFor() const { return m_pushHold; }   // seconds the button was down for it
@@ -625,6 +627,7 @@ namespace Flickit {
 		float m_share;      // how far into that play the last frame was (0 to 1), ...
 		float m_shareStep;  // ... and how far the frame before it was behind
 		float m_askTime;    // how long the push has been asking with no push animation running
+		float m_hideTime;   // and how much of that the game's scripts were free to play it
 		bool m_held;        // the button on the frame before
 		float m_hold;       // how long the press that is down, or the last one, has lasted
 		bool m_asking;      // a press that no push has taken up yet
