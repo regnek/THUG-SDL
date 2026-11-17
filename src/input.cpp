@@ -332,6 +332,7 @@ uint32_t flickitPushSerial = 0;                          // for the log: the las
 uint32_t flickitFootSerial = 0;                          // for the log: the last word on the feet in a push animation
 uint32_t flickitBlindSerial = 0;                         // for the log: the last time the pushes went over to the clock
 uint32_t flickitCutSerial = 0;                           // for the log: the last animation of the game's a push cut short
+uint32_t flickitWaySerial = 0;                           // for the log: the last push animation that gave way to something before it
 uint32_t flickitSpinSerial = 0;                          // for the log: the last air Flickit turned the skater in
 uint32_t flickitFrameAt = 0;                             // SDL's clock at the last frame handed to the game hooks
 bool flickitFrameSeen = false;
@@ -612,6 +613,11 @@ static void flickitLogGame(const FlickitGame::Skater& sk, uint32_t now) {
 	if (sk.cutSerial != flickitCutSerial) {
 		flickitCutSerial = sk.cutSerial;
 		Log::TypedLog(CHN_SDL, "Flickit: the push cut the game's %s short, %.0f%% into it\n", sk.cutAnim, sk.cutShare * 100.0f);
+	}
+	if (sk.waySerial != flickitWaySerial) {
+		flickitWaySerial = sk.waySerial;
+		Log::TypedLog(CHN_SDL, "Flickit: the push in %s gave way to %s, %.0f%% into it\n", sk.wayAnim,
+			sk.wayTo == Flickit::GIVE_CROUCH ? "the crouch" : "Down", sk.wayShare * 100.0f);
 	}
 	if (sk.blindSerial != flickitBlindSerial) {
 		flickitBlindSerial = sk.blindSerial;

@@ -69,7 +69,7 @@ Rolling
 The board is pushed, rolls out and steers the way Skate's does. Three parts,
 three settings.
 
-  Pushing (new in this build: no wait after a landing or a bump)
+  Pushing (new in this build: a crouch takes over from a push)
   - The skater no longer kicks by himself. The Flip button pushes (THUG's own
     kick button), and so does the Ollie button while the board rolls on the
     ground. In the air, on a rail and in a manual both are what they were.
@@ -102,6 +102,12 @@ three settings.
     no longer waits for that animation to end: it cuts it short, a sixth of
     a second after the landing (the game's window for a revert or a manual
     stays). The log says "Flickit: the push cut the game's ... short".
+  - Crouching for an ollie comes before pushing, as in Skate: pull the stick
+    back during a push and the crouch takes over as soon as the foot has
+    pushed (a third of a second into the push at most, so its speed is
+    kept). Down takes over at once. No push starts while you crouch; a
+    button held through the crouch pushes after it. The log says
+    "Flickit: the push in ... gave way to the crouch".
   - The push is shown in a turn too (THUG shows only the turn). If that looks
     wrong, PushOverTurn=0 is THUG's way: the turn is shown, and there is no
     push while the stick is held to one side.

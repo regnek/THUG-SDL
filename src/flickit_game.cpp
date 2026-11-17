@@ -127,6 +127,10 @@ namespace FlickitGame {
 	// end, and not one that loops). The script command AnimFinished answers with it.
 	typedef bool(__thiscall* AnimOver_t)(void* anim);
 	static const AnimOver_t AnimOver = (AnimOver_t)0x004310D0;
+	// A blend channel of an animation: is it at its end (never one that loops). The wait of a
+	// script for the end of an object's animation asks it about the first channel.
+	typedef bool(__thiscall* ChannelOver_t)(void* channel);
+	static const ChannelOver_t ChannelOver = (ChannelOver_t)0x004703B0;
 
 	enum {
 		// any component
@@ -212,6 +216,7 @@ namespace FlickitGame {
 		// CSkaterStateComponent
 		STATE_STATE = 0x18,             // 0 ground, 1 air, 2 wall, 3 lip, 4 rail, 5 wallplant
 		STATE_PHYSICS = 0x1C,           // 0 skating, 1 walking
+		STATE_CROUCHED = 0x20,          // one byte: he crouches, the jump button down (what the script command Crouched answers)
 		STATE_VERT_AIR = 0x30,
 		STATE_BAILING = 0x70,           // one byte: in a bail
 		STATE_DOING_TRICK = 0xD8,
@@ -245,6 +250,7 @@ namespace FlickitGame {
 	static const uint32_t kSkateInLand = 0xE08E71D3;          // SkateInLand: he skates off a rail onto the ground
 	static const uint32_t kFlailLeft = 0xB4101D70;            // FlailLeft: he bumps into a wall
 	static const uint32_t kFlailRight = 0x756A7535;           // FlailRight
+	static const uint32_t kMongoStep = 0x16751E0B;            // MongoPush: the step off the board before a push with the front foot
 	static const uint32_t kAirRotation = 0x4957DB43;          // Physics_Air_Rotation_stat
 	static const uint32_t kAnimation = 0x72AD7B23;            // Animation: the component that plays an object's animations
 	static const uint32_t kSkeleton = 0x222756D5;             // Skeleton: the component that has its bones
@@ -354,6 +360,9 @@ namespace FlickitGame {
 	static uint8_t* const kAirTurnCall = (uint8_t*)0x0056BB46;
 	// in the script command AnimFinished, the call that asks whether the animation is over
 	static uint8_t* const kAnimFinishedCall = (uint8_t*)0x00432EF3;
+	// in the wait of a script for the end of an object's animation (the animation component's
+	// wait), the call that asks whether its first channel is over
+	static uint8_t* const kAnimWaitCall = (uint8_t*)0x00431DC7;
 	static uint8_t* const kSpinLeftCall = (uint8_t*)0x0055F2FD;
 	static uint8_t* const kSpinRightCall = (uint8_t*)0x0055F361;
 
@@ -397,6 +406,9 @@ namespace FlickitGame {
 		{ 0x0056BB44, 7, { 0x8B, 0xCE, 0xE8, 0x05, 0x35, 0xFF, 0xFF }, "turning in the air" },
 		{ 0x00432EC1, 7, { 0x3D, 0xD5, 0x99, 0xCC, 0x76, 0x74, 0x2B }, "AnimFinished" },
 		{ 0x00432EF3, 11, { 0xE8, 0xD8, 0xE1, 0xFF, 0xFF, 0xF6, 0xD8, 0x1B, 0xC0, 0xF7, 0xD8 }, "AnimFinished: is the animation over" },
+		{ 0x00431DA0, 14, { 0x56, 0x8B, 0x74, 0x24, 0x08, 0x83, 0xBE, 0x9C, 0x00, 0x00, 0x00, 0x05, 0x75, 0x29 }, "animation wait: for the end" },
+		{ 0x00431DAE, 13, { 0x8B, 0x41, 0x24, 0x83, 0x78, 0x04, 0xFF, 0x74, 0x20, 0x85, 0xC0, 0x74, 0x1C }, "animation wait: the first channel" },
+		{ 0x00431DC7, 16, { 0xE8, 0xE4, 0xE5, 0x03, 0x00, 0x84, 0xC0, 0x74, 0x07, 0x8B, 0xCE, 0xE8, 0xC9, 0xB9, 0xFD, 0xFF }, "animation wait: is it over, then the wait is" },
 		{ 0x0055F2F5, 13, { 0x8B, 0x4E, 0x0C, 0x68, 0x43, 0xDB, 0x57, 0x49, 0xE8, 0xCE, 0x77, 0xFB, 0xFF }, "spin rate for Left" },
 		{ 0x0055F359, 13, { 0x8B, 0x4E, 0x0C, 0x68, 0x43, 0xDB, 0x57, 0x49, 0xE8, 0x6A, 0x77, 0xFB, 0xFF }, "spin rate for Right" },
 		// the functions that get called
@@ -528,6 +540,14 @@ namespace FlickitGame {
 		// channel's own test (above)
 		{ 0x004310D0, 16, { 0x8B, 0x41, 0x24, 0x83, 0x78, 0x04, 0xFF, 0x74, 0x04, 0x85, 0xC0, 0x75, 0x03, 0x32, 0xC0, 0xC3 }, "animation over" },
 		{ 0x004310E0, 17, { 0x8B, 0x48, 0x04, 0x83, 0xE9, 0xFF, 0xF7, 0xD9, 0x1B, 0xC9, 0x23, 0xC8, 0xE9, 0xBF, 0xF2, 0x03, 0x00 }, "animation over: the channel's test" },
+		{ 0x004703B0, 6, { 0x83, 0x79, 0x28, 0x00, 0x75, 0x23 }, "channel over: never for a loop" },
+		// a script waits for the end of an animation: Obj_WaitAnimFinished makes it wait (5) on
+		// the animation component, the script asks the component's wait every frame
+		{ 0x0043310F, 12, { 0x8B, 0x4C, 0x24, 0x34, 0x56, 0x6A, 0x05, 0xE8, 0x65, 0xA6, 0xFD, 0xFF }, "Obj_WaitAnimFinished" },
+		{ 0x0040D8CD, 14, { 0x8B, 0x8E, 0xA0, 0x00, 0x00, 0x00, 0x8B, 0x11, 0x8B, 0x42, 0x14, 0x56, 0xFF, 0xD0 }, "script: a wait on a component" },
+		{ 0x0062F340, 4, { 0xA0, 0x1D, 0x43, 0x00 }, "animation component: its wait" },
+		// what the script command Crouched answers
+		{ 0x00567B91, 14, { 0x8B, 0x8E, 0xD0, 0x04, 0x00, 0x00, 0x33, 0xC0, 0x38, 0x41, 0x20, 0x0F, 0x95, 0xC0 }, "Crouched" },
 		// a script calls another: the name of the one running goes into the next place for a
 		// call, and the return takes it back from the last one
 		{ 0x0040E7E6, 14, { 0x8B, 0x4D, 0x30, 0x8B, 0x95, 0xBC, 0x00, 0x00, 0x00, 0x8B, 0xC1, 0x6B, 0xC0, 0x2C }, "script call: the depth, the name" },
@@ -744,6 +764,11 @@ namespace FlickitGame {
 	static uint32_t s_cutSerial = 0;
 	static int s_cutClip = 0;
 	static float s_cutShare = 0.0f;
+	// and when a push animation has given way to a crouch or to Down: which, to what, how far it had got
+	static uint32_t s_waySerial = 0;
+	static const char* s_wayAnim = "";
+	static int s_wayTo = 0;
+	static float s_wayShare = 0.0f;
 	// The clock that stands in where the game is told to play a push and no push animation is
 	// seen on the skater (Flickit::PushClock), and for the log the animation he was in instead
 	// when it took over
@@ -974,6 +999,13 @@ namespace FlickitGame {
 			&& input != 0 && input[INPUT_DISABLED] == 0 && input[INPUT_NET_DISABLED] == 0;
 	}
 
+	// He crouches: the jump button is down on the ground (Flickit holds it while the stick is
+	// pulled back for an ollie)
+	static bool Crouching(const uint8_t* skater) {
+		const uint8_t* state = (const uint8_t*)GetComponent((void*)skater, kSkaterState);
+		return state && state[STATE_CROUCHED] != 0;
+	}
+
 	bool ReadSkater(Skater& out) {
 		if (!Available()) {
 			return false;
@@ -1098,6 +1130,10 @@ namespace FlickitGame {
 		out.cutSerial = s_cutSerial;
 		out.cutAnim = kPushCuts[s_cutClip].text;
 		out.cutShare = s_cutShare;
+		out.waySerial = s_waySerial;
+		out.wayAnim = s_wayAnim;
+		out.wayTo = s_wayTo;
+		out.wayShare = s_wayShare;
 		out.spinSerial = s_spinSerial;
 		out.spinTurned = s_spinTurned;
 		out.spinFlick = s_spinFlick;
@@ -1540,11 +1576,12 @@ namespace FlickitGame {
 		}
 		// The scripts look at Left and Right, and get to the push, in a loop of the ground (they
 		// wait for the next frame in WaitOneGameFrame). While they are busy elsewhere (with a
-		// landing, say) the time does not count.
+		// landing, say) the time does not count. Nor while he crouches: then no push is played
+		// (HeldHook), and his crouched turns are shown.
 		const ScriptAt at = ScriptOf(skater);
 		const bool loop = at.running == kGroundLoop || at.running == kNollieLoop
 			|| (at.running == kWaitOneFrame && (at.caller == kGroundLoop || at.caller == kNollieLoop));
-		if (!s_push.HideTurn(loop, s_frame.seconds) || (input[INPUT_LEFT_PRESSED] == 0 && input[INPUT_RIGHT_PRESSED] == 0)) {
+		if (!s_push.HideTurn(loop && !Crouching(skater), s_frame.seconds) || (input[INPUT_LEFT_PRESSED] == 0 && input[INPUT_RIGHT_PRESSED] == 0)) {
 			return;
 		}
 		s_turnLeft = input[INPUT_LEFT_PRESSED];
@@ -1847,6 +1884,9 @@ namespace FlickitGame {
 		if (!state || *(const int32_t*)(state + STATE_STATE) != 0 || state[STATE_DRIVING] != 0 || *(const int32_t*)(state + STATE_PHYSICS) != 0) {
 			return held;    // in the air and off the board the button is what it always was
 		}
+		if (state[STATE_CROUCHED] != 0) {
+			return held;    // a crouch comes before a push (Skate's order): no push out of a crouch
+		}
 		s_clock.Told();
 		return true;
 	}
@@ -1874,8 +1914,8 @@ namespace FlickitGame {
 			return over;
 		}
 		uint8_t* skater = LocalSkater();
-		if (!skater || (uint8_t*)GetComponent(skater, kAnimation) != anim || !CanPush(skater)) {
-			return over;
+		if (!skater || (uint8_t*)GetComponent(skater, kAnimation) != anim || !CanPush(skater) || Crouching(skater)) {
+			return over;    // a push that would not be played (he crouches) cuts nothing short
 		}
 		const ScriptAt at = ScriptOf(skater);
 		if (at.running != kWaitAnimChecking
@@ -1896,6 +1936,45 @@ namespace FlickitGame {
 		s_cutClip = cut;
 		s_cutShare = end > start ? (time - start) / (end - start) : 0.0f;
 		s_cutSerial++;
+		return true;
+	}
+
+	// Stands in the wait of a script for the end of an object's animation (Obj_WaitAnimFinished),
+	// where it asks whether the first channel is over. Same convention: the channel in ecx, no
+	// arguments, the answer in al. With "auto kick" off the loop of the ground plays the push and
+	// waits for it to end, so for the length of the animation nothing else in the loop gets a look
+	// in: not the crouch for an ollie, not a brake. In Skate the wind-up breaks into a push once
+	// the push is past its start, and Down here has already stopped the push (BrakeTestHook). So
+	// for the skater Flickit drives, a push animation is over when it gives way to one of those
+	// (Flickit::PushGivesWay): the scripts go on, and show the crouch or the brake.
+	static bool __fastcall AnimWaitHook(uint8_t* channel) {
+		const bool over = ChannelOver(channel);
+		if (over || !s_active || s_frame.push <= 0) {
+			return over;
+		}
+		uint8_t* skater = LocalSkater();
+		const uint8_t* anim = skater ? (const uint8_t*)GetComponent(skater, kAnimation) : 0;
+		if (!anim || *(uint8_t* const*)(anim + ANIM_FIRST) != channel || !CanPush(skater)) {
+			return over;
+		}
+		const uint32_t name = *(const uint32_t*)(channel + CHANNEL_NAME);
+		const int clip = PushClipOf(name);
+		if (clip < 0 && name != kMongoStep) {
+			return over;
+		}
+		const uint8_t* core = (const uint8_t*)GetComponent(skater, kSkaterCorePhysics);
+		const uint8_t* input = core ? *(const uint8_t* const*)(core + CORE_INPUT) : 0;
+		const int why = Flickit::PushGivesWay(s_push.Stroking(), Crouching(skater), input && input[INPUT_DOWN_PRESSED] != 0);
+		if (why == Flickit::GIVE_NONE) {
+			return over;
+		}
+		const float start = *(const float*)(channel + CHANNEL_START);
+		const float end = *(const float*)(channel + CHANNEL_END);
+		const float time = *(const float*)(channel + CHANNEL_TIME);
+		s_wayAnim = clip >= 0 ? kPushClips[clip].text : "MongoPush";
+		s_wayTo = why;
+		s_wayShare = end > start ? (time - start) / (end - start) : 0.0f;
+		s_waySerial++;
 		return true;
 	}
 
@@ -2072,6 +2151,7 @@ namespace FlickitGame {
 		patchCall(kTurnCall, (void*)&TurnHook);
 		patchCall(kPadUpdateCall, (void*)&PadUpdateHook);
 		patchCall(kAnimFinishedCall, (void*)&AnimFinishedHook);
+		patchCall(kAnimWaitCall, (void*)&AnimWaitHook);
 		patchCall(kAirTurnCall, (void*)&AirTurnHook);
 		patchCall(kSpinLeftCall, (void*)&SpinRateHook);
 		patchCall(kSpinRightCall, (void*)&SpinRateHook);
@@ -2079,7 +2159,7 @@ namespace FlickitGame {
 		s_installed = true;
 		Log::TypedLog(CHN_SDL, "Flickit: grind hooks are in (rail catch, rail search, grind pick, rail balance, rail boost)\n");
 		Log::TypedLog(CHN_SDL, "Flickit: jump hooks are in (gravity in the air, jump, jump speed)\n");
-		Log::TypedLog(CHN_SDL, "Flickit: rolling hooks are in (brake test, kick test, friction, turning, CanKick, Held, pad update, AnimFinished)\n");
+		Log::TypedLog(CHN_SDL, "Flickit: rolling hooks are in (brake test, kick test, friction, turning, CanKick, Held, pad update, AnimFinished, animation wait)\n");
 		Log::TypedLog(CHN_SDL, "Flickit: spin hooks are in (turning in the air, spin rate)\n");
 		return true;
 	}

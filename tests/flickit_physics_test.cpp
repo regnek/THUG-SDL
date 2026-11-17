@@ -329,8 +329,9 @@ enum {
 	                    // waits for it to end, plays the idle, looks again on the next frame
 	SCRIPT_NOLLIE = 1,  // the loop of a skater riding nollie: starts the push on a yes to CanKick if it is
 	                    // not his animation already; on a no, and with his animation at its end, the idle
-	SCRIPT_CROUCH = 2   // the crouch: starts the push while the button counts as held if it is not his
-	                    // animation already; then, with his animation at its end, the idle
+	SCRIPT_NO_WAIT = 2  // starts the push while the button counts as held if it is not his animation
+	                    // already, and does not wait for it (THUG's push out of a crouch did; Flickit's
+	                    // pushes no longer come out of a crouch); then, with his animation at its end, the idle
 };
 struct Game {
 	double length;      // of the push animation (s)
@@ -339,8 +340,12 @@ struct Game {
 	bool loops;         // the animation starts over at its end by itself
 	double cutAt;       // the first play is replaced by another animation when it is this far (a share); less than 0: never
 	double speed;       // how fast the animation runs: 1 is its own speed
+	double crouchFrom;  // the skater crouches from this time on (s) until crouchTo; less than 0: never
+	double crouchTo;
+	double downFrom;    // Down is held from this time on (s) until downTo; less than 0: never
+	double downTo;
 };
-static const Game kGame = { 0.8, 0.0, SCRIPT_FLAT, false, -1.0, 1.0 };
+static const Game kGame = { 0.8, 0.0, SCRIPT_FLAT, false, -1.0, 1.0, -1.0, -1.0, -1.0, -1.0 };
 
 struct PushLog {
 	double speed;               // at the end
@@ -363,6 +368,9 @@ struct PushLog {
 	double worst;               // the furthest the speed ever was from where the foot said, in units/s
 	double asking;              // for how long the game was asked to play a push
 	double hiding;              // for how long the scripts were kept from seeing Left and Right
+	int gaveWay;                // pushes the scripts stopped waiting for because something came before them
+	double gaveWayAt;           // when the last of them did
+	int gaveTo;                 // and to what (GiveWay)
 	int phase;                  // at the end
 };
 
@@ -374,6 +382,7 @@ static PushLog runPush(double rate, double seconds, double speed, const Press* p
 		log.firstAt[i] = -1.0;
 		log.lastAt[i] = -1.0;
 	}
+	log.gaveWayAt = -1.0;
 	log.most = speed;
 	const double dt = 1.0 / rate;
 	PushAnim anim = { false, false, 0, 0.0f, (float)game.length };
@@ -384,9 +393,12 @@ static PushLog runPush(double rate, double seconds, double speed, const Press* p
 	const int frames = (int)(seconds * rate + 0.5);
 	for (int frame = 0; frame < frames; frame++) {
 		const double t = frame * dt;
+		const bool crouched = game.crouchFrom >= 0.0 && t >= game.crouchFrom - 1e-9 && t < game.crouchTo - 1e-9;
+		const bool down = game.downFrom >= 0.0 && t >= game.downFrom - 1e-9 && t < game.downTo - 1e-9;
 		// the game's picture of the pad, before the scripts: they are free to play the push
-		// in their loop, not while they wait for an animation or are busy elsewhere
-		const bool free = game.freeFrom >= 0.0 && t >= game.freeFrom - 1e-9 && !(game.script == SCRIPT_FLAT && waiting);
+		// in their loop, not while they wait for an animation or are busy elsewhere, and not
+		// in a crouch
+		const bool free = game.freeFrom >= 0.0 && t >= game.freeFrom - 1e-9 && !(game.script == SCRIPT_FLAT && waiting) && !crouched;
 		if (run.HideTurn(free, (float)dt)) {
 			CHECK(run.Animating());
 			CHECK(free);
@@ -405,13 +417,23 @@ static PushLog runPush(double rate, double seconds, double speed, const Press* p
 		else if (game.freeFrom >= 0.0 && t >= game.freeFrom - 1e-9) {
 			if (game.script == SCRIPT_FLAT) {
 				if (waiting) {
-					if (!anim.running) {
+					// they wait for the end of the push, unless it gives way to the crouch or to Down
+					const int why = PushGivesWay(run.Stroking(), crouched, down);
+					if (!anim.running || why != GIVE_NONE) {
+						if (anim.running) {
+							CHECK(why == GIVE_DOWN || !run.Stroking());
+							log.gaveWay++;
+							log.gaveWayAt = t;
+							log.gaveTo = why;
+						}
 						waiting = false;
-						anim.current = false;   // the idle
+						anim.current = false;   // the idle, or the crouch or the brake
+						anim.running = false;
 						anim.play++;
 					}
 				}
-				else if (run.Animating()) {
+				else if (run.Animating() && !crouched && !down) {
+					// (in a crouch the Flip button does not count as held, and Down brakes first)
 					start = true;
 					waiting = true;
 				}
@@ -447,11 +469,12 @@ static PushLog runPush(double rate, double seconds, double speed, const Press* p
 		const int play = log.plays > 0 && log.plays <= 16 ? log.plays - 1 : -1;
 		const double share = clock / game.length;
 
-		// the physics
+		// the physics: Down takes the push away first (the brake test), then the kick test
 		bool held = false;
 		for (int i = 0; i < count; i++) {
 			if (t >= presses[i].down - 1e-9 && t < presses[i].up - 1e-9) held = true;
 		}
+		if (down) run.Reset();
 		const float add = run.Step((float)dt, (float)speed, held, percent, anim, profile);
 		CHECK(add >= 0.0f);
 		CHECK(add == add);
@@ -1990,13 +2013,148 @@ static void testPushing() {
 		CHECK_EQ(hitch.Phase(), PUSH_RECOVER);
 	}
 
+	g_case = "rolling: what a push gives way to";
+	{
+		// Skate's order on the ground: the crouch for an ollie before the push, once the push is
+		// past its start; Down at once (it has taken the push's speed away already)
+		CHECK_EQ(PushGivesWay(false, false, false), (int)GIVE_NONE);
+		CHECK_EQ(PushGivesWay(true, false, false), (int)GIVE_NONE);
+		CHECK_EQ(PushGivesWay(true, true, false), (int)GIVE_NONE);
+		CHECK_EQ(PushGivesWay(false, true, false), (int)GIVE_CROUCH);
+		CHECK_EQ(PushGivesWay(true, false, true), (int)GIVE_DOWN);
+		CHECK_EQ(PushGivesWay(false, false, true), (int)GIVE_DOWN);
+		CHECK_EQ(PushGivesWay(true, true, true), (int)GIVE_DOWN);
+		CHECK_EQ(PushGivesWay(false, true, true), (int)GIVE_DOWN);
+		// the foot is on its way down or pushing from the moment a play is taken up until it has pushed
+		PushRun run;
+		PushAnim anim = { false, false, 1, 0.0f, 0.8f };
+		CHECK(!run.Stroking());
+		run.Step(f60, 100.0f, true, 100, anim, foot);
+		CHECK_EQ(run.Phase(), PUSH_ASKED);
+		CHECK(!run.Stroking());
+		anim.current = anim.running = true;
+		anim.play = 2;
+		int was = PUSH_NONE;
+		for (int frame = 0; frame < 60; frame++) {
+			anim.time = frame * f60;
+			anim.running = anim.time < anim.length;
+			run.Step(f60, 100.0f, true, 100, anim, foot);
+			CHECK_EQ(run.Stroking() ? 1 : 0, (run.Phase() == PUSH_INTO || run.Phase() == PUSH_CONTACT) ? 1 : 0);
+			CHECK(run.Phase() >= was);
+			was = run.Phase();
+		}
+		CHECK_EQ(run.Phase(), PUSH_RECOVER);
+		CHECK(!run.Stroking());
+		run.Reset();
+		CHECK(!run.Stroking());
+	}
+
+	g_case = "rolling: the crouch takes over from a push once its foot has pushed";
+	{
+		const Press tap[] = { { 0.0, 0.05 } };
+		const PushLog plain = runPush(60.0, 3.0, 0.0, tap, 1, 100, foot, 0, kGame);
+		CHECK_EQ(plain.gaveWay, 0);
+		// crouched in the middle of the stroke: the foot finishes it, then the crouch is shown
+		Game mid = kGame;
+		mid.crouchFrom = 0.3;
+		mid.crouchTo = 2.0;
+		PushLog log = runPush(60.0, 3.0, 0.0, tap, 1, 100, foot, 0, mid);
+		CHECK_EQ(log.plays, 1);
+		CHECK_EQ(log.pushes, 1);
+		CHECK_EQ(log.gaveWay, 1);
+		CHECK_EQ(log.gaveTo, (int)GIVE_CROUCH);
+		CHECK(near(log.speed, plain.speed, 1e-3));
+		CHECK(log.gaveWayAt > log.took[0] + 0.62 * 0.8 - 1e-6 && log.gaveWayAt <= log.took[0] + 0.62 * 0.8 + 2.0 * frame60);
+		CHECK(log.gaveWayAt < log.took[0] + 0.8 - 0.2);
+		// before the foot is down: the same, it waits for the stroke
+		Game early = kGame;
+		early.crouchFrom = 0.1;
+		early.crouchTo = 2.0;
+		log = runPush(60.0, 3.0, 0.0, tap, 1, 100, foot, 0, early);
+		CHECK_EQ(log.pushes, 1);
+		CHECK_EQ(log.gaveWay, 1);
+		CHECK(near(log.speed, plain.speed, 1e-3));
+		CHECK(log.gaveWayAt > log.took[0] + 0.62 * 0.8 - 1e-6 && log.gaveWayAt <= log.took[0] + 0.62 * 0.8 + 2.0 * frame60);
+		// after it: at once
+		Game late = kGame;
+		late.crouchFrom = 0.6;
+		late.crouchTo = 2.0;
+		log = runPush(60.0, 3.0, 0.0, tap, 1, 100, foot, 0, late);
+		CHECK_EQ(log.gaveWay, 1);
+		CHECK(near(log.gaveWayAt, 0.6, 1e-6));
+		CHECK(near(log.speed, plain.speed, 1e-3));
+		// a crouch that is over before the push gets to the end of its stroke changes nothing
+		Game brief = kGame;
+		brief.crouchFrom = 0.3;
+		brief.crouchTo = 0.4;
+		log = runPush(60.0, 3.0, 0.0, tap, 1, 100, foot, 0, brief);
+		CHECK_EQ(log.gaveWay, 0);
+		CHECK(near(log.speed, plain.speed, 1e-3));
+		// In a crouch no push starts, and Left and Right are not kept from the scripts. The
+		// button held through it pushes once the crouch is over.
+		Game crouched = kGame;
+		crouched.crouchFrom = 0.0;
+		crouched.crouchTo = 1.2;
+		const Press hold[] = { { 0.0, 3.0 } };
+		log = runPush(60.0, 1.9, 0.0, hold, 1, 100, foot, 0, crouched);
+		CHECK_EQ(log.plays, 1);
+		CHECK(near(log.took[0], 1.2, 1e-6));
+		CHECK(log.asking > 1.1);
+		CHECK(near(log.hiding, frame60, 1e-6));     // the frame after the crouch, which plays the push
+		CHECK_EQ(log.pushes, 1);
+		const Press tapped[] = { { 0.2, 0.25 } };
+		log = runPush(60.0, 3.0, 0.0, tapped, 1, 100, foot, 0, crouched);
+		CHECK_EQ(log.plays, 0);     // a tap gives up before the crouch is over
+		CHECK(log.speed == 0.0);
+		CHECK(log.hiding == 0.0);
+		const Press later[] = { { 0.6, 0.65 } };
+		log = runPush(60.0, 3.0, 0.0, later, 1, 100, foot, 0, crouched);
+		CHECK_EQ(log.plays, 1);     // one that is still asking when it is over pushes then
+		CHECK(near(log.took[0], 1.2, 1e-6));
+		// pushing on with the button down, a crouch in between
+		Game between = kGame;
+		between.crouchFrom = 0.6;
+		between.crouchTo = 1.2;
+		log = runPush(60.0, 1.9, 0.0, hold, 1, 100, foot, 0, between);
+		CHECK_EQ(log.plays, 2);
+		CHECK_EQ(log.gaveWay, 1);
+		CHECK(near(log.gaveWayAt, 0.6, 1e-6));
+		CHECK(near(log.took[1], 1.2, 1e-6));
+		CHECK_EQ(log.pushes, 2);
+	}
+
+	g_case = "rolling: Down takes over from a push at once";
+	{
+		const Press tap[] = { { 0.0, 0.05 } };
+		const PushLog plain = runPush(60.0, 3.0, 0.0, tap, 1, 100, foot, 0, kGame);
+		Game braking = kGame;
+		braking.downFrom = 0.3;
+		braking.downTo = 0.5;
+		PushLog log = runPush(60.0, 3.0, 0.0, tap, 1, 100, foot, 0, braking);
+		CHECK_EQ(log.plays, 1);
+		CHECK_EQ(log.gaveWay, 1);
+		CHECK_EQ(log.gaveTo, (int)GIVE_DOWN);
+		CHECK(near(log.gaveWayAt, 0.3, 1e-6));
+		CHECK_EQ(log.pushes, 0);    // the push was taken away before its foot had pushed
+		CHECK(log.added[0] > 0.0 && log.added[0] < 0.25 * plain.speed);
+		CHECK(log.lastAt[0] <= 0.3 + 1e-6);
+		CHECK_EQ(log.phase, PUSH_NONE);
+		// held: no push while Down is, the next once it is let go
+		const Press hold[] = { { 0.0, 3.0 } };
+		log = runPush(60.0, 1.0, 0.0, hold, 1, 100, foot, 0, braking);
+		CHECK_EQ(log.plays, 2);
+		CHECK(near(log.took[1], 0.5, 1e-6));
+		CHECK_EQ(log.gaveWay, 1);
+	}
+
 	g_case = "rolling: the game's other scripts that play the push";
 	{
-		// The loop of a skater who rides nollie, and the crouch: neither waits for the
-		// animation, and both leave it standing at its end until they have something else to
-		// play. With the button down the pushes follow each other all the same.
+		// The loop of a skater who rides nollie, and a script that plays the push the way THUG's
+		// crouch did: neither waits for the animation, and both leave it standing at its end
+		// until they have something else to play. With the button down the pushes follow each
+		// other all the same.
 		const Press hold[] = { { 0.0, 30.0 } };
-		const int scripts[] = { SCRIPT_NOLLIE, SCRIPT_CROUCH };
+		const int scripts[] = { SCRIPT_NOLLIE, SCRIPT_NO_WAIT };
 		for (int i = 0; i < 2; i++) {
 			Game g = kGame;
 			g.script = scripts[i];

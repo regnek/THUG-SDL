@@ -1543,6 +1543,16 @@ namespace Flickit {
 		return m_phase == PUSH_ASKED && !m_animRunning;
 	}
 
+	int PushGivesWay(bool stroking, bool crouched, bool down) {
+		if (down) {
+			return GIVE_DOWN;
+		}
+		if (crouched && !stroking) {
+			return GIVE_CROUCH;
+		}
+		return GIVE_NONE;
+	}
+
 	bool PushRun::HideTurn(bool free, float dt) {
 		if (!Animating() || !free) {
 			return false;

@@ -569,6 +569,19 @@ namespace Flickit {
 		PUSH_RECOVER = 4    // it has pushed: the rest of the animation
 	};
 
+	// What a push animation the game shows gives way to. Skate's order on the ground puts the
+	// wind-up for an ollie or a nollie (the crouch) before the push, and lets it break into a
+	// push once the push is past its start, where the foot goes down and pushes; the push comes
+	// before the brake and the turns. Down (a brake, or THUG's sharp turn) has already taken the
+	// push's speed away (the physics see to that), so the animation goes at once.
+	enum GiveWay {
+		GIVE_NONE = 0,
+		GIVE_CROUCH = 1,
+		GIVE_DOWN = 2
+	};
+	// stroking: PushRun::Stroking. crouched: the skater crouches. down: Down is held.
+	int PushGivesWay(bool stroking, bool crouched, bool down);
+
 	// The pushes of one skater. Step is called once on every frame of the game's ground physics.
 	//
 	// One push is one play of the game's push animation, and the animation is its clock. The game
@@ -593,6 +606,8 @@ namespace Flickit {
 		int Phase() const { return m_phase; }
 		// From the moment a push is wanted until its foot has pushed: the board is being pushed
 		bool Active() const;
+		// The push the game shows has its foot on the way down or pushing
+		bool Stroking() const { return m_phase == PUSH_INTO || m_phase == PUSH_CONTACT; }
 		// The game should start its push animation now
 		bool Animating() const;
 		// A push animation was the skater's animation on the last frame, running or at its end

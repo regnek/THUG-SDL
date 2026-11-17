@@ -17,8 +17,9 @@
 //   - the gravity in the air
 //   - the speed of a jump
 //
-// And for rolling the way Skate's board does, eight more: four in the physics of the ground, three
-// commands of the game's scripts, and the place where the game takes in the controller.
+// And for rolling the way Skate's board does, nine more: four in the physics of the ground, three
+// commands of the game's scripts, the wait of a script for an animation, and the place where the
+// game takes in the controller.
 //
 //   - the skater does not kick by himself: a push comes from Flickit, on a button (the game's own
 //     kick test; its switch for kicking unasked is held at "off" meanwhile). The push goes with
@@ -35,6 +36,9 @@
 //     physics, which get both back)
 //   - they play it after a landing, a skate-off from a rail and a bump into a wall without
 //     waiting for that animation to end (the command AnimFinished, for those animations only)
+//   - a push gives way to the crouch for an ollie and to Down, the way Skate's order on the
+//     ground has it: the scripts stop waiting for the push animation to end (the wait for an
+//     animation, for the push animations only), and play no push while he crouches (Held)
 //
 // For spinning the way Skate's skater does, two more, in the physics of the air:
 //
@@ -110,6 +114,10 @@ namespace FlickitGame {
 		uint32_t cutSerial;     // goes up when a push has cut short an animation the game's scripts were waiting for,
 		const char* cutAnim;    // which,
 		float cutShare;         // and how far into it the skater was
+		uint32_t waySerial;     // goes up when a push animation has given way to something before it,
+		const char* wayAnim;    // which,
+		int wayTo;              // to what (Flickit::GiveWay),
+		float wayShare;         // and how far into it the skater was
 
 		// Spinning
 		uint32_t spinSerial;    // goes up when an air in which Flickit turned the skater is over
