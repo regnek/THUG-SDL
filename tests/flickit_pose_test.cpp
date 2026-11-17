@@ -194,9 +194,10 @@ struct Anim {
 		SetNext(list, fresh);
 	}
 
-	// PlayAnim: the channel in front gets the animation
+	// PlayAnim: the channel in front gets the animation. With blending switched off (as it is for
+	// the player's skater) or a blend of no time, every channel goes first.
 	uint8_t* PlayAnim(uint32_t name, float blend) {
-		if (blend == 0.0f) {
+		if (blend == 0.0f || mem[ANIM_BLENDING] == 0) {
 			Clear();
 		}
 		keeper->BeforeBlend(mem);
@@ -282,10 +283,12 @@ struct Run {
 	float shares[kMostChannels];
 	uint8_t* order[kMostChannels];
 	int count;
-	int started, lost;
+	int started, lost, missed;
 	uint32_t from;
+	bool crouched;          // the game has him crouched while the stick crouches (it follows a frame later in the game)
+	Report last;
 
-	Run() : anim(&pool, &keeper), now(10000), ground(true), scriptsFirst(false), count(0), started(0), lost(0), from(0) {
+	Run() : anim(&pool, &keeper), now(10000), ground(true), scriptsFirst(false), count(0), started(0), lost(0), missed(0), from(0), crouched(true) {
 		// rolling along
 		anim.PlayAnim(kIdle, 0.0f);
 		Frame(false, -1.0f);
@@ -304,7 +307,7 @@ struct Run {
 			}
 		}
 		Report r;
-		keeper.Frame(anim.mem, ground, crouch, depth, now, r);
+		keeper.Frame(anim.mem, ground, crouch, crouch && crouched, depth, now, r);
 		if (r.started) {
 			started++;
 			from = r.from;
@@ -312,6 +315,10 @@ struct Run {
 		if (r.lost) {
 			lost++;
 		}
+		if (r.missed) {
+			missed++;
+		}
+		last = r;
 		if (!scriptsFirst) {
 			for (int i = 0; i < nplays; i++) {
 				anim.PlayAnim(plays[i].name, plays[i].blend);
@@ -487,7 +494,8 @@ static void testPop() {
 		// order 0: the Keeper hears of the end first; 1: the game drops everything first.
 		Run r;
 		r.scriptsFirst = order == 1;
-		r.Frame(true, 0.0f, kCrouchIdle, 0.3f);
+		r.Frame(true, 0.0f);
+		r.Frame(true, 0.1f, kCrouchIdle, 0.3f);
 		for (int i = 0; i < 10; i++) {
 			r.Frame(true, 0.8f);
 		}
@@ -534,19 +542,14 @@ static void testCrouchInALanding() {
 static void testNotOnTheGround() {
 	g_case = "not the stick's crouch";
 	// A crouch of the game's own (the button), or none: nothing is touched
+	// The game's crouch as it always was: it takes over at once
 	Run r;
 	r.Frame(false, -1.0f, kCrouchIdle, 0.3f);
-	uint8_t* standing = 0;
-	{
-		uint8_t* c[kMostChannels];
-		r.anim.Get(c);
-		standing = c[1];
-	}
-	const float scale = ScaleOf(standing);
 	r.Frame(false, -1.0f);
 	CHECK(r.keeper.Kept() == 0);
-	CHECK(ScaleOf(standing) == scale);
-	CHECK_NEAR(LeftOf(standing), 0.3f - 2.0f / 60.0f, 1e-5);
+	CHECK(r.anim.Count() == 1);
+	CHECK(r.anim.mem[ANIM_BLENDING] == 0);
+	CHECK(r.ShareOf(r.anim.First()) == 1.0f);
 	// the stick's crouch in the air: the animation he was in is not one he stood in
 	Run a;
 	a.ground = false;
@@ -573,7 +576,7 @@ static void testNewSkater() {
 	Anim other(&r.pool, &r.keeper);
 	other.PlayAnim(kIdle, 0.0f);
 	Report rep;
-	r.keeper.Frame(other.mem, true, true, 0.5f, r.now, rep);
+	r.keeper.Frame(other.mem, true, true, true, 0.5f, r.now, rep);
 	CHECK(rep.lost);
 	CHECK(r.keeper.Kept() == 0);
 	const float left = LeftOf(kept);
@@ -592,7 +595,7 @@ static void testNewSkater() {
 	CHECK(f.keeper.Fading());
 	Anim third(&f.pool, &f.keeper);
 	third.PlayAnim(kIdle, 0.0f);
-	f.keeper.Frame(third.mem, true, false, -1.0f, f.now, rep);
+	f.keeper.Frame(third.mem, true, false, false, -1.0f, f.now, rep);
 	CHECK(!rep.lost);
 	CHECK(f.keeper.Kept() == 0);
 }
@@ -715,6 +718,7 @@ static void testOtherObjects() {
 	r.Frame(true, 0.5f);
 	Pool pool;
 	Anim other(&pool, &r.keeper);
+	other.mem[ANIM_BLENDING] = 1;
 	other.PlayAnim(kIdle, 0.0f);
 	other.PlayAnim(kPushCycle, 0.3f);
 	uint8_t* c[kMostChannels];
@@ -753,6 +757,90 @@ static void testFastAnimations() {
 	}
 }
 
+static void testBlendingSwitch() {
+	g_case = "blending for the crouch";
+	// The player's skater does not blend: blending goes on while the stick crouches, and back to
+	// what it was once the crouch is over
+	{
+		Run r;
+		CHECK(r.anim.mem[ANIM_BLENDING] == 0);
+		r.Frame(false, -1.0f, kPushCycle, 0.3f);
+		CHECK(r.anim.Count() == 1);                  // the game's own: no blend
+		r.Frame(true, 0.0f);                         // the stick crouches; the game a frame later
+		CHECK(r.anim.mem[ANIM_BLENDING] == 1);
+		r.Frame(true, 0.1f, kCrouchIdle, 0.3f);
+		r.Frame(true, 0.3f);
+		CHECK(r.keeper.Kept() != 0);
+		CHECK(r.from == kPushCycle);
+		r.Frame(false, -1.0f, kOllie, 0.0f);         // the pop
+		r.Frame(false, -1.0f);
+		CHECK(r.anim.mem[ANIM_BLENDING] == 0);
+		r.Frame(false, -1.0f, kIdle, 0.3f);
+		CHECK(r.anim.Count() == 1);
+	}
+	g_case = "blending back after standing up";
+	{
+		Run r;
+		r.Frame(true, 0.0f);
+		r.Frame(true, 0.1f, kCrouchIdle, 0.3f);
+		for (int i = 0; i < 10; i++) {
+			r.Frame(true, 0.5f);
+		}
+		r.Frame(false, -1.0f, kIdle, 0.3f);
+		CHECK(r.anim.mem[ANIM_BLENDING] == 1);       // the stand-up blends too
+		CHECK(r.anim.Count() == 3);
+		for (int i = 0; i < 30; i++) {
+			r.Frame(false, -1.0f);
+		}
+		CHECK(r.keeper.Kept() == 0);
+		CHECK(r.anim.mem[ANIM_BLENDING] == 0);
+	}
+	g_case = "blending that was on";
+	{
+		Run r;
+		r.anim.mem[ANIM_BLENDING] = 1;
+		r.Frame(true, 0.0f);
+		r.Frame(true, 0.1f, kCrouchIdle, 0.3f);
+		r.Frame(true, 0.5f);
+		r.Frame(false, -1.0f, kOllie, 0.0f);
+		r.Frame(false, -1.0f);
+		CHECK(r.anim.mem[ANIM_BLENDING] == 1);
+	}
+	g_case = "blending: another component";
+	{
+		Run r;
+		r.Frame(true, 0.0f);
+		CHECK(r.anim.mem[ANIM_BLENDING] == 1);
+		Anim other(&r.pool, &r.keeper);
+		other.PlayAnim(kIdle, 0.0f);
+		Report rep;
+		r.keeper.Frame(other.mem, true, false, false, -1.0f, r.now, rep);
+		CHECK(r.anim.mem[ANIM_BLENDING] == 1);       // the old one is not touched any more
+		CHECK(other.mem[ANIM_BLENDING] == 0);
+		// and the same when the new one's stick crouches straight away
+		Run q;
+		q.Frame(true, 0.0f);
+		Anim third(&q.pool, &q.keeper);
+		third.PlayAnim(kIdle, 0.0f);
+		q.keeper.Frame(third.mem, true, true, false, 0.2f, q.now, rep);
+		CHECK(q.anim.mem[ANIM_BLENDING] == 1);
+		CHECK(third.mem[ANIM_BLENDING] == 1);
+	}
+	g_case = "a crouch with nothing to keep";
+	{
+		// The game's crouch was already playing when the stick's began: nothing he stood in is
+		// left. The log hears of it once.
+		Run r;
+		r.Frame(false, -1.0f, kCrouchIdle, 0.3f);
+		for (int i = 0; i < 40; i++) {
+			r.Frame(true, 0.5f);
+		}
+		CHECK(r.keeper.Kept() == 0);
+		CHECK(r.missed == 1);
+		CHECK(r.started == 0);
+	}
+}
+
 int main() {
 	testCrouchFollowsTheStick(false);
 	testCrouchFollowsTheStick(true);
@@ -769,6 +857,7 @@ int main() {
 	testNewSkater();
 	testFadeWithoutFrames();
 	testListCleared();
+	testBlendingSwitch();
 	std::printf("%d checks, %d failures\n", g_checks, g_failures);
 	return g_failures == 0 ? 0 : 1;
 }

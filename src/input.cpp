@@ -336,6 +336,7 @@ uint32_t flickitCutSerial = 0;                           // for the log: the las
 uint32_t flickitWaySerial = 0;                           // for the log: the last push animation that gave way to something before it
 uint32_t flickitPoseSerial = 0;                          // for the log: the last crouch that showed the stick's depth
 uint32_t flickitPoseLostSerial = 0;                      // for the log: the last time the game dropped the pose kept for a crouch
+uint32_t flickitPoseMissSerial = 0;                      // for the log: the last crouch that found no pose to stand in
 FlickitGame::Skater flickitFlipSkater;                   // the skater as last read, for the log of a held flip trick
 uint32_t flickitFlipToldLevel = 0;                       // the last held flip trick the log said had no air for another rotation
 uint32_t flickitSpinSerial = 0;                          // for the log: the last air Flickit turned the skater in
@@ -633,6 +634,14 @@ static void flickitLogGame(const FlickitGame::Skater& sk, uint32_t now) {
 	if (sk.poseLostSerial != flickitPoseLostSerial) {
 		flickitPoseLostSerial = sk.poseLostSerial;
 		Log::TypedLog(CHN_SDL, "Flickit: the game started an animation without a blend in the crouch: for the rest of it he crouches as the game has it\n");
+	}
+	if (sk.poseMissSerial != flickitPoseMissSerial) {
+		flickitPoseMissSerial = sk.poseMissSerial;
+		const char* in = FlickitPose::AnimName(sk.poseMissAnim);
+		const char* last = FlickitPose::AnimName(sk.poseMissLast);
+		Log::TypedLog(CHN_SDL, "Flickit: the crouch could not follow the stick: he is in %s (%08X), %d channel%s, blending %d; last stood in %s (%08X)\n",
+			in ? in : "animation", sk.poseMissAnim, sk.poseMissChannels, sk.poseMissChannels == 1 ? "" : "s", sk.poseMissBlending,
+			last ? last : (sk.poseMissLast ? "animation" : "nothing seen"), sk.poseMissLast);
 	}
 	if (sk.waySerial != flickitWaySerial) {
 		flickitWaySerial = sk.waySerial;

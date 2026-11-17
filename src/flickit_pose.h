@@ -1,20 +1,25 @@
 #pragma once
 // The crouch shown as deep as the stick is pulled.
 //
-// THUG shows a crouch the way it shows any change of animation. The crouch animation starts,
-// and the animation the skater stood in is blended out over a moment, its share of the pose
-// going down to nothing. Each animation is a blend channel of the skater's animation component,
-// in a list that is newest first: the first channel plays, the ones after it blend out.
+// An animation component plays each animation in a blend channel, in a list that is newest
+// first: the first channel plays, the ones after it blend out, their share of the pose going
+// down to nothing over the blend's time. THUG blends that way for the people in its levels and
+// the trick editor's skater, which switch it on (Obj_EnableAnimBlending). The player's skater
+// never does: every animation he starts drops the one before, and the crouch animation takes
+// over at once.
 //
-// The Keeper keeps the channel the skater stood in when a crouch of the stick's begins, for as
-// long as the crouch lasts, and gives it the share of the pose that the stick asks for: all of
-// it with the stick only just pulled, none of it pulled all the way. The crouch animations
-// that the game plays share the rest the way the game would share all of it without that
-// channel. When the crouch ends without a pop, its share goes, over the time the game blends in
-// (0.3 s), once the game has started the animation he stands in. A pop starts its animation
-// without a blend, and the game drops every channel itself.
+// While the stick crouches, the Keeper switches blending on for the skater, so that the
+// channel he stood in is still there when the game starts its crouch animation. It keeps that
+// channel for as long as the crouch lasts and gives it the share of the pose that the stick asks
+// for: all of it with the stick only just pulled, none of it pulled all the way. The crouch
+// animations that the game plays share the rest the way the game would share all of it without
+// that channel. When the crouch ends without a pop, its share goes over 0.3 s (the game's blend
+// time) once the game has started the animation he stands in, and blending is switched back
+// to what it was. A pop starts its animation without a blend, and the game drops every channel.
 //
 // What it relies on, read from THUG-SDL.exe:
+// - the switch: a byte at +0x34 of the component, 0 when it is made; PlayAnim drops every
+//   channel first when it is 0 or the blend has no time (0x00432281)
 // - the list: the component's own node at +0x18 (key -1), each node's next at +0x0C and the one
 //   before at +0x10; +0x24 (the list's next) is the channel playing
 // - a channel's state at +0x34: 2 plays, 1 blends out, 0 is over (the next update takes it out).
@@ -32,6 +37,7 @@
 
 namespace FlickitPose {
 	enum Layout {
+		ANIM_BLENDING = 0x34,           // the animation component's switch: not 0, its animations blend
 		ANIM_CHANNELS = 0x18,           // the list's own node in the animation component
 		NODE_KEY = 0x04,                // -1 in the list's own node
 		NODE_NEXT = 0x0C,
@@ -175,19 +181,44 @@ namespace FlickitPose {
 		bool started;           // a crouch has begun to follow the stick,
 		uint32_t from;          // with the skater's pose from this animation
 		bool lost;              // the game dropped the channel kept for the crouch
+		bool missed;            // a crouch of the stick's that has found nothing to keep (once a crouch):
+		uint32_t missAnim;      // the animation he is in,
+		int missChannels;       // how many channels there are,
+		uint32_t missLast;      // and the animation he last stood in (0: none seen)
 	};
+
+	// A crouch that has looked for the channel he stood in this long without finding it is reported
+	static const uint32_t kMissMs = 300;
 
 	class Keeper {
 	public:
-		Keeper() { Forget(); m_lastAnim = 0; m_last = 0; m_lastName = 0; m_lostSeen = false; m_saved = 0; m_blendSaved = false; }
+		Keeper() {
+			Forget();
+			m_lastAnim = 0;
+			m_last = 0;
+			m_lastName = 0;
+			m_lostSeen = false;
+			m_saved = 0;
+			m_blendSaved = false;
+			m_switchAnim = 0;
+			m_switchWas = 0;
+			m_looking = false;
+			m_lookingSince = 0;
+			m_missTold = false;
+		}
 
 		// Once a frame, for the first player's skater: his animation component (0 for none),
-		// whether he is on his board on the ground, whether he crouches with the stick and how
-		// deep (0, only just, to 1, all the way), and the game's clock
-		void Frame(uint8_t* anim, bool ground, bool crouch, float depth, uint32_t now, Report& report) {
+		// whether he is on his board on the ground, whether the stick crouches (Flickit's crouch,
+		// on the ground), whether the game has him crouched, how deep the stick's crouch is (0,
+		// only just, to 1, all the way), and the game's clock
+		void Frame(uint8_t* anim, bool ground, bool stick, bool crouched, float depth, uint32_t now, Report& report) {
 			report.started = false;
 			report.from = 0;
 			report.lost = m_lostSeen;
+			report.missed = false;
+			report.missAnim = 0;
+			report.missChannels = 0;
+			report.missLast = 0;
 			m_lostSeen = false;
 			uint8_t* channels[kMostChannels];
 			const int n = anim ? Channels(anim, channels) : 0;
@@ -201,6 +232,20 @@ namespace FlickitPose {
 				m_lastAnim = anim;
 				m_last = head;
 				m_lastName = NameOf(head);
+			}
+			// His animations blend while the stick crouches and while a kept channel's share goes:
+			// the crouch the game starts finds the channel he stood in there, and so does his
+			// standing up
+			if (stick || m_channel) {
+				SwitchOn(anim);
+			}
+			else {
+				SwitchBack(anim);
+			}
+			const bool crouch = stick && crouched;
+			if (!crouch || m_channel) {
+				m_looking = false;
+				m_missTold = false;
 			}
 			if (!crouch) {
 				if (m_channel && !m_fading) {
@@ -219,6 +264,17 @@ namespace FlickitPose {
 				// The crouch has begun: the channel he stood in blends out behind the crouch's
 				const int at = (m_last && m_lastAnim == anim) ? Index(channels, n, m_last) : -1;
 				if (at < 1 || StateOf(m_last) != CHANNEL_LEAVING || NameOf(m_last) != m_lastName) {
+					if (!m_looking) {
+						m_looking = true;
+						m_lookingSince = now;
+					}
+					else if (!m_missTold && (uint32_t)(now - m_lookingSince) >= kMissMs) {
+						m_missTold = true;
+						report.missed = true;
+						report.missAnim = head ? NameOf(head) : 0;
+						report.missChannels = n;
+						report.missLast = (m_last && m_lastAnim == anim) ? m_lastName : 0;
+					}
 					return;
 				}
 				m_anim = anim;
@@ -336,6 +392,7 @@ namespace FlickitPose {
 		}
 
 		bool Holding() const { return m_channel != 0 && !m_fading; }
+		bool Switched() const { return m_switchAnim != 0; }
 		bool Fading() const { return m_channel != 0 && m_fading; }
 		uint8_t* Kept() const { return m_channel; }
 		float Share() const { return m_share; }
@@ -355,6 +412,12 @@ namespace FlickitPose {
 		uint8_t* m_last;
 		uint32_t m_lastName;
 		bool m_lostSeen;            // the channel was dropped between two frames
+
+		uint8_t* m_switchAnim;      // the component whose blending the Keeper switched on,
+		uint8_t m_switchWas;        // and what the switch was before
+		bool m_looking;             // a crouch is looking for the channel he stood in,
+		uint32_t m_lookingSince;    // since then,
+		bool m_missTold;            // and the log has heard that it found none
 
 		uint8_t* m_savedChannel[kMostChannels];
 		float m_savedScale[kMostChannels];
@@ -425,6 +488,27 @@ namespace FlickitPose {
 				return 0.0f;
 			}
 			return m_fadeFrom * (1.0f - (float)gone / (float)kFadeMs);
+		}
+
+		// Blending on for the skater's animations, remembering what it was
+		void SwitchOn(uint8_t* anim) {
+			if (m_switchAnim && m_switchAnim != anim) {
+				m_switchAnim = 0;           // another component now: the old one is not touched
+			}
+			if (!anim || m_switchAnim == anim) {
+				return;
+			}
+			m_switchAnim = anim;
+			m_switchWas = anim[ANIM_BLENDING];
+			anim[ANIM_BLENDING] = 1;
+		}
+
+		// and back to what it was
+		void SwitchBack(uint8_t* anim) {
+			if (m_switchAnim && m_switchAnim == anim) {
+				anim[ANIM_BLENDING] = m_switchWas;
+			}
+			m_switchAnim = 0;
 		}
 
 		// The kept channel second in the list, right after the one playing

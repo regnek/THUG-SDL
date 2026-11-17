@@ -130,6 +130,11 @@ namespace FlickitGame {
 		uint32_t poseSerial;    // goes up when a crouch of the stick's begins to show its depth,
 		uint32_t poseFrom;      // with the pose of this animation to stand in (the checksum of its name)
 		uint32_t poseLostSerial;// goes up when the game dropped that pose in a crouch (an animation started without a blend)
+		uint32_t poseMissSerial;// goes up when a crouch of the stick's found no pose to stand in:
+		uint32_t poseMissAnim;  // the animation he was in,
+		int poseMissChannels;   // how many channels his animation had,
+		uint32_t poseMissLast;  // the animation he last stood in (0: none seen),
+		int poseMissBlending;   // and his animation component's blending switch
 
 		// A flip trick held on the stick (Flickit::Input::flipMore)
 		bool flipMore;          // it can be taken round once more: press its button now

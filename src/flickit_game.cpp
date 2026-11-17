@@ -486,6 +486,10 @@ namespace FlickitGame {
 		{ 0x0055F359, 13, { 0x8B, 0x4E, 0x0C, 0x68, 0x43, 0xDB, 0x57, 0x49, 0xE8, 0x6A, 0x77, 0xFB, 0xFF }, "spin rate for Right" },
 		{ 0x004322A7, 10, { 0x8B, 0xCE, 0xD9, 0x1C, 0x24, 0xE8, 0x6F, 0xEC, 0xFF, 0xFF }, "PlayAnim: the start of the blend" },
 		{ 0x00432297, 8, { 0x8D, 0x4E, 0x18, 0xE8, 0x91, 0xEB, 0xFF, 0xFF }, "PlayAnim without a blend: every channel goes" },
+		{ 0x00432281, 16, { 0xD9, 0xEE, 0xD8, 0x9C, 0x24, 0x6C, 0x05, 0x00, 0x00, 0xDF, 0xE0, 0xF6, 0xC4, 0x44, 0x7B, 0x06 }, "PlayAnim: a blend of no time drops every channel" },
+		{ 0x00432291, 6, { 0x80, 0x7E, 0x34, 0x00, 0x75, 0x08 }, "PlayAnim: and so does blending switched off" },
+		{ 0x00432912, 6, { 0x89, 0x5E, 0x40, 0x88, 0x5E, 0x34 }, "the animation component: blending starts off" },
+		{ 0x004330CD, 6, { 0x0F, 0x95, 0xC2, 0x88, 0x56, 0x34 }, "Obj_EnableAnimBlending: the switch" },
 		{ 0x0043209F, 7, { 0x8B, 0xCF, 0xE8, 0xBA, 0xFA, 0xFF, 0xFF }, "the animation's update: the pose" },
 		// what the crouch pose relies on (flickit_pose.h)
 		{ 0x00430F4B, 6, { 0x8B, 0x41, 0x24, 0x8D, 0x69, 0x18 }, "blend start: the list of channels" },
@@ -919,6 +923,11 @@ namespace FlickitGame {
 	static uint32_t s_poseSerial = 0;
 	static uint32_t s_poseFrom = 0;
 	static uint32_t s_poseLostSerial = 0;
+	static uint32_t s_poseMissSerial = 0;
+	static uint32_t s_poseMissAnim = 0;
+	static int s_poseMissChannels = 0;
+	static uint32_t s_poseMissLast = 0;
+	static int s_poseMissBlending = 0;
 	// The clock that stands in where the game is told to play a push and no push animation is
 	// seen on the skater (Flickit::PushClock), and for the log the animation he was in instead
 	// when it took over
@@ -1378,6 +1387,11 @@ namespace FlickitGame {
 		out.poseSerial = s_poseSerial;
 		out.poseFrom = s_poseFrom;
 		out.poseLostSerial = s_poseLostSerial;
+		out.poseMissSerial = s_poseMissSerial;
+		out.poseMissAnim = s_poseMissAnim;
+		out.poseMissChannels = s_poseMissChannels;
+		out.poseMissLast = s_poseMissLast;
+		out.poseMissBlending = s_poseMissBlending;
 		out.spinSerial = s_spinSerial;
 		out.spinTurned = s_spinTurned;
 		out.spinFlick = s_spinFlick;
@@ -2254,25 +2268,37 @@ namespace FlickitGame {
 	/*  The crouch shown as deep as the stick's                       */
 	/******************************************************************/
 
-	// Once a frame, from the update of player one's pad: whether the skater crouches with the
-	// stick, and how deep, to the Keeper (flickit_pose.h), which holds on to the pose he stood in
-	// for that crouch. He crouches with the stick when Flickit drives him, the stick's crouch is
-	// on (CrouchPose=1), he is on his board on the ground, and the game has him crouched.
+	// Once a frame, from the update of player one's pad: whether the stick crouches, whether the
+	// game has the skater crouched, and how deep, to the Keeper (flickit_pose.h), which has his
+	// animations blend for the crouch and holds on to the pose he stood in. The stick crouches
+	// when Flickit drives him, its crouch is shown (CrouchPose=1), and he is on his board on the
+	// ground, not in a manual.
 	static void ShowCrouch(uint8_t* skater) {
 		uint8_t* anim = (uint8_t*)GetComponent(skater, kAnimation);
 		const uint8_t* state = (const uint8_t*)GetComponent(skater, kSkaterState);
+		const uint8_t* core = (const uint8_t*)GetComponent(skater, kSkaterCorePhysics);
+		const uint8_t* balance = core ? *(const uint8_t* const*)(core + CORE_BALANCE) : 0;
 		const bool ground = state && *(const int32_t*)(state + STATE_STATE) == 0 && state[STATE_DRIVING] == 0
 			&& *(const int32_t*)(state + STATE_PHYSICS) == 0 && state[STATE_BAILING] == 0;
-		const bool crouch = s_active && s_frame.crouchPose >= 0.0f && ground && state[STATE_CROUCHED] != 0;
+		const bool stick = s_active && s_frame.crouchPose >= 0.0f && ground
+			&& balance && *(const uint32_t*)(balance + BALANCE_TYPE) == 0;
+		const bool crouched = state && state[STATE_CROUCHED] != 0;
 		s_poseNow = (uint32_t)GameMs();
 		FlickitPose::Report report;
-		s_keeper.Frame(anim, ground, crouch, s_frame.crouchPose, s_poseNow, report);
+		s_keeper.Frame(anim, ground, stick, crouched, s_frame.crouchPose, s_poseNow, report);
 		if (report.started) {
 			s_poseFrom = report.from;
 			s_poseSerial++;
 		}
 		if (report.lost) {
 			s_poseLostSerial++;
+		}
+		if (report.missed) {
+			s_poseMissAnim = report.missAnim;
+			s_poseMissChannels = report.missChannels;
+			s_poseMissLast = report.missLast;
+			s_poseMissBlending = anim ? anim[FlickitPose::ANIM_BLENDING] : 0;
+			s_poseMissSerial++;
 		}
 	}
 
