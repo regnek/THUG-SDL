@@ -404,6 +404,35 @@ namespace Flickit {
 		bool m_wantsOff;
 	};
 
+	// Off the rail when the speed is gone. Skate pushes a board that has come to rest on a rail
+	// sideways off it: toward the open side when there is a surface next to the rail on one side only,
+	// as on a ledge, so that it drops off the ledge and not onto it; otherwise toward the side the
+	// board sits on. The push is a force on the board that lasts until the board moves sideways at a
+	// set speed, and it depends on the grind: 100 N up to 1 m/s on the trucks (120 N up to 0.9 m/s in
+	// a 5-0, and only 10 N with a surface right next to the rail on both sides), 100 N up to 0.75 m/s
+	// with truck and deck on the rail, 100 N up to 1.5 m/s in a nose or tail slide, 90 N up to
+	// 0.75 m/s across the rail. THUG's own way off a rail lifts the skater kExitStep units and puts
+	// him as far to the side, which is about as far as Skate's push takes the board before it is off.
+	// So he leaves with the speed that push gives the board over that distance, or its set speed if
+	// that comes first: 80 units/s on the trucks.
+	enum RailExitWhy {
+		EXIT_OPEN_SIDE = 0,   // a surface on the other side (a ledge): away from it
+		EXIT_CAME_FROM = 1,   // no surface on either side: the side the board came from
+		EXIT_BOTH_SIDES = 2,  // a surface on both: the side the board came from, and a gentle push
+		EXIT_NO_SIDE = 3      // nothing to go by: the side THUG takes by itself
+	};
+	struct RailExitPlan {
+		int side;             // +1 or -1: which of the two sides of the rail
+		int why;              // RailExitWhy
+		float speed;          // units/s sideways as he leaves the rail
+	};
+	extern const float kExitStep;  // units: how far THUG's way off a rail lifts the skater and puts him to the side
+	// surfaceA / surfaceB: there is a surface next to the rail, at its height, on side +1 / -1.
+	// cameFrom: the side the board came onto the rail from (+1, -1, 0 when not known). fallback: the
+	// side to take when nothing says (+1 or -1). fiveO: the grind is a 5-0.
+	void PlanRailExit(bool surfaceA, bool surfaceB, int cameFrom, int fallback, int dragClass, bool fiveO, RailExitPlan& plan);
+	const char* RailExitWhyText(int why);
+
 	// ------------------------------------------------------------------------------------------
 	// How far a rail reaches for the board
 	//

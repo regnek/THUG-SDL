@@ -206,6 +206,7 @@ namespace FlickitGame {
 		float popStrength;      // a pop out of a crouch on this frame, and how deep it was (0 to 1); -1: none
 		float crouchPose;       // the stick crouches: how deep the crouch shown is to be (0 to 1); -1: no crouch to show
 		int stance;             // the stance the stick asks for on this frame (Flickit::Stance)
+		bool railExit;          // the board is out of speed on a rail: off it now (ExitsByScript)
 	};
 
 	// Once per frame, before player one's controller is read: nothing is on for this frame
@@ -227,4 +228,19 @@ namespace FlickitGame {
 	// Called by the mod's IsPS2 script function when the game's Grind script asks. That script asks
 	// twice in the life of a grind: 15 frames in, and at the moment it starts taking switches.
 	void OnGrindScript(void* script);
+
+	// The way off a rail when the speed is gone (Frame::railExit): Flickit starts the game's own
+	// drop-down script with the side it picked, Skate's way (Flickit::PlanRailExit). False when that
+	// script is not there: then the drop-down button has to do.
+	bool ExitsByScript();
+	// The last way off, once it is known how it went, for the log
+	struct RailExit {
+		bool toLeft;            // to the skater's left
+		int why;                // Flickit::RailExitWhy
+		float speed;            // units/s sideways
+		bool surfaceLeft;       // a surface next to the rail at its height on his left,
+		bool surfaceRight;      // on his right
+		bool inAir;             // he came off into the air and got the push; else he skated in, bailed or stayed
+	};
+	bool TakeExit(RailExit& out);
 }

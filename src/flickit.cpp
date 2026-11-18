@@ -990,6 +990,71 @@ namespace Flickit {
 	}
 
 	// ------------------------------------------------------------------------------------------
+	// Off the rail when the speed is gone
+	// ------------------------------------------------------------------------------------------
+
+	const float kExitStep = 5.0f;
+
+	// Skate's push off a rail by DragClass: the force on the board (N), and the sideways speed it
+	// pushes the board up to (m/s)
+	static const float kExitPush[4][2] = {
+		{ 100.0f, 1.0f },     // on the trucks
+		{ 100.0f, 0.75f },    // truck and deck
+		{ 100.0f, 1.5f },     // nose and tail slides
+		{ 90.0f, 0.75f },     // the board across the rail
+	};
+	static const float kExitPushFiveO[2] = { 120.0f, 0.9f };
+	// On the trucks with a surface right next to the rail on both sides
+	static const float kExitPushGentle = 10.0f;
+
+	void PlanRailExit(bool surfaceA, bool surfaceB, int cameFrom, int fallback, int dragClass, bool fiveO, RailExitPlan& plan) {
+		if (dragClass < DRAG_TRUCKS || dragClass > DRAG_BOARDSLIDE) {
+			dragClass = DRAG_TRUCKS;
+		}
+		if (surfaceA != surfaceB) {
+			// A ledge: off the edge, away from its top
+			plan.side = surfaceA ? -1 : 1;
+			plan.why = EXIT_OPEN_SIDE;
+		}
+		else if (cameFrom != 0) {
+			plan.side = cameFrom < 0 ? -1 : 1;
+			plan.why = surfaceA ? EXIT_BOTH_SIDES : EXIT_CAME_FROM;
+		}
+		else {
+			plan.side = fallback < 0 ? -1 : 1;
+			plan.why = surfaceA ? EXIT_BOTH_SIDES : EXIT_NO_SIDE;
+		}
+
+		float force = kExitPush[dragClass][0];
+		float limit = kExitPush[dragClass][1];
+		if (dragClass == DRAG_TRUCKS && fiveO) {
+			force = kExitPushFiveO[0];
+			limit = kExitPushFiveO[1];
+		}
+		if (dragClass == DRAG_TRUCKS && surfaceA && surfaceB) {
+			force = kExitPushGentle;
+		}
+		// The speed the push gives the board over THUG's step to the side: v^2 = 2 a s, in metres at
+		// the scale of the drag
+		const float step = kExitStep / kUnitsPerMetre;
+		float speed = std::sqrt(2.0f * force / kBoardMass * step);
+		if (speed > limit) {
+			speed = limit;
+		}
+		plan.speed = speed * kUnitsPerMetre;
+	}
+
+	const char* RailExitWhyText(int why) {
+		switch (why) {
+		case EXIT_OPEN_SIDE: return "away from the ledge";
+		case EXIT_CAME_FROM: return "the side the board came from";
+		case EXIT_BOTH_SIDES: return "the side the board came from, a surface on both sides";
+		case EXIT_NO_SIDE: return "the game's own side";
+		default: return "?";
+		}
+	}
+
+	// ------------------------------------------------------------------------------------------
 	// How far a rail reaches for the board
 	// ------------------------------------------------------------------------------------------
 

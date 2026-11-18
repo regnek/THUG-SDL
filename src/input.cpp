@@ -560,6 +560,20 @@ static const char* flickitTiltText(const Flickit::Tilt& t, char* buf, size_t siz
 
 // What the game did with the last rail and what its grind script says, for the log
 static void flickitLogGame(const FlickitGame::Skater& sk, uint32_t now) {
+	FlickitGame::RailExit off;
+	if (FlickitGame::TakeExit(off)) {
+		const char* surfaces = off.surfaceLeft ? (off.surfaceRight ? "a surface on both sides" : "a surface on his left")
+			: (off.surfaceRight ? "a surface on his right" : "no surface on either side");
+		if (off.inAir) {
+			Log::TypedLog(CHN_SDL, "Flickit: out of speed on the rail: off to his %s (%s; %s), %.0f units/s sideways\n",
+				off.toLeft ? "left" : "right", Flickit::RailExitWhyText(off.why), surfaces, off.speed);
+		}
+		else {
+			Log::TypedLog(CHN_SDL, "Flickit: out of speed on the rail: off to his %s (%s; %s), but not into the air (skated in, bailed, or still on it)\n",
+				off.toLeft ? "left" : "right", Flickit::RailExitWhyText(off.why), surfaces);
+		}
+	}
+
 	FlickitGame::Pick pick;
 	if (FlickitGame::TakePick(pick)) {
 		char tilt[64];
@@ -871,7 +885,7 @@ int flickitPoll(device* dev, SDL_GameController* controller, Flickit::Output* ou
 		if (out->switchTo != Flickit::GRIND_UNKNOWN) {
 			Log::TypedLog(CHN_SDL, "Flickit: on the rail, switching to the %s\n", Flickit::GrindName(out->switchTo));
 		}
-		if (out->stepStarted) {
+		if (out->stepStarted && !FlickitGame::ExitsByScript()) {
 			Log::TypedLog(CHN_SDL, "Flickit: out of speed on the rail, stepping off %s\n",
 				out->stepSide < 0 ? "to the left, where the board came from" : out->stepSide > 0 ? "to the right, where the board came from" : "wherever the game finds room");
 		}
@@ -919,6 +933,8 @@ void flickitGameFrame(device* dev, const Flickit::Output& out) {
 	frame.popStrength = out.popStrength;
 	frame.crouchPose = flickitSettings.crouchPose ? out.crouchPose : -1.0f;
 	frame.stance = out.stance;
+	// The board is out of speed on a rail: the game side takes him off it, Skate's way
+	frame.railExit = out.stepStarted && FlickitGame::ExitsByScript();
 	frame.catchRails = flickitSettings.grindCatch != 0;
 	frame.pickGrind = flickitSettings.grindPick != 0;
 	frame.noBalance = flickitSettings.grindBalance == 0;
@@ -1022,8 +1038,9 @@ void flickitApply(device* dev, const Flickit::Output& o) {
 		dev->controlData[3] |= 0x01 << 0;
 		dev->controlData[18] = 0xff;
 	}
-	if (o.stepOff) {
-		// The game's own button for getting off a rail: Revert / Switch (R2 on its PlayStation pad)
+	if (o.stepOff && !FlickitGame::ExitsByScript()) {
+		// Only where the game side cannot start the way off itself (Frame::railExit): the game's own
+		// button for getting off a rail, Revert / Switch (R2 on its PlayStation pad)
 		dev->controlData[3] |= 0x01 << 1;
 		dev->controlData[19] = 0xff;
 		// With Left or Right held the skater steps off to that side. A direction the player holds wins.

@@ -62,6 +62,9 @@ namespace FlickitGame {
 	};
 	typedef void(__thiscall* StructAddChecksum_t)(GameStruct* structure, uint32_t name, uint32_t value);
 	static const StructAddChecksum_t StructAddChecksum = (StructAddChecksum_t)0x004123F0;
+	// The same for a whole number
+	typedef void(__thiscall* StructAddInteger_t)(GameStruct* structure, uint32_t name, int32_t value);
+	static const StructAddInteger_t StructAddInteger = (StructAddInteger_t)0x00412230;
 	typedef void(__thiscall* StructClear_t)(GameStruct* structure);
 	static const StructClear_t StructClear = (StructClear_t)0x00411790;
 
@@ -70,6 +73,12 @@ namespace FlickitGame {
 	// The command's name, its parameters, the script. 2 for a name it does not have.
 	typedef int(__thiscall* BalanceCommand_t)(void* balance, uint32_t name, GameStruct* params, void* script);
 	static const BalanceCommand_t BalanceCommand = (BalanceCommand_t)0x0055C370;
+
+	// CSkaterCorePhysicsComponent: does the line from CORE_LINE_START to CORE_LINE_END hit the world?
+	// The test SkateInAble and the game's test for a ledge at the start of a grind go through. The two
+	// numbers are what the line ignores (0x10, 0 there: what does not collide).
+	typedef bool(__thiscall* LineHit_t)(void* core, uint32_t ignore, uint32_t ignore2);
+	static const LineHit_t LineHit = (LineHit_t)0x005602F0;
 
 	// One of the skater's physics values (physics.q) by the checksum of its name
 	typedef float(__cdecl* GetPhysicsFloat_t)(uint32_t name, int flag);
@@ -227,6 +236,8 @@ namespace FlickitGame {
 		CORE_VELOCITY_LOCKED = 0x34C,   // one byte: turning does not turn the direction of travel
 		CORE_TURNING_LEFT = 0x365,      // one byte: the last turn on the ground went to the left
 		CORE_GRIND_TWEAK = 0x368,
+		CORE_LINE_START = 0x208,        // the two ends of the line for LineHit, four floats each
+		CORE_LINE_END = 0x218,
 		CORE_INPUT = 0x4B4,             // CInputComponent
 		CORE_BALANCE = 0x4CC,           // CSkaterBalanceTrickComponent
 		CORE_STATE = 0x4D0,             // CSkaterStateComponent
@@ -312,6 +323,19 @@ namespace FlickitGame {
 	static const uint32_t kLeft = 0x85981897;                 // Left
 	static const uint32_t kType = 0x7321A8D6;                 // Type
 	static const uint32_t kDoFlipCheck = 0x1304E677;          // DoFlipCheck
+	// SkateInOrBail { FallingLeft or Fallingright GrindBail = Airborne moveright = 5 movey = 5 }: THUG's way
+	// off a rail, to one side, without a bail
+	static const uint32_t kSkateInOrBail = 0x90E528CA;        // SkateInOrBail
+	static const uint32_t kFallingLeft = 0x73CE4E57;          // FallingLeft
+	static const uint32_t kFallingRight = 0xD0A71E0D;         // Fallingright
+	static const uint32_t kGrindBail = 0xA7E24442;            // GrindBail
+	static const uint32_t kAirborne = 0xCF3C89F7;             // Airborne
+	static const uint32_t kMoveRight = 0x1878C644;            // moveright
+	static const uint32_t kMoveY = 0x5A151ED3;                // movey
+	// The game's test for a ledge next to a rail
+	static const uint32_t kGroundSnapUp = 0xE4D79235;         // Physics_Ground_Snap_Up
+	static const uint32_t kBadLedgeDown = 0x9CD7ED5C;         // Rail_Bad_Ledge_Drop_Down_Dist
+	static const uint32_t kBadLedgeSide = 0x31669752;         // Rail_Bad_Ledge_Side_Dist
 	static const uint32_t kSkaterFlipAndRotate = 0x488AF07A;  // SkaterFlipAndRotate
 	static const uint32_t kAnim = 0x98549BA4;                 // Anim
 	static const uint32_t kTailGrindRange = 0x7896F05F;       // TailGrind_Range: the 5-0
@@ -781,6 +805,26 @@ namespace FlickitGame {
 		{ 0x0040F00E, 6, { 0x8B, 0x57, 0x04, 0x89, 0x56, 0x14 }, "script return: the parameters" },
 		{ 0x0056A7D5, 9, { 0x6A, 0x04, 0x8B, 0xCE, 0xE8, 0x52, 0x26, 0xFF, 0xFF }, "stick_to_rail: on the rail" },
 		{ 0x0055CE38, 9, { 0x8B, 0x86, 0xD0, 0x04, 0x00, 0x00, 0x83, 0xC0, 0x18 }, "set_state: the state" },
+		// the way off a rail (StartRailExit): the physics component's line test, from +0x208 to
+		// +0x218 through its own feeler, true when it hits, two to pop; the game's test for a ledge
+		// next to a rail at the start of a grind, which goes through it with the three names; a whole
+		// number into a structure; and how the trick component starts a button's trick: the flips and
+		// turns left for after, the script, at once, and he is doing a trick
+		{ 0x005602F0, 18, { 0x83, 0xEC, 0x10, 0x53, 0x56, 0x8B, 0xF1, 0x57, 0x8D, 0x86, 0x18, 0x02, 0x00, 0x00, 0x50, 0x8D, 0x8E, 0x08 }, "line test" },
+		{ 0x00560302, 10, { 0x02, 0x00, 0x00, 0x8D, 0xBE, 0xA8, 0x00, 0x00, 0x00, 0x51 }, "line test: the physics' own feeler" },
+		{ 0x00560336, 13, { 0x75, 0x0B, 0x5F, 0x5E, 0x32, 0xC0, 0x5B, 0x83, 0xC4, 0x10, 0xC2, 0x08, 0x00 }, "line test: no hit, pops two" },
+		{ 0x0056AAFB, 12, { 0x6A, 0x00, 0x68, 0x35, 0x92, 0xD7, 0xE4, 0xE8, 0x09, 0xB6, 0xFA, 0xFF }, "ledge test: Physics_Ground_Snap_Up" },
+		{ 0x0056AB10, 13, { 0x6A, 0x00, 0xD9, 0x96, 0x08, 0x02, 0x00, 0x00, 0x68, 0x5C, 0xED, 0xD7, 0x9C }, "ledge test: Rail_Bad_Ledge_Drop_Down_Dist, the line" },
+		{ 0x0056AB3D, 14, { 0x6A, 0x00, 0xD9, 0x9C, 0x24, 0x9C, 0x00, 0x00, 0x00, 0x68, 0x52, 0x97, 0x66, 0x31 }, "ledge test: Rail_Bad_Ledge_Side_Dist" },
+		{ 0x0056ADD7, 9, { 0x6A, 0x10, 0x8B, 0xCE, 0xE8, 0x10, 0x55, 0xFF, 0xFF }, "ledge test: the line test" },
+		{ 0x00412230, 12, { 0x6A, 0xFF, 0x68, 0x9B, 0x19, 0x62, 0x00, 0x64, 0xA1, 0x00, 0x00, 0x00 }, "CStruct::AddInteger" },
+		{ 0x004122A5, 11, { 0x8B, 0x4C, 0x24, 0x1C, 0x8B, 0x54, 0x24, 0x20, 0x89, 0x48, 0x04 }, "CStruct::AddInteger: the name" },
+		{ 0x004122BB, 6, { 0xC6, 0x00, 0x01, 0x89, 0x50, 0x08 }, "CStruct::AddInteger: a whole number, its value" },
+		{ 0x004122D3, 6, { 0x83, 0xC4, 0x10, 0xC2, 0x08, 0x00 }, "CStruct::AddInteger pops two" },
+		{ 0x00455546, 8, { 0x8B, 0x4E, 0x2C, 0xE8, 0x12, 0xB0, 0x11, 0x00 }, "a button's trick: the afters" },
+		{ 0x0045554E, 17, { 0x8B, 0x54, 0x24, 0x24, 0x8B, 0x44, 0x24, 0x10, 0x52, 0x50, 0x8B, 0xCF, 0xE8, 0x51, 0x95, 0xFC, 0xFF }, "a button's trick: its script" },
+		{ 0x0045555F, 8, { 0x8B, 0x4F, 0x10, 0xE8, 0x39, 0x9B, 0xFB, 0xFF }, "a button's trick: run at once" },
+		{ 0x00455567, 10, { 0x8B, 0x4E, 0x30, 0xC6, 0x81, 0xD8, 0x00, 0x00, 0x00, 0x01 }, "a button's trick: doing a trick" },
 	};
 
 	static bool s_checked = false;
@@ -815,6 +859,14 @@ namespace FlickitGame {
 			|| Flickit::NameChecksum("ButtonB") != kButtonB || Flickit::NameChecksum("Right") != kRight
 			|| Flickit::NameChecksum("Left") != kLeft || Flickit::NameChecksum("Type") != kType
 			|| Flickit::NameChecksum("DoFlipCheck") != kDoFlipCheck) {
+			s_available = false;
+		}
+		if (Flickit::NameChecksum("SkateInOrBail") != kSkateInOrBail || Flickit::NameChecksum("FallingLeft") != kFallingLeft
+			|| Flickit::NameChecksum("Fallingright") != kFallingRight || Flickit::NameChecksum("GrindBail") != kGrindBail
+			|| Flickit::NameChecksum("Airborne") != kAirborne || Flickit::NameChecksum("moveright") != kMoveRight
+			|| Flickit::NameChecksum("movey") != kMoveY || Flickit::NameChecksum("Physics_Ground_Snap_Up") != kGroundSnapUp
+			|| Flickit::NameChecksum("Rail_Bad_Ledge_Drop_Down_Dist") != kBadLedgeDown
+			|| Flickit::NameChecksum("Rail_Bad_Ledge_Side_Dist") != kBadLedgeSide) {
 			s_available = false;
 		}
 		for (int i = 0; i < PUSH_CLIPS; i++) {
@@ -878,6 +930,8 @@ namespace FlickitGame {
 	static uint32_t s_frames = 0;
 	// A crouch that ended without a pop: the game is to see no jump in it (PadUpdateHook)
 	static bool s_standUp = false;
+	// The board is out of speed on a rail: the recognizer asks for the way off on this frame (RailExitFrame)
+	static bool s_exitAsked = false;
 	// A pop out of a crouch: how deep the crouch was (Flickit::Output::popStrength), and on which frame
 	static float s_popStrength = -1.0f;
 	static uint32_t s_popFrame = 0;
@@ -904,6 +958,9 @@ namespace FlickitGame {
 		s_frames++;
 		if (frame.standUp) {
 			s_standUp = true;
+		}
+		if (frame.railExit) {
+			s_exitAsked = true;
 		}
 		s_stance.Ask(frame.stance);
 		if (frame.popStrength >= 0.0f) {
@@ -1187,6 +1244,7 @@ namespace FlickitGame {
 		}
 		GiveBackTurnNow();
 		s_active = false;
+		s_exitAsked = false;
 		ReachForget();
 	}
 
@@ -1998,6 +2056,200 @@ namespace FlickitGame {
 
 	/******************************************************************/
 	/*                                                                */
+	/*  Off the rail when the speed is gone                           */
+	/******************************************************************/
+
+	// When the board has run out of speed (RailRun::WantsOff) Skate pushes it sideways off the rail:
+	// off a ledge away from its top, off a rail to the side the board sits on (Flickit::PlanRailExit).
+	// THUG's way off a rail is its drop-down, SkateInOrBail: next to a vert ramp the skater skates in,
+	// anywhere else he is lifted 5 units, put 5 units to the side and let fall. Its button press goes
+	// to the right whichever side is asked for, unless THUG-SDL's directional drop-down is on (the
+	// scripts move by "moveright" for both sides), so that half the time he came down on top of the
+	// ledge he had just left. Flickit starts that script itself instead, the way the trick component
+	// starts it for the button, with the side and the step it picked, and gives the skater Skate's
+	// speed sideways once he is in the air.
+	struct ExitPush {
+		bool pending;                       // the script runs; the push is due once he is in the air
+		int frames;                         // frames it has been due
+		float side[3];                      // the way off, level
+		float speed;                        // units/s
+	};
+	static ExitPush s_exitPush;
+	static const int kExitPushFrames = 30;   // a skater still on the rail after this long did not get off
+	static bool s_hasExit = false;
+	static RailExit s_exit;
+
+	// Is there a surface right next to the rail on this side, at its height: the game's own test for
+	// a ledge at the start of a grind, at the place the board is now. A line from Physics_Ground_Snap_Up
+	// above the rail to Rail_Bad_Ledge_Drop_Down_Dist below it, Rail_Bad_Ledge_Side_Dist to the side,
+	// through the physics component's own line test.
+	static bool SurfaceBeside(uint8_t* core, const float* at, const float* across, float sign) {
+		const float up = GetPhysicsFloat(kGroundSnapUp, 0);
+		const float down = GetPhysicsFloat(kBadLedgeDown, 0);
+		const float aside = GetPhysicsFloat(kBadLedgeSide, 0) * sign;
+		float* start = (float*)(core + CORE_LINE_START);
+		float* end = (float*)(core + CORE_LINE_END);
+		start[0] = at[0] + across[0] * aside;
+		start[1] = at[1] + up;
+		start[2] = at[2] + across[2] * aside;
+		start[3] = at[3];
+		end[0] = start[0];
+		end[1] = at[1] - down;
+		end[2] = start[2];
+		end[3] = at[3];
+		return LineHit(core, 0x10, 0);
+	}
+
+	// The board has been out of speed on the rail long enough: take him off it. On a frame of the
+	// skater's pad, between his script's turn and his physics'.
+	static void StartRailExit(uint8_t* skater, uint8_t* core, uint8_t* state) {
+		if (*(const int32_t*)(state + STATE_STATE) != 4 || s_exitPush.pending) {
+			return;
+		}
+		// Only from the grind's own script, as the game's button does: not in a bail, a switch, a pop
+		void* script = *(void**)(skater + OBJECT_SCRIPT);
+		const ScriptAt at = ScriptOf(skater);
+		if (!script || (at.running != kGrindBalance && at.caller != kGrindBalance)) {
+			return;
+		}
+		const uint8_t* symbol = (const uint8_t*)LookUpSymbol(kSkateInOrBail);
+		if (!symbol || symbol[1] != 7) {
+			return;
+		}
+
+		// Across the rail, level: from the way the board went on it, else from the piece of rail
+		float along[3] = { 0.0f, 0.0f, 0.0f };
+		if (s_rail.hasDirection) {
+			along[0] = s_rail.direction[0];
+			along[2] = s_rail.direction[2];
+		}
+		else {
+			const uint8_t* node = *(const uint8_t* const*)(core + CORE_RAIL_NODE);
+			const uint8_t* next = node ? *(const uint8_t* const*)(node + RAIL_NEXT) : 0;
+			const uint8_t* previous = node ? *(const uint8_t* const*)(node + RAIL_PREVIOUS) : 0;
+			const uint8_t* from = next ? node : previous;
+			const uint8_t* to = next ? next : node;
+			if (from && to) {
+				along[0] = ((const float*)(to + RAIL_POSITION))[0] - ((const float*)(from + RAIL_POSITION))[0];
+				along[2] = ((const float*)(to + RAIL_POSITION))[2] - ((const float*)(from + RAIL_POSITION))[2];
+			}
+		}
+		const float length = std::sqrt(along[0] * along[0] + along[2] * along[2]);
+		if (!(length > 0.001f)) {
+			return;
+		}
+		const float across[3] = { along[2] / length, 0.0f, -along[0] / length };
+
+		const float* position = (const float*)(skater + OBJECT_POSITION);
+		const bool surfaceA = SurfaceBeside(core, position, across, 1.0f);
+		const bool surfaceB = SurfaceBeside(core, position, across, -1.0f);
+		int cameFrom = 0;
+		if (s_rail.hasFrom) {
+			cameFrom = s_rail.from[0] * across[0] + s_rail.from[2] * across[2] > 0.0f ? 1 : -1;
+		}
+		// Where THUG goes when nothing says: the skater's right
+		const float* left = (const float*)(skater + OBJECT_LEFT);
+		const float leftAcross = left[0] * across[0] + left[2] * across[2];
+		const bool fiveO = s_grind == Flickit::GRIND_FIVE_O || (s_grind == Flickit::GRIND_UNKNOWN && s_rail.hasPick && s_rail.pick == Flickit::GRIND_FIVE_O);
+		Flickit::RailExitPlan plan;
+		Flickit::PlanRailExit(surfaceA, surfaceB, cameFrom, leftAcross > 0.0f ? -1 : 1, s_rail.dragClass, fiveO, plan);
+		const float side[3] = { across[0] * (float)plan.side, 0.0f, across[2] * (float)plan.side };
+		const bool toLeft = left[0] * side[0] + left[2] * side[2] > 0.0f;
+
+		// Started the way the trick component starts a button's trick: the flips and turns the grind
+		// left for "after" first, then the script, run at once, and he is doing a trick. The script:
+		// SkateInOrBail { FallingLeft or Fallingright GrindBail = Airborne moveright = step movey = step },
+		// the side ahead of the buttons it would ask, no bail where there is no ground, and the step
+		// to that side (Move x goes to his left) and up.
+		void* flipRotate = GetComponent(skater, kSkaterFlipAndRotate);
+		if (flipRotate) {
+			FlipRotateAfters(flipRotate);
+		}
+		GameStruct params = { 0 };
+		StructAddChecksum(&params, 0, toLeft ? kFallingLeft : kFallingRight);
+		StructAddChecksum(&params, kGrindBail, kAirborne);
+		StructAddInteger(&params, kMoveRight, toLeft ? (int32_t)Flickit::kExitStep : -(int32_t)Flickit::kExitStep);
+		StructAddInteger(&params, kMoveY, (int32_t)Flickit::kExitStep);
+		SetScript(script, kSkateInOrBail, &params, skater);
+		StructClear(&params);
+		ScriptUpdate(script);
+		state[STATE_DOING_TRICK] = 1;
+
+		s_exitPush.pending = true;
+		s_exitPush.frames = 0;
+		s_exitPush.side[0] = side[0];
+		s_exitPush.side[1] = 0.0f;
+		s_exitPush.side[2] = side[2];
+		s_exitPush.speed = plan.speed;
+
+		// For the log, once it is known how it went
+		s_exit.toLeft = toLeft;
+		s_exit.why = plan.why;
+		s_exit.speed = plan.speed;
+		s_exit.surfaceLeft = (leftAcross > 0.0f) ? surfaceA : surfaceB;
+		s_exit.surfaceRight = (leftAcross > 0.0f) ? surfaceB : surfaceA;
+		s_exit.inAir = false;
+	}
+
+	// Once he is in the air off the rail, Skate's push has the board going sideways at its speed
+	static void PushOffRail(uint8_t* skater, const uint8_t* state) {
+		if (!s_exitPush.pending) {
+			return;
+		}
+		const int32_t now = *(const int32_t*)(state + STATE_STATE);
+		if (now == 1) {
+			float* velocity = (float*)(skater + OBJECT_VELOCITY);
+			const float sideways = velocity[0] * s_exitPush.side[0] + velocity[2] * s_exitPush.side[2];
+			if (sideways < s_exitPush.speed) {
+				velocity[0] += s_exitPush.side[0] * (s_exitPush.speed - sideways);
+				velocity[2] += s_exitPush.side[2] * (s_exitPush.speed - sideways);
+			}
+			s_exitPush.pending = false;
+			s_exit.inAir = true;
+			s_hasExit = true;
+		}
+		else if (now != 4 || ++s_exitPush.frames > kExitPushFrames) {
+			// He skated in (a vert ramp next to the rail), bailed, or is still on the rail
+			s_exitPush.pending = false;
+			s_exit.inAir = false;
+			s_hasExit = true;
+		}
+	}
+
+	static void RailExitFrame(uint8_t* skater, uint8_t* core) {
+		uint8_t* state = *(uint8_t**)(core + CORE_STATE);
+		const bool asked = s_exitAsked;
+		s_exitAsked = false;
+		if (!state) {
+			return;
+		}
+		PushOffRail(skater, state);
+		if (asked && s_active) {
+			StartRailExit(skater, core, state);
+			// The game's own drop-down is in the air at once; THUG-SDL's directional one a frame later
+			PushOffRail(skater, state);
+		}
+	}
+
+	bool ExitsByScript() {
+		if (!s_installed) {
+			return false;
+		}
+		const uint8_t* symbol = (const uint8_t*)LookUpSymbol(kSkateInOrBail);
+		return symbol && symbol[1] == 7;
+	}
+
+	bool TakeExit(RailExit& out) {
+		if (!s_hasExit) {
+			return false;
+		}
+		out = s_exit;
+		s_hasExit = false;
+		return true;
+	}
+
+	/******************************************************************/
+	/*                                                                */
 	/*  Rolling: a push on a button                                   */
 	/******************************************************************/
 
@@ -2040,6 +2292,7 @@ namespace FlickitGame {
 		if (!input || input + INPUT_PAD != pad) {
 			return;
 		}
+		RailExitFrame(skater, (uint8_t*)core);
 		ShowCrouch(skater);
 		KeepStance(skater);
 		if (!s_active || (!s_standUp && (s_frame.push <= 0 || !s_frame.pushOverTurn || !s_push.Animating()))) {

@@ -1802,6 +1802,133 @@ static bool near(double a, double b, double tolerance) {
 	return fabs(a - b) <= tolerance;
 }
 
+// What the way off a rail relies on in the game's scripts (StartRailExit in flickit_game.cpp, and
+// tools/check_hooks.py there for the game's code): THUG's button for it runs SkateInOrBail with
+// moveright = -5, and where there is no ground the plain SkateIn_Left moves by moveright just as
+// SkateIn_Right does, so the button always took the skater to his right. Flickit starts the script
+// itself with FallingLeft or Fallingright, which it takes before anything else, and its own step.
+static void testExitScripts(const std::string& scriptDir) {
+	g_case = "off the rail: the game's scripts";
+	std::string grindRaw, tricksRaw, manualRaw;
+	CHECK(readFile(scriptDir + "/grindscripts.q", grindRaw));
+	CHECK(readFile(scriptDir + "/tricks.q", tricksRaw));
+	CHECK(readFile(scriptDir + "/manualtricks.q", manualRaw));
+	if (grindRaw.empty() || tricksRaw.empty() || manualRaw.empty()) return;
+	const std::string grinds = squashed(grindRaw), tricks = squashed(tricksRaw), manual = squashed(manualRaw);
+
+	// The button's own trick
+	CHECK(grinds.find("grindrelease = [ { trigger = { press , r2 , 100 } scr = skateinorbail params = { grindrelease grindbail = airborne moveright = -5 movey = 5 } } ]") != std::string::npos);
+	// SkateInOrBail: its defaults, then the side given as a flag before the buttons, in both branches
+	const std::string sib = scriptText(grinds, "SkateInOrBail");
+	CHECK(sib.find("script skateinorbail moveleft = 1 moveright = -1 movey = -5 gettags norailtricks stopbalancetrick killextratricks") == 0);
+	const size_t plain = sib.find(" else if gotparam fallingright goto skatein_right params = { <...> } endif if gotparam fallingleft goto skatein_left params = { <...> } endif if gotparam grindrelease");
+	CHECK(plain != std::string::npos);
+	const size_t directional = sib.find("if gotparam fallingright movex = -5 movey = 5 goto skatein_right_directional params = { <...> } endif if gotparam fallingleft movex = 5 movey = 5 goto skatein_left_directional");
+	CHECK(directional != std::string::npos && directional < plain);
+	// Without ground: the plain ones both move by moveright, the directional ones to their side
+	const char* plainNames[] = { "SkateIn_Right", "SkateIn_Left" };
+	for (int i = 0; i < 2; i++) {
+		const std::string b = scriptText(grinds, plainNames[i]);
+		const size_t otherwise = b.rfind(" else ");
+		CHECK(otherwise != std::string::npos && b.find("move y = <movey> move x = <moveright> skatein_bail <...>", otherwise) != std::string::npos);
+	}
+	CHECK(scriptText(grinds, "SkateIn_Right_Directional").find("move y = <movey> wait 1 frame move x = -5 skatein_bail <...>") != std::string::npos);
+	CHECK(scriptText(grinds, "SkateIn_Left_Directional").find("move y = <movey> wait 1 frame move x = 5 skatein_bail <...>") != std::string::npos);
+	// ... and then whatever GrindBail says: Airborne, which puts him in the air
+	CHECK(scriptText(grinds, "SkateIn_Bail").find("if gotparam grindbail goto <grindbail> else goto fiftyfiftyfall endif") != std::string::npos);
+	CHECK(scriptText(tricks, "Airborne").find(" inairexceptions <...> ") != std::string::npos);
+	CHECK(scriptText(tricks, "InAirExceptions").find(" setstate air ") != std::string::npos);
+	// The Grind script ends waiting in a script of its own, which waits there itself
+	const std::string grind = scriptText(grinds, "Grind");
+	const std::string waits = "waitwhilstchecking_forpressure <...>";
+	CHECK(grind.size() > waits.size() && grind.compare(grind.size() - waits.size(), waits.size(), waits) == 0);
+	CHECK_EQ(countOf(scriptText(manual, "WaitWhilstChecking_ForPressure"), "wait 1 game frame"), 2);
+}
+
+// Skate's push off a rail, tick by tick at its 60 Hz: the force works on the 11.56 kg board while it
+// moves sideways slower than the set speed, until the board has gone THUG's step to the side.
+// Returns the sideways speed then, in THUG's units per second.
+static float skatePushOff(float force, float limit) {
+	const float dt = 1.0f / 60.0f, mass = 11.56f, step = kExitStep / kUnitsPerMetre;
+	float v = 0.0f, s = 0.0f;
+	for (int tick = 0; tick < 35 && s < step; tick++) {     // Skate gives up after 35 ticks
+		if (v < limit) {
+			v += force / mass * dt;
+			if (v > limit) v = limit;
+		}
+		s += v * dt;
+	}
+	return v * kUnitsPerMetre;
+}
+
+static void testRailExit() {
+	g_case = "off the rail: which side";
+	RailExitPlan plan;
+	// A ledge: away from its top, wherever the board came from and whatever the fallback says
+	for (int from = -1; from <= 1; from++) {
+		for (int fallback = -1; fallback <= 1; fallback += 2) {
+			PlanRailExit(true, false, from, fallback, DRAG_TRUCKS, false, plan);
+			CHECK_EQ(plan.side, -1);
+			CHECK_EQ(plan.why, EXIT_OPEN_SIDE);
+			PlanRailExit(false, true, from, fallback, DRAG_TRUCKS, false, plan);
+			CHECK_EQ(plan.side, 1);
+			CHECK_EQ(plan.why, EXIT_OPEN_SIDE);
+		}
+	}
+	// A rail on its own: the side the board came from, else the fallback
+	PlanRailExit(false, false, 1, -1, DRAG_TRUCKS, false, plan);
+	CHECK_EQ(plan.side, 1);
+	CHECK_EQ(plan.why, EXIT_CAME_FROM);
+	PlanRailExit(false, false, -1, 1, DRAG_TRUCKS, false, plan);
+	CHECK_EQ(plan.side, -1);
+	CHECK_EQ(plan.why, EXIT_CAME_FROM);
+	PlanRailExit(false, false, 0, -1, DRAG_TRUCKS, false, plan);
+	CHECK_EQ(plan.side, -1);
+	CHECK_EQ(plan.why, EXIT_NO_SIDE);
+	PlanRailExit(false, false, 0, 1, DRAG_TRUCKS, false, plan);
+	CHECK_EQ(plan.side, 1);
+	// A surface on both sides: the side the board came from
+	PlanRailExit(true, true, -1, 1, DRAG_TRUCKS, false, plan);
+	CHECK_EQ(plan.side, -1);
+	CHECK_EQ(plan.why, EXIT_BOTH_SIDES);
+	PlanRailExit(true, true, 0, 1, DRAG_TRUCKS, false, plan);
+	CHECK_EQ(plan.side, 1);
+	CHECK_EQ(plan.why, EXIT_BOTH_SIDES);
+
+	g_case = "off the rail: how fast sideways";
+	// Worked out by hand: sqrt(2 F / 11.56 kg * 5/80 m), at most the set speed, times 80
+	struct Case { int dragClass; bool fiveO; bool both; float force, limit, speed; };
+	const Case cases[] = {
+		{ DRAG_TRUCKS, false, false, 100.0f, 1.0f, 80.0f },       // 1.04 m/s capped at 1
+		{ DRAG_TRUCKS, true, false, 120.0f, 0.9f, 72.0f },        // a 5-0: 1.14 capped at 0.9
+		{ DRAG_TRUCKS, false, true, 10.0f, 1.0f, 26.31f },        // gentle: 0.329 m/s
+		{ DRAG_TRUCKS, true, true, 10.0f, 0.9f, 26.31f },
+		{ DRAG_ANGLED, false, false, 100.0f, 0.75f, 60.0f },
+		{ DRAG_ANGLED, false, true, 100.0f, 0.75f, 60.0f },       // only the grinds on the trucks push gently
+		{ DRAG_TIPSLIDE, false, false, 100.0f, 1.5f, 83.19f },    // off before the set speed: 1.04 m/s
+		{ DRAG_BOARDSLIDE, false, false, 90.0f, 0.75f, 60.0f },   // 0.99 capped at 0.75
+	};
+	for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+		const Case& c = cases[i];
+		PlanRailExit(c.both, c.both, 1, 1, c.dragClass, c.fiveO, plan);
+		CHECK(std::fabs(plan.speed - c.speed) < 0.05f);
+		// and Skate's push itself, tick by tick, comes to the same within a few percent
+		const float ticked = skatePushOff(c.force, c.limit);
+		CHECK(std::fabs(ticked - plan.speed) < 0.08f * plan.speed);
+		if (std::fabs(plan.speed - c.speed) >= 0.05f || std::fabs(ticked - plan.speed) >= 0.08f * plan.speed) {
+			printf("    case %d: %.2f units/s, by the tick %.2f, wanted %.2f\n", (int)i, plan.speed, ticked, c.speed);
+		}
+	}
+	// a class the game side does not know is the trucks
+	PlanRailExit(false, false, 1, 1, 99, false, plan);
+	CHECK(std::fabs(plan.speed - 80.0f) < 0.05f);
+	PlanRailExit(false, false, 1, 1, -3, false, plan);
+	CHECK(std::fabs(plan.speed - 80.0f) < 0.05f);
+	// THUG's step: 5 units
+	CHECK(std::fabs(kExitStep - 5.0f) < 1e-6f);
+	for (int why = EXIT_OPEN_SIDE; why <= EXIT_NO_SIDE; why++) CHECK(std::string(RailExitWhyText(why)) != "?");
+}
+
 static void testDragNumbers() {
 	g_case = "drag: what the rail is made of";
 	CHECK_EQ(SurfaceOfTerrain(45), SURFACE_RAIL);     // TERRAIN_GRINDMETAL
@@ -3280,8 +3407,10 @@ int main(int argc, char** argv) {
 	testNameChecksum();
 	testGrindTable(scriptDir);
 	testByNameBalance(scriptDir);
+	testExitScripts(scriptDir);
 	testTiltTable();
 	testDragNumbers();
+	testRailExit();
 	testReach();
 	testFindRail();
 	const double rates[] = { 30.0, 60.0, 120.0, 144.0, 240.0 };

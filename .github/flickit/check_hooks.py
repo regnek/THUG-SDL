@@ -130,6 +130,8 @@ NAMES = {
     0x004123F0: "CStruct::AddChecksum",
     0x00411790: "CStruct::Clear",
     0x0055C370: "the balance component's script commands",
+    0x00412230: "CStruct::AddInteger",
+    0x005602F0: "the physics component's line test",
     BONE_POSITION: "where a bone is",
     ANIM_OVER: "is the animation over",
     CHANNEL_OVER: "is the channel over",
