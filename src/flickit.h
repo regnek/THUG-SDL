@@ -647,8 +647,9 @@ namespace Flickit {
 	// What a push animation the game shows gives way to. Skate's order on the ground puts the
 	// wind-up for an ollie or a nollie (the crouch) before the push, and lets it break into a
 	// push once the push is past its start, where the foot goes down and pushes; the push comes
-	// before the brake and the turns. Down (a brake, or THUG's sharp turn) has already taken the
-	// push's speed away (the physics see to that), so the animation goes at once.
+	// before the brake and the turns. Down (THUG's brake: THUG never kicks with Down held, to one
+	// side or not) has already taken the push's speed away (the physics see to that), so the
+	// animation goes at once.
 	enum GiveWay {
 		GIVE_NONE = 0,
 		GIVE_CROUCH = 1,

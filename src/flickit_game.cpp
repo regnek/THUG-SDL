@@ -2348,7 +2348,7 @@ namespace FlickitGame {
 			// A script may have switched "auto kick" back on a moment ago
 			core[CORE_AUTO_KICK] = 0;
 			if (down) {
-				s_push.Reset();     // Down brakes, or turns sharply: either way the foot comes back up
+				s_push.Reset();     // Down: THUG never kicks with it held, to one side or not. The foot comes back up
 			}
 			else if (s_push.Active() || s_frame.pushHeld) {
 				// A board that is being pushed is not braking, and one that is about to be has to
@@ -2923,7 +2923,14 @@ namespace FlickitGame {
 
 	// Stands where the physics of the ground turn the skater. Same convention: this in ecx, no
 	// arguments, nothing answered. The game's own: 1.8 radians a second for Left or Right, at any
-	// speed, and twice that with Down. With Down the turn stays the game's.
+	// speed, and twice that with Down as well.
+	//
+	// Down changes nothing here, as in Skate, where only how far the stick is pushed to the side
+	// counts. The game reads Left, Right and Down off the stick one axis at a time, once it is
+	// more than 50 of its 128 steps out of the middle on that axis (0x004213A0, 0x004214D0): a
+	// stick pushed all the way to one side and a quarter of the way round toward Down is Down
+	// as well. Handing such a frame to the game swapped the trucks for its sharp turn, twice its
+	// own, and back to straight trucks again as the thumb went up and down in a carve.
 	static void __fastcall TurnHook(uint8_t* core) {
 		GiveBackTurn(core);     // where the brake test did not come by (something is balanced)
 		if (!Drives(core) || s_frame.steering <= 0) {
@@ -2932,9 +2939,9 @@ namespace FlickitGame {
 		}
 		uint8_t* skater = *(uint8_t**)(core + COMPONENT_OBJECT);
 		const uint8_t* input = *(const uint8_t* const*)(core + CORE_INPUT);
-		// With Down, and where a script has taken the controls away (the stick does not come
-		// through the game's pad either), the turn is the game's
-		if (!skater || !input || input[INPUT_DOWN_PRESSED] != 0 || input[INPUT_DISABLED] != 0 || input[INPUT_NET_DISABLED] != 0) {
+		// Where a script has taken the controls away (the stick does not come through the game's
+		// pad either), the turn is the game's
+		if (!skater || !input || input[INPUT_DISABLED] != 0 || input[INPUT_NET_DISABLED] != 0) {
 			s_steer.Reset();
 			GroundTurn(core);
 			return;
