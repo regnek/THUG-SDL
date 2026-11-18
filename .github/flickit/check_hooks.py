@@ -17,6 +17,9 @@ they have to keep to what the game's code expects there, whatever the compiler m
                 (or a jump into the game's function, which does the popping)
   rail balance  takes the place of a call to a function without arguments: every return is a plain ret
                 (this one also carries the drag on a rail)
+  balance meter takes the place of the call that shows the balance meter in the balance update, to a
+                function that pops two arguments: every return is ret 8 (or a jump into the game's
+                function)
   air gravity   takes the place of four calls to a function without arguments that answers on the
                 floating point stack: every return is a plain ret
   jump          takes the place of the call to do_jump, which pops one argument: every return is
@@ -73,6 +76,7 @@ import pefile
 # Addresses in the game that the hooks refer to
 DO_GRIND_TRICK = 0x005608C0
 BALANCE_UPDATE = 0x0050B9C0
+SET_BALANCE_METER = 0x004F6700
 GET_LOCAL_SKATER = 0x004F94F0
 GET_PHYSICS_FLOAT = 0x00516110
 RAIL_SEARCH = 0x00514630
@@ -103,6 +107,7 @@ RAIL_BOOST_PATTERN = bytes.fromhex("56e8") + b"...." + bytes.fromhex("83c404ffe0
 NAMES = {
     DO_GRIND_TRICK: "do_grind_trick",
     BALANCE_UPDATE: "the balance update",
+    SET_BALANCE_METER: "SetBalanceMeter",
     GET_LOCAL_SKATER: "GetLocalSkater",
     GET_PHYSICS_FLOAT: "GetPhysicsFloat",
     RAIL_SEARCH: "the game's search for a rail",
@@ -373,7 +378,7 @@ def check(path):
     pointers = dll.code_pointers()
     print("  %d functions have their address taken" % len(pointers))
 
-    catch, pick, balance, boost, search, valid = [], [], [], [], [], []
+    catch, pick, balance, meter, boost, search, valid = [], [], [], [], [], [], []
     gravity, jump, jump_speed = [], [], []
     brake, kick, friction, turning, held, pad = [], [], [], [], [], []
     air_turn, spin_rate, anim_finished, anim_wait = [], [], [], []
@@ -391,6 +396,8 @@ def check(path):
             pick.append((p, insns))
         elif BALANCE_UPDATE in refs:
             balance.append((p, insns))
+        elif SET_BALANCE_METER in refs:
+            meter.append((p, insns))
         elif RAIL_SEARCH in refs:
             search.append((p, insns))
         elif RAIL_VALID in refs:
@@ -560,6 +567,16 @@ def check(path):
         rets = returns(insns)
         if not rets or any(r != 0 for r in rets):
             problems.append("the rail balance hook returns with %s, not with a plain ret" % rets)
+
+    # --- balance meter
+    if len(meter) != 1:
+        problems.append("the balance meter hook was found %d times" % len(meter))
+    for p, insns in meter:
+        show(dll, "balance meter hook at %08X" % p, insns)
+        rets = returns(insns)
+        tail = insns and insns[-1].mnemonic == "jmp"
+        if any(r != 8 for r in rets) or (not rets and not tail):
+            problems.append("the balance meter hook returns with %s: every return has to pop 8 bytes" % [hex(r) for r in rets])
 
     # --- rail boost
     if len(boost) != 1:

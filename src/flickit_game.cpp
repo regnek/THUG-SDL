@@ -36,6 +36,12 @@ namespace FlickitGame {
 	typedef void(__thiscall* BalanceUpdate_t)(void* record);
 	static const BalanceUpdate_t BalanceUpdate = (BalanceUpdate_t)0x0050B9C0;
 
+	// Mdl::Score::SetBalanceMeter: shows (on) or hides the balance meter of a skater's panel, its
+	// arrow at value. this = the score. The meter's scripts (show_balance_meter, hide_balance_meter)
+	// run only when on is not what the meter already is; of on only the low byte counts.
+	typedef void(__thiscall* SetBalanceMeter_t)(void* score, uint32_t on, float value);
+	static const SetBalanceMeter_t SetBalanceMeter = (SetBalanceMeter_t)0x004F6700;
+
 	// Script::CScript
 	typedef void(__thiscall* SetScript_t)(void* script, uint32_t name, void* params, void* object);
 	static const SetScript_t SetScript = (SetScript_t)0x0040FBC0;
@@ -464,6 +470,9 @@ namespace FlickitGame {
 	static uint8_t* const kCatchTest2 = (uint8_t*)0x0056FA36;   // cmp byte ptr [edx+1A0h], 0   the same test in the skater's update
 	static uint8_t* const kPickCall = (uint8_t*)0x0056AFDC;     // call do_grind_trick          at the end of stick_to_rail
 	static uint8_t* const kBalanceCall = (uint8_t*)0x0056D065;  // call the balance update      in the rail physics
+	// call SetBalanceMeter in the balance update: the meter of a balance on Left and Right, shown on
+	// every frame of it (one on Up and Down, a manual's, has a call of its own right after this one)
+	static uint8_t* const kMeterCall = (uint8_t*)0x0050BF0F;
 	static uint8_t* const kBoostCall = (uint8_t*)0x0056A9D9;    // call GetPhysicsFloat         for Rail_Speed_Boost, in stick_to_rail
 	// call CRailManager::StickToRail: after each of the two catch tests, first for the rails of the
 	// level, then for those of each thing that moves
@@ -529,6 +538,7 @@ namespace FlickitGame {
 		{ 0x0056FA30, 15, { 0x8B, 0x96, 0xB4, 0x04, 0x00, 0x00, 0x80, 0xBA, 0xA0, 0x01, 0x00, 0x00, 0x00, 0x0F, 0x84 }, "rail catch test in the update" },
 		{ 0x0056AFDA, 7, { 0x8B, 0xCE, 0xE8, 0xDF, 0x58, 0xFF, 0xFF }, "grind pick" },
 		{ 0x0056D062, 8, { 0x8D, 0x48, 0x7C, 0xE8, 0x56, 0xE9, 0xF9, 0xFF }, "rail balance" },
+		{ 0x0050BF0D, 7, { 0x6A, 0x01, 0xE8, 0xEC, 0xA7, 0xFE, 0xFF }, "balance meter" },
 		{ 0x0056A9A7, 5, { 0x68, 0x95, 0xB3, 0x7B, 0x45 }, "rail boost name" },
 		{ 0x0056A9D9, 5, { 0xE8, 0x32, 0xB7, 0xFA, 0xFF }, "rail boost" },
 		{ 0x0056CC52, 7, { 0x8B, 0xCF, 0xE8, 0xD7, 0x79, 0xFA, 0xFF }, "rail search" },
@@ -591,6 +601,7 @@ namespace FlickitGame {
 		{ 0x0041BDC0, 12, { 0x8B, 0x81, 0xF0, 0x00, 0x00, 0x00, 0x85, 0xC0, 0x74, 0x12, 0x8B, 0x4C }, "GetComponent" },
 		{ 0x005608C0, 12, { 0x6A, 0xFF, 0x68, 0x0B, 0xB4, 0x62, 0x00, 0x64, 0xA1, 0x00, 0x00, 0x00 }, "do_grind_trick" },
 		{ 0x0050B9C0, 12, { 0x6A, 0xFF, 0x68, 0x5B, 0x8D, 0x62, 0x00, 0x64, 0xA1, 0x00, 0x00, 0x00 }, "balance update" },
+		{ 0x004F6700, 14, { 0xD9, 0x44, 0x24, 0x08, 0x8B, 0x44, 0x24, 0x04, 0x6A, 0x00, 0x51, 0xD9, 0x1C, 0x24 }, "SetBalanceMeter" },
 		{ 0x0040FBC0, 12, { 0x8B, 0x44, 0x24, 0x0C, 0x8B, 0x54, 0x24, 0x08, 0x50, 0x8B, 0x44, 0x24 }, "CScript::SetScript" },
 		{ 0x0040F0A0, 12, { 0x53, 0x56, 0x8B, 0xF1, 0x33, 0xDB, 0x39, 0x5E, 0x0C, 0x88, 0x9E, 0xA9 }, "CScript::Update" },
 		{ 0x00570560, 12, { 0x53, 0x56, 0x8B, 0xF1, 0x32, 0xDB, 0x38, 0x5E, 0x19, 0x74, 0x08, 0xE8 }, "flip and rotate afters" },
@@ -1997,16 +2008,30 @@ namespace FlickitGame {
 	/*  The board does not drift on a rail                            */
 	/******************************************************************/
 
+	// While RailBalanceHook has the balance update of a rail running for a board that does not
+	// drift: its meter has nothing to show
+	static bool s_meterOff = false;
+
+	// Stands where the balance update shows the balance meter. Same convention as the game's: this
+	// (the score) in ecx, two arguments, which the callee takes off the stack. The update is the one
+	// place that shows the meter of a grind or slide: everything else only ever hides it. So while
+	// the board cannot lose its balance the meter is told "off" instead, and stays hidden; one that
+	// was up already (Flickit switched on in the middle of a grind, say) goes as it would at the end
+	// of a balance.
+	static void __fastcall MeterHook(void* score, void* /*edx*/, uint32_t on, float value) {
+		SetBalanceMeter(score, s_meterOff ? 0 : on, value);
+	}
+
 	// Stands in for the balance update of a grind or slide. With the game's own "perfect rail" cheat
 	// the lean and its speed are set to zero right after this call; the same is done here, without
 	// the cheat being on. record: the balance component + 0x7C.
 	static void __fastcall RailBalanceHook(uint8_t* record, void* /*edx*/) {
-		BalanceUpdate(record);
-		if (!s_active || (!s_frame.noBalance && s_frame.drag <= 0 && !s_frame.stepOff)) {
-			return;
-		}
 		uint8_t* balance = record - BALANCE_RECORD;
-		if (!IsLocal(balance)) {
+		const bool local = s_active && IsLocal(balance);
+		s_meterOff = local && s_frame.noBalance;
+		BalanceUpdate(record);
+		s_meterOff = false;
+		if (!local || (!s_frame.noBalance && s_frame.drag <= 0 && !s_frame.stepOff)) {
 			return;
 		}
 		if (s_frame.noBalance) {
@@ -3044,6 +3069,7 @@ namespace FlickitGame {
 		patchBytesM(kCatchTest2 + 5, testAl, 2);
 		patchCall(kPickCall, (void*)&GrindPickHook);
 		patchCall(kBalanceCall, (void*)&RailBalanceHook);
+		patchCall(kMeterCall, (void*)&MeterHook);
 		patchCall(kBoostCall, (void*)&RailBoostHook);
 		s_reach.nearest.miss = Flickit::kNoRail;
 		patchCall(kSearchCall1, (void*)&RailSearchHook);
@@ -3072,7 +3098,7 @@ namespace FlickitGame {
 		patchCall(kPoseCall, (void*)&PoseHook);
 
 		s_installed = true;
-		Log::TypedLog(CHN_SDL, "Flickit: grind hooks are in (rail catch, rail search, grind pick, rail balance, rail boost)\n");
+		Log::TypedLog(CHN_SDL, "Flickit: grind hooks are in (rail catch, rail search, grind pick, rail balance, balance meter, rail boost)\n");
 		Log::TypedLog(CHN_SDL, "Flickit: jump hooks are in (gravity in the air, jump, jump speed)\n");
 		Log::TypedLog(CHN_SDL, "Flickit: rolling hooks are in (brake test, kick test, friction, turning, CanKick, Held, pad update, AnimFinished, animation wait)\n");
 		Log::TypedLog(CHN_SDL, "Flickit: spin hooks are in (turning in the air, spin rate)\n");

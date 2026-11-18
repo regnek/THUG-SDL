@@ -102,7 +102,7 @@ namespace Flickit {
 		int grindCatch;       // 1: rails catch without the Grind button
 		int grindPick;        // 1: the stick position at touchdown picks the grind
 		int grindSwitch;      // 1: on a rail, stick down / up / centre = 5-0 / nosegrind / 50-50
-		int grindBalance;     // 1: keep the game's balance on rails, 0: the board does not drift
+		int grindBalance;     // 1: keep the game's balance on rails, and its meter. 0: the board does not drift, no meter
 		int grindMirror;      // 1: swap "toward the rail" and "away from it" when picking the grind
 		int pauseOffBoard;    // 1: Flickit stands down while walking or driving
 		int tilt;             // percent of deflection that counts as tilting the board

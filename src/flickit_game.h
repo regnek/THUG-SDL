@@ -181,7 +181,7 @@ namespace FlickitGame {
 	struct Frame {
 		bool catchRails;        // rails catch without the Grind button
 		bool pickGrind;         // the tilt picks the grind
-		bool noBalance;         // the board does not drift on a rail
+		bool noBalance;         // the board does not drift on a rail, and the rail's balance meter stays off
 		bool mirror;            // swap "toward the rail" and "away from it"
 		bool classicGrind;      // the player holds the real Grind button: the game picks as it always did
 		Flickit::Tilt tilt;     // the lean of the board right now

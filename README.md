@@ -173,7 +173,7 @@ On the rail:
 - Stick down is the 5-0, up the nosegrind, let go the 50-50. The game takes such a switch once a grind has settled, about three quarters of a second in. Only these three switch; any other grind stays what it is.
 - A flick pops off the rail, with the flip the flick asks for. Letting the stick go does not pop. A flick is a fast move: taking the stick from one end to the other slowly switches the grind instead.
 - The right bumper drops off the rail (THUG SDL's drop-down key).
-- The board does not drift off balance. `GrindBalance=1` gives the balance meter its job back.
+- The board does not drift off balance, so there is no balance meter on a rail either. `GrindBalance=1` gives the balance meter its job back, and with it its place on the screen. Manuals and lip tricks keep their meter, and their balance is THUG's.
 - The board loses speed, and steps off when it has none left (see below).
 
 In the air a flick across the stick is still a flip trick. Rolling the stick round to a side leans the board; it is a shove-it only when the roll starts on the ground or on a rail.
@@ -307,7 +307,7 @@ The settings live in the `[Flickit]` section of `thugsdl.ini`. Thresholds are pe
 | GrindCatch | 1 | Rails catch without the Grind button |
 | GrindPick | 1 | The lean of the board picks the grind. 0: the game's direction buttons do |
 | GrindSwitch | 1 | On a rail, stick down / up / let go switches between 5-0, nosegrind and 50-50 |
-| GrindBalance | 0 | 0: the board does not drift on a rail. 1: the game's balance |
+| GrindBalance | 0 | 0: the board does not drift on a rail, and no balance meter is shown there. 1: the game's balance and its meter |
 | GrindMirror | 0 | 1: swap "toward the rail" and "away from it", in case the grinds come out mirrored |
 | PauseOffBoard | 1 | Flickit stands down on foot and in a car |
 | Tilt | 50 | How far the stick has to be pushed to lean the board, and to ask for a switch on a rail |
