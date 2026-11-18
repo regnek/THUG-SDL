@@ -556,6 +556,113 @@ static void testGrindTable(const std::string& scriptDir) {
 	CHECK_EQ(plan.row, 6);
 }
 
+// The words of a text, lower case, one space between them
+static std::string squashed(const std::string& text) {
+	std::string out;
+	bool space = false;
+	for (size_t i = 0; i < text.size(); i++) {
+		const char c = text[i];
+		if (c == ' ' || c == '\t' || c == '\r' || c == '\n') {
+			space = !out.empty();
+			continue;
+		}
+		if (space) out += ' ';
+		space = false;
+		out += (c >= 'A' && c <= 'Z') ? (char)(c - 'A' + 'a') : c;
+	}
+	return out;
+}
+
+// SCRIPT name ... ENDSCRIPT out of a squashed text, or "" (names go by the letters, not their case)
+static std::string scriptText(const std::string& text, const std::string& name) {
+	const std::string head = "script " + lower(name) + " ";
+	size_t at = 0;
+	while ((at = text.find(head, at)) != std::string::npos) {
+		if (at == 0 || text[at - 1] == ' ') {
+			const size_t end = text.find(" endscript", at);
+			return end == std::string::npos ? std::string() : text.substr(at, end - at);
+		}
+		at += head.size();
+	}
+	return std::string();
+}
+
+static size_t countOf(const std::string& text, const std::string& word) {
+	size_t n = 0;
+	for (size_t at = 0; (at = text.find(word, at)) != std::string::npos; at += word.size()) n++;
+	return n;
+}
+
+// The grinds Flickit starts by name, and the balance of the rail. The Grind script starts the balance
+// for a grind a double tap switches to (IsATap) only under m_restore_original_double_taps (the original
+// double taps, off unless the ini asks) or IF NOT DoingBalanceTrick, a name no script defines and the
+// game does not have, which its script VM takes for true. So it starts none for those, and for a salad
+// Flickit starts as the board lands, the game would balance nothing on the rail: no drag, the speed kept
+// to the end of the rail. Flickit then sends the Grind script's own command for a grind that is no tap
+// (StartRailBalance in flickit_game.cpp; tools/check_hooks.py there checks the game's side).
+static void testByNameBalance(const std::string& scriptDir) {
+	g_case = "grinds by name: the balance of the rail";
+	std::string raw, menuRaw;
+	CHECK(readFile(scriptDir + "/grindscripts.q", raw));
+	if (raw.empty()) return;
+	const std::string scripts = squashed(raw);
+
+	const std::string grind = scriptText(scripts, "Grind");
+	CHECK(!grind.empty());
+	const std::string noTap = "dobalancetrick buttona = right buttonb = left type = <type> doflipcheck";
+	const std::string branch = "if gotparam isatap if istrue m_restore_original_double_taps " + noTap + " clearcheese else if not doingbalancetrick "
+		+ noTap + " clearcheese endif endif else " + noTap + " endif";
+	CHECK(grind.find(branch) != std::string::npos);
+	// that is all the balance the Grind script starts, before its first wait
+	CHECK_EQ(countOf(grind, "dobalancetrick "), 3);
+	CHECK(grind.find(branch) < grind.find(" wait "));
+	// no script of that name in the grinds' scripts
+	CHECK(scripts.find("script doingbalancetrick ") == std::string::npos);
+	// the original double taps are off unless the ini turns them on
+	if (readFile(scriptDir + "/../../thugsdl/thugsdl_menu.q", menuRaw)) {
+		const std::string menu = squashed(menuRaw);
+		CHECK(menu.find(" m_restore_original_double_taps = 0 ") != std::string::npos);
+		CHECK(menu.find("key = \"originaldoubletapgrinds\" default = 0 if istrue <value> change m_restore_original_double_taps = 1") != std::string::npos);
+	}
+
+	// Every ending of the three: the salads are taps of Type = Grind, the blunts are slides that are no
+	// taps. An ending that turns the board first goes on to another one.
+	const int byName[] = { GRIND_BLUNTSLIDE, GRIND_NOSEBLUNT, GRIND_SALAD };
+	for (size_t k = 0; k < 3; k++) {
+		for (int sub = 0; sub < 16; sub++) {
+			const bool left = (sub & 1) != 0, backwards = (sub & 4) != 0, flipped = (sub & 8) != 0;
+			GrindPlan plan;
+			PlanGrind(byName[k], left, plan);
+			if (!plan.prefix) { CHECK(false); continue; }
+			std::string name = std::string(plan.prefix) + GrindSuffix(left, backwards, flipped);
+			std::string body = scriptText(scripts, name);
+			const size_t go = body.find(" goto ");
+			if (go != std::string::npos) {
+				const size_t from = go + 6, to = body.find(' ', from);
+				name = body.substr(from, to == std::string::npos ? std::string::npos : to - from);
+				body = scriptText(scripts, name);
+			}
+			const size_t call = body.find(" grind { ");
+			const size_t close = call == std::string::npos ? std::string::npos : body.find(" }", call);
+			CHECK(call != std::string::npos && close != std::string::npos);
+			if (call == std::string::npos || close == std::string::npos) {
+				printf("    %s: no Grind { ... }\n", name.c_str());
+				continue;
+			}
+			const std::string params = body.substr(call, close - call) + " ";
+			const bool tap = params.find(" isatap ") != std::string::npos;
+			const bool grindType = params.find(" type = grind ") != std::string::npos;
+			const bool slideType = params.find(" type = slide ") != std::string::npos;
+			if (byName[k] == GRIND_SALAD) {
+				CHECK(tap && grindType);
+			}
+			else {
+				CHECK(!tap && slideType);
+			}
+		}
+	}
+}
+
 // ---------------------------------------------------------------------------------------------
 // The tilt tracker, through the recognizer
 // ---------------------------------------------------------------------------------------------
@@ -3172,6 +3279,7 @@ int main(int argc, char** argv) {
 	const std::string scriptDir = argc > 1 ? argv[1] : "scripts/qb/source/scripts/game/skater";
 	testNameChecksum();
 	testGrindTable(scriptDir);
+	testByNameBalance(scriptDir);
 	testTiltTable();
 	testDragNumbers();
 	testReach();

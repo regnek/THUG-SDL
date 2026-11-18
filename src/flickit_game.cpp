@@ -54,6 +54,23 @@ namespace FlickitGame {
 	typedef bool(__thiscall* StructGetChecksum_t)(void* structure, uint32_t name, uint32_t* out, bool assert);
 	static const StructGetChecksum_t StructGetChecksum = (StructGetChecksum_t)0x004110B0;
 
+	// Script::CStruct is no more than the head of a list of its items (0x00430620 makes one empty).
+	// AddChecksum puts in a checksum under a name, or with no name as a flag (what ContainsFlag
+	// looks for); Clear gives every item back and leaves the list empty.
+	struct GameStruct {
+		void* first;
+	};
+	typedef void(__thiscall* StructAddChecksum_t)(GameStruct* structure, uint32_t name, uint32_t value);
+	static const StructAddChecksum_t StructAddChecksum = (StructAddChecksum_t)0x004123F0;
+	typedef void(__thiscall* StructClear_t)(GameStruct* structure);
+	static const StructClear_t StructClear = (StructClear_t)0x00411790;
+
+	// CSkaterBalanceTrickComponent's script commands (DoBalanceTrick, StopBalanceTrick, ...): its
+	// slot in the component's table of virtual functions, the one a script's command goes through.
+	// The command's name, its parameters, the script. 2 for a name it does not have.
+	typedef int(__thiscall* BalanceCommand_t)(void* balance, uint32_t name, GameStruct* params, void* script);
+	static const BalanceCommand_t BalanceCommand = (BalanceCommand_t)0x0055C370;
+
 	// One of the skater's physics values (physics.q) by the checksum of its name
 	typedef float(__cdecl* GetPhysicsFloat_t)(uint32_t name, int flag);
 	static const GetPhysicsFloat_t GetPhysicsFloat = (GetPhysicsFloat_t)0x00516110;
@@ -285,6 +302,16 @@ namespace FlickitGame {
 	static const uint32_t kSkaterState = 0x43686585;          // SkaterState
 	static const uint32_t kSkaterCorePhysics = 0x5BD63B29;    // SkaterCorePhysics
 	static const uint32_t kSlideBalance = 0x8D10119D;         // slide: the balance of a slide. A grind's is "grind"
+	static const uint32_t kGrindBalance = 0x255ED86F;         // grind: the balance of a grind, and the name of the Grind script
+	// DoBalanceTrick ButtonA = Right ButtonB = Left Type = <Type> DoFlipCheck: the balance a grind
+	// script starts for the rail
+	static const uint32_t kDoBalanceTrick = 0x7E92670C;       // DoBalanceTrick
+	static const uint32_t kButtonA = 0x4F1A0B01;              // ButtonA
+	static const uint32_t kButtonB = 0xD6135ABB;              // ButtonB
+	static const uint32_t kRight = 0x4B358AEB;                // Right
+	static const uint32_t kLeft = 0x85981897;                 // Left
+	static const uint32_t kType = 0x7321A8D6;                 // Type
+	static const uint32_t kDoFlipCheck = 0x1304E677;          // DoFlipCheck
 	static const uint32_t kSkaterFlipAndRotate = 0x488AF07A;  // SkaterFlipAndRotate
 	static const uint32_t kAnim = 0x98549BA4;                 // Anim
 	static const uint32_t kTailGrindRange = 0x7896F05F;       // TailGrind_Range: the 5-0
@@ -722,6 +749,38 @@ namespace FlickitGame {
 		{ 0x00451FE0, 18, { 0x8B, 0x41, 0x0C, 0x80, 0xB8, 0x34, 0x01, 0x00, 0x00, 0x00, 0x74, 0x0B, 0x8B, 0x89, 0xD0, 0x04, 0x00, 0x00 }, "IsSwitched: goofy" },
 		{ 0x00451FF2, 18, { 0x0F, 0xB6, 0x41, 0x28, 0xC3, 0x8B, 0x91, 0xD0, 0x04, 0x00, 0x00, 0x33, 0xC0, 0x38, 0x42, 0x28, 0x0F, 0x94 }, "IsSwitched: flipped" },
 		{ 0x00568248, 17, { 0x81, 0xFF, 0x0B, 0xB8, 0x66, 0x8F, 0x0F, 0x85, 0xA4, 0x09, 0x00, 0x00, 0xE8, 0x87, 0x9D, 0xEE, 0xFF }, "Switched" },
+		// the balance of a rail, started the way a grind script starts it: the balance component's
+		// script commands in the slot of its table that a script's command goes through,
+		// DoBalanceTrick among them, the names it reads (the two buttons, the type, the flag
+		// DoFlipCheck), that it does nothing for the balance that is on already, the records of a
+		// slide and a grind it starts, and the three it pops
+		{ 0x00646D18, 4, { 0x70, 0xC3, 0x55, 0x00 }, "balance component: its script commands" },
+		{ 0x0055C370, 17, { 0x8B, 0x44, 0x24, 0x04, 0x83, 0xEC, 0x14, 0x3D, 0x4B, 0xCD, 0x0D, 0x7A, 0x53, 0x56, 0x57, 0x8B, 0xF1 }, "balance commands" },
+		{ 0x0055C5DF, 11, { 0x3D, 0x0C, 0x67, 0x92, 0x7E, 0x0F, 0x84, 0xAD, 0x00, 0x00, 0x00 }, "balance commands: DoBalanceTrick" },
+		{ 0x0055C6F3, 12, { 0x6A, 0x01, 0x8D, 0x54, 0x24, 0x14, 0x52, 0x68, 0x01, 0x0B, 0x1A, 0x4F }, "DoBalanceTrick: ButtonA" },
+		{ 0x0055C70E, 12, { 0x6A, 0x01, 0x8D, 0x44, 0x24, 0x10, 0x50, 0x68, 0xBB, 0x5A, 0x13, 0xD6 }, "DoBalanceTrick: ButtonB" },
+		{ 0x0055C721, 11, { 0x53, 0x8D, 0x4C, 0x24, 0x1C, 0x51, 0x68, 0xD6, 0xA8, 0x21, 0x73 }, "DoBalanceTrick: Type" },
+		{ 0x0055C737, 13, { 0x8B, 0x44, 0x24, 0x18, 0x39, 0x46, 0x18, 0x0F, 0x84, 0x20, 0x01, 0x00, 0x00 }, "DoBalanceTrick: nothing for the balance that is on" },
+		{ 0x0055C744, 10, { 0x68, 0x77, 0xE6, 0x04, 0x13, 0x8B, 0xCF, 0x89, 0x46, 0x18 }, "DoBalanceTrick: DoFlipCheck, the balance that is on now" },
+		{ 0x0055C773, 9, { 0x8B, 0x4E, 0x18, 0x81, 0xF9, 0x9D, 0x11, 0x10, 0x8D }, "DoBalanceTrick: a slide" },
+		{ 0x0055C788, 6, { 0x81, 0xF9, 0x6F, 0xD8, 0x5E, 0x25 }, "DoBalanceTrick: a grind" },
+		{ 0x0055C864, 14, { 0x5F, 0x5E, 0xB8, 0x01, 0x00, 0x00, 0x00, 0x5B, 0x83, 0xC4, 0x14, 0xC2, 0x0C, 0x00 }, "balance commands pop three" },
+		// a structure of parameters: one word, the head of its list. An item: a type (0x0D a
+		// checksum), its name, its value; a flag is a checksum with no name. Adding a checksum, and
+		// giving every item back.
+		{ 0x00430620, 9, { 0x8B, 0xC1, 0xC7, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC3 }, "CStruct: made empty" },
+		{ 0x004112B0, 16, { 0x83, 0x7E, 0x04, 0x00, 0x75, 0x2C, 0x80, 0x3E, 0x0D, 0x75, 0x27, 0x8B, 0x46, 0x08, 0x3B, 0xC7 }, "CStruct: a flag" },
+		{ 0x004123F0, 12, { 0x6A, 0xFF, 0x68, 0x9B, 0x19, 0x62, 0x00, 0x64, 0xA1, 0x00, 0x00, 0x00 }, "CStruct::AddChecksum" },
+		{ 0x0041246D, 3, { 0x89, 0x48, 0x04 }, "CStruct::AddChecksum: the name" },
+		{ 0x0041247B, 6, { 0xC6, 0x00, 0x0D, 0x89, 0x50, 0x08 }, "CStruct::AddChecksum: a checksum, its value" },
+		{ 0x00412493, 6, { 0x83, 0xC4, 0x10, 0xC2, 0x08, 0x00 }, "CStruct::AddChecksum pops two" },
+		{ 0x00411790, 12, { 0x55, 0x8B, 0xE9, 0x56, 0x8B, 0x75, 0x00, 0x85, 0xF6, 0x74, 0x74, 0x53 }, "CStruct::Clear" },
+		{ 0x00411810, 9, { 0xC7, 0x45, 0x00, 0x00, 0x00, 0x00, 0x00, 0x5D, 0xC3 }, "CStruct::Clear: empty, pops none" },
+		// where a script returns from a call: the parameters of the script it goes back to; and the
+		// rail state, which stick_to_rail sets before it has the grind picked
+		{ 0x0040F00E, 6, { 0x8B, 0x57, 0x04, 0x89, 0x56, 0x14 }, "script return: the parameters" },
+		{ 0x0056A7D5, 9, { 0x6A, 0x04, 0x8B, 0xCE, 0xE8, 0x52, 0x26, 0xFF, 0xFF }, "stick_to_rail: on the rail" },
+		{ 0x0055CE38, 9, { 0x8B, 0x86, 0xD0, 0x04, 0x00, 0x00, 0x83, 0xC0, 0x18 }, "set_state: the state" },
 	};
 
 	static bool s_checked = false;
@@ -749,6 +808,13 @@ namespace FlickitGame {
 			|| Flickit::NameChecksum("Animation") != kAnimation || Flickit::NameChecksum("Skeleton") != kSkeleton
 			|| Flickit::NameChecksum("Bone_Toe_L") != kToeLeft || Flickit::NameChecksum("Bone_Toe_R") != kToeRight
 			|| Flickit::NameChecksum("SkaterStancePanel") != kStancePanel) {
+			s_available = false;
+		}
+		if (Flickit::NameChecksum("grind") != kGrindBalance || Flickit::NameChecksum("Grind") != kGrindBalance
+			|| Flickit::NameChecksum("DoBalanceTrick") != kDoBalanceTrick || Flickit::NameChecksum("ButtonA") != kButtonA
+			|| Flickit::NameChecksum("ButtonB") != kButtonB || Flickit::NameChecksum("Right") != kRight
+			|| Flickit::NameChecksum("Left") != kLeft || Flickit::NameChecksum("Type") != kType
+			|| Flickit::NameChecksum("DoFlipCheck") != kDoFlipCheck) {
 			s_available = false;
 		}
 		for (int i = 0; i < PUSH_CLIPS; i++) {
@@ -1679,8 +1745,49 @@ namespace FlickitGame {
 	/*  The lean of the board picks the grind                         */
 	/******************************************************************/
 
-	// Starts a grind script by name, the way do_grind_trick starts the one it found in its table
-	static bool StartGrindScript(uint8_t* core, const char* prefix, bool railOnLeft, bool backwards, bool flipped) {
+	// The salads are written as grinds a double tap switches to from another grind (IsATap), and
+	// such a grind does not start the balance of the rail: the Grind script leaves it to the grind
+	// before. In THUG-SDL's scripts it asks "IF NOT DoingBalanceTrick" first, a name that nothing
+	// defines, and the script VM takes a name it does not know for true (0x0040EC7D), so it never
+	// starts one; with the original double taps (OriginalDoubleTapGrinds) it does, with the cheese
+	// of the grinds before cleared. When Flickit starts a salad as the board lands on the rail there
+	// is no grind before it. With no balance on, the game's rail physics never update one (0x0056D049),
+	// so there is no drag, no meter and no fall, and the board keeps its speed to the end of the rail.
+	// So once the script has run up to its first wait, Flickit starts the balance the way the Grind
+	// script starts it for a grind that is no tap: DoBalanceTrick ButtonA = Right ButtonB = Left
+	// Type = <Type> DoFlipCheck. Only while he is on the rail and the script is in the Grind (it
+	// bails out of it at once with BailIsOn), and only when no balance of a rail is on. True when
+	// it started one.
+	static bool StartRailBalance(uint8_t* core, const uint8_t* state, void* script) {
+		uint8_t* balance = *(uint8_t**)(core + CORE_BALANCE);
+		if (!balance || !script || *(const int32_t*)(state + STATE_STATE) != 4
+			|| *(const uint32_t*)((const uint8_t*)script + SCRIPT_NAME) != kGrindBalance) {
+			return false;
+		}
+		const uint32_t on = *(const uint32_t*)(balance + BALANCE_TYPE);
+		if (on == kGrindBalance || on == kSlideBalance) {
+			return false;   // the script started it
+		}
+		// <Type>: what the grind script was told it is
+		void* params = *(void* const*)((const uint8_t*)script + SCRIPT_PARAMS);
+		uint32_t type = 0;
+		if (!params || !StructGetChecksum(params, kType, &type, false) || (type != kGrindBalance && type != kSlideBalance)) {
+			return false;
+		}
+		GameStruct command = { 0 };
+		StructAddChecksum(&command, kButtonA, kRight);
+		StructAddChecksum(&command, kButtonB, kLeft);
+		StructAddChecksum(&command, kType, type);
+		StructAddChecksum(&command, 0, kDoFlipCheck);
+		BalanceCommand(balance, kDoBalanceTrick, &command, script);
+		StructClear(&command);
+		return *(const uint32_t*)(balance + BALANCE_TYPE) == type;
+	}
+
+	// Starts a grind script by name, the way do_grind_trick starts the one it found in its table.
+	// balanceStarted: Flickit had to start the balance of the rail itself (StartRailBalance).
+	static bool StartGrindScript(uint8_t* core, const char* prefix, bool railOnLeft, bool backwards, bool flipped, bool& balanceStarted) {
+		balanceStarted = false;
 		// The name the game itself would put together: the grind and the ending for this approach
 		char name[64];
 		size_t length = 0;
@@ -1713,9 +1820,11 @@ namespace FlickitGame {
 
 		*(uint32_t*)(core + CORE_GRIND_TWEAK) = 0;
 		FlipRotateAfters(flipRotate);
-		SetScript(*(void**)(skater + OBJECT_SCRIPT), checksum, 0, skater);
-		ScriptUpdate(*(void**)(skater + OBJECT_SCRIPT));
+		void* script = *(void**)(skater + OBJECT_SCRIPT);
+		SetScript(script, checksum, 0, skater);
+		ScriptUpdate(script);
 		state[STATE_DOING_TRICK] = 1;
+		balanceStarted = StartRailBalance(core, state, script);
 		return true;
 	}
 
@@ -1738,15 +1847,18 @@ namespace FlickitGame {
 		s_pick.grind = grind;
 		s_pick.railOnLeft = left;
 		s_pick.byName = false;
+		s_pick.balanceStarted = false;
 		s_pick.tilt = s_frame.tilt;
 		s_hasPick = true;
 
 		Flickit::GrindPlan plan;
 		Flickit::PlanGrind(grind, left, plan);
 		if (plan.row < 0) {
-			if (StartGrindScript(core, plan.prefix, left, (backwards & 0xFF) != 0, (flipped & 0xFF) != 0)) {
+			bool balanceStarted = false;
+			if (StartGrindScript(core, plan.prefix, left, (backwards & 0xFF) != 0, (flipped & 0xFF) != 0, balanceStarted)) {
 				s_pick.started = grind;
 				s_pick.byName = true;
+				s_pick.balanceStarted = balanceStarted;
 				s_rail.pick = grind;
 				s_rail.hasPick = true;
 				return;

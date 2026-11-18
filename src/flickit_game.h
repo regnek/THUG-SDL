@@ -219,6 +219,7 @@ namespace FlickitGame {
 		int started;            // what was started (differs if the game has no script for it)
 		bool railOnLeft;
 		bool byName;            // started as a script by name instead of through the game's table
+		bool balanceStarted;    // its script left the balance of the rail to a grind before it (a salad), so Flickit started it
 		Flickit::Tilt tilt;
 	};
 	bool TakePick(Pick& out);

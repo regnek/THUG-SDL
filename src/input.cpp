@@ -565,7 +565,8 @@ static void flickitLogGame(const FlickitGame::Skater& sk, uint32_t now) {
 		char tilt[64];
 		if (pick.started == pick.grind) {
 			Log::TypedLog(CHN_SDL, "Flickit: rail on the %s, %s: %s%s\n", pick.railOnLeft ? "left" : "right",
-				flickitTiltText(pick.tilt, tilt, sizeof(tilt)), Flickit::GrindName(pick.grind), pick.byName ? " (by script name)" : "");
+				flickitTiltText(pick.tilt, tilt, sizeof(tilt)), Flickit::GrindName(pick.grind),
+				!pick.byName ? "" : pick.balanceStarted ? " (by script name; its script leaves the balance of the rail to a grind before it, so Flickit started it)" : " (by script name)");
 		}
 		else {
 			Log::TypedLog(CHN_SDL, "Flickit: rail on the %s, %s: %s, which this game's scripts do not have, so %s\n", pick.railOnLeft ? "left" : "right",

@@ -32,8 +32,24 @@ Bumpers                    spin + nollie / spin + revert, both = get off the boa
 Flip or Ollie, on the ground   push (tap = a little, hold = a lot)
 Right stick click          Flickit off / on (for looking around)
 
-New in this build: the flicks go by his feet
---------------------------------------------
+New in this build: salads slow down on the rail
+-----------------------------------------------
+  - The FS and BS salad lost no speed on a rail: they lasted as long as
+    the rail did. Now they slow down and step off like every other grind.
+  - Why: THUG's scripts make the salad a grind you switch to from another
+    grind with a double tap, and such a grind leaves the balance of the
+    rail to the grind before it. Picked by the stick as the board lands,
+    there is no grind before it, so the game balanced nothing on the rail,
+    and the drag goes through that balance. Flickit now starts the balance
+    for the salad the way the scripts start it for every other grind.
+  - The bluntslides were not affected. With GrindBalance=1 the salad has
+    the game's balance meter now, as the other grinds do.
+  - With the console on, the log line for the rail says so: "salad (by
+    script name; its script leaves the balance of the rail to a grind
+    before it, so Flickit started it)".
+
+The flicks go by his feet (the last build)
+------------------------------------------
   - As in Skate, the kickflip goes toward the skater's heels. Left foot
     forward (a regular skater in his own stance): the kickflip is down,
     flick up-left, the heelflip up-right, the pop shove-it a drag to the
@@ -51,7 +67,7 @@ New in this build: the flicks go by his feet
     kickflip is ("Flickit: left foot forward (regular): the kickflip is the
     flick up-left") when he is first seen and whenever it changes.
 
-Nollies (the last build)
+Nollies (two builds ago)
 ------------------------
   - Push the right stick up and the skater goes into THUG's nollie stance
     and crouches, as deep as the stick is pushed (a third of the way is
@@ -73,15 +89,15 @@ Nollies (the last build)
   - With the console on, the log says "Flickit: the stick crouches up:
     nollie stance" and "Flickit: out of nollie stance".
 
-The crouch you see (two builds ago)
------------------------------------
+The crouch you see (three builds ago)
+-------------------------------------
   - The skater crouches as deep as the stick is pulled: a little at a third
     of the way, THUG's full crouch all the way down, and anything between.
     Easing the stick back up eases him back up. CrouchPose=0 in the
     [Flickit] section gives THUG's one crouch back.
 
-The stick (three builds ago)
-----------------------------
+The stick (four builds ago)
+---------------------------
   - Weak flicks count, as in Skate: a crouch starts a third of the way down,
     and a flick 40 percent of the way out pops. If your thugsdl.ini already
     has a [Flickit] section, change these four lines in it (the new section
