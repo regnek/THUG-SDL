@@ -35,14 +35,15 @@ Right stick click          Flickit off / on (for looking around)
 New in this build: room for two levels in one
 ---------------------------------------------
 The game keeps its scripts, and every level's list of rails, objects and
-restart points, in a heap of its own with fixed-size pools inside it. When
-a pool is full the game crashes. New Jersey alone fills about 80% of
-them; New Jersey with Manhattan joined to it would need about one and a
-half times what they hold. This build makes the heap and its pools 8 times
-as big before the game starts: the heap takes 31.6 MB of the 360 MB that
-THUG-SDL gives the game, instead of 3.9 MB. Nothing to set; the log says:
-    Memory: script memory 8 times as big: a 31.6 MB heap, ...
-[Memory] BigScriptMemory=0 in thugsdl.ini leaves it as the game has it.
+restart points, in a heap of its own with fixed-size pools inside it, and
+every table it looks things up in takes its overflow from one more fixed
+pool. When a pool is full the game crashes. New Jersey with Manhattan
+joined to it needs more than they hold. This build makes the heap and all
+those pools 8 times as big before the game starts: the heap takes 31.6 MB
+of the 360 MB that THUG-SDL gives the game, instead of 3.9 MB. Nothing to
+set; with Console=1 and WriteFile=1 under [Logger] the log says:
+    Memory: script memory 8 times as big: a 31.6 MB heap, ... 100000 hash table items
+[Memory] BigScriptMemory=0 in thugsdl.ini leaves it all as the game has it.
 
 A test for more memory (optional, the last build)
 -------------------------------------------------

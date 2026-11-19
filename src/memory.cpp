@@ -25,6 +25,9 @@ namespace Memory {
 	// into one need about one and a half times what the pools hold. BigScriptMemory=1 (the default)
 	// makes each pool and the heap 8 times as big: the sizes the THUGPLUS block in config.cpp lists.
 	// The heap grows from 3.9 MB to 31.6 MB of the 360 MB main block.
+	// The same switch enlarges the pool every hash table in the game takes its overflow items from
+	// (12 bytes each, made at start-up): 12500 of them run out while a joined New Jersey and
+	// Manhattan load (the crash is the null write at 0x0049D4C5, in the hash table's insert).
 	struct ScriptSize {
 		uint32_t at;        // a push of the size: 0x68 and the 32-bit value
 		uint32_t stock;     // what is there when the DLL loads (after patchStaticValues)
@@ -41,7 +44,9 @@ namespace Memory {
 		{ 0x0040A71F, 0x3E80,   0x109A0,   "names" },        // the game has 0x2134; patchStaticValues makes it 0x3E80
 		{ 0x0040A73D, 0x12C,    0x960,     "running scripts" },
 		{ 0x0057B9EF, 0x3C5550, 0x1E2AA80, "bytes of script heap" },
+		{ 0x004BFC3D, 0x30D4,   0x186A0,   "hash table items" },
 	};
+	enum { kHeapSize = 8, kHashItems = 9 };
 	static const int kScriptSizeCount = sizeof(kScriptSizes) / sizeof(kScriptSizes[0]);
 
 	static void EnlargeScriptMemory(const char* configFile) {
@@ -61,10 +66,10 @@ namespace Memory {
 		for (int i = 0; i < kScriptSizeCount; i++) {
 			patchDWord((void*)(uintptr_t)(kScriptSizes[i].at + 1), kScriptSizes[i].big);
 		}
-		const uint32_t heap = kScriptSizes[kScriptSizeCount - 1].big;
-		Log::TypedLog(CHN_DLL, "Memory: script memory 8 times as big: a %u.%u MB heap, %u components, %u structures, %u vectors, %u arrays, %u names, %u running scripts\n",
+		const uint32_t heap = kScriptSizes[kHeapSize].big;
+		Log::TypedLog(CHN_DLL, "Memory: script memory 8 times as big: a %u.%u MB heap, %u components, %u structures, %u vectors, %u arrays, %u names, %u running scripts; %u hash table items\n",
 			heap / 1000000, (heap / 100000) % 10, kScriptSizes[1].big, kScriptSizes[2].big, kScriptSizes[3].big, kScriptSizes[5].big,
-			kScriptSizes[6].big, kScriptSizes[7].big);
+			kScriptSizes[6].big, kScriptSizes[7].big, kScriptSizes[kHashItems].big);
 	}
 
 	static bool LargeAddressAware() {
