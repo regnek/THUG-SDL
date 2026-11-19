@@ -104,6 +104,8 @@ namespace Flickit {
 		int grindSwitch;      // 1: on a rail, stick down / up / centre = 5-0 / nosegrind / 50-50
 		int grindBalance;     // 1: keep the game's balance on rails, and its meter. 0: the board does not drift, no meter
 		int grindMirror;      // 1: swap "toward the rail" and "away from it" when picking the grind
+		int grindByBoard;     // 1: the board's angle to the rail at touchdown has its say in the grind (GrindFromBoard)
+		int grindAngle;       // degrees: a board closer than this to the line of the rail counts as along it
 		int pauseOffBoard;    // 1: Flickit stands down while walking or driving
 		int tilt;             // percent of deflection that counts as tilting the board
 		int tiltSettle;       // ms after take-off before a stick that never re-centred counts as a tilt
@@ -281,6 +283,48 @@ namespace Flickit {
 
 	// The grind a tilt asks for. railOnLeft: the rail is to the left of the direction of travel.
 	int GrindFromTilt(const Tilt& t, bool railOnLeft);
+
+	// ------------------------------------------------------------------------------------------
+	// The board's angle to the rail
+	//
+	// In Skate the stick is not all there is to a grind: the board meets the rail the way it comes
+	// in, and the part of it that gets there first, and its angle, have their say. THUG turns the
+	// board to whatever grind it is handed, however it came in, so with the stick alone to go by a
+	// board that comes in at 40 degrees with its nose onto the rail is swung straight for a 50-50.
+	//
+	// So the board's angle to the rail at touchdown, and the end of it that points onto the rail,
+	// adjust the grind the stick picks (GrindFromBoard). A board at an angle counts as the stick
+	// pushed the way its nose points: onto the rail is "toward", back off it is "away".
+	//
+	//   along (under GrindAngle, 16 degrees)      the stick alone, as before
+	//   at an angle, up to the game's own line between along and across (about 44 degrees):
+	//     stick centred                           crooked when the nose points onto the rail, smith when the tail does
+	//     crooked or overcrook asked for          the front truck, angled as the board is: crooked (nose onto the rail) or overcrook
+	//     feeble, smith or salad asked for        the back truck, angled as the board is: feeble (nose onto the rail) or smith / salad
+	//     nosegrind, 5-0, the slides              as asked
+	//   across (the game's own test)              a grind on the trucks becomes the game's boardslide or lipslide, which it
+	//                                             picks by the end that went over the rail; the slides as asked
+	//
+	// Riding backwards onto a rail along it, the game turns him round in its "_180" grinds, and
+	// which truck a name means after that is not settled: there the stick alone picks.
+	// ------------------------------------------------------------------------------------------
+
+	struct RailContact {
+		bool known;           // false: the stick alone picks
+		float angle;          // degrees between the board and the rail on the level: 0 along, 90 square across
+		bool noseLeads;       // the nose points onto the rail (away from the side he came from)
+		bool across;          // the game takes the board as across the rail (its own along / across test)
+		bool backwards;       // the game takes him as riding backwards onto it
+	};
+	// The contact from what the game has at touchdown, all in world space: the way the skater faces
+	// (still as in the air), his velocity (by then along the rail) and the level direction from the
+	// rail to the side he came from. False (and known = false) when the speed or the facing is too
+	// small to tell.
+	bool ContactAtRail(const float forward[3], const float velocity[3], const float from[3], bool across, bool backwards, RailContact& out);
+	// The grind for the board as it is. grind: what the stick asked for (GrindFromTilt). alongAngle:
+	// degrees under which the board counts as along the rail (Settings::grindAngle). mirror: the
+	// game's sides are swapped (Settings::grindMirror), for the board's lean as for the stick.
+	int GrindFromBoard(int grind, const RailContact& c, float alongAngle, bool mirror);
 	const char* GrindName(int grind);
 	const char* StateName(int state);
 

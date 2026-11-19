@@ -439,6 +439,163 @@ static std::vector<std::string> arrayWords(const std::string& text, const std::s
 	return words;
 }
 
+// The board's angle to the rail at touchdown and what it does to the grind the stick picks
+static void testBoardAngle() {
+	g_case = "board angle: contact";
+	const float s30 = 0.5f, c30 = 0.8660254f;
+	// A rail along +x, the board travelling along it at 500 units/s, having come from the -z side
+	const float velocity[3] = { 500.0f, 0.0f, 0.0f };
+	const float from[3] = { 0.0f, 0.0f, -1.0f };
+	RailContact c;
+	{
+		const float f[3] = { c30, 0.0f, s30 };      // 30 degrees, the nose onto the rail (+z)
+		CHECK(ContactAtRail(f, velocity, from, false, false, c));
+		CHECK(c.known);
+		CHECK(fabsf(c.angle - 30.0f) < 0.1f);
+		CHECK(c.noseLeads);
+		CHECK(!c.across);
+		CHECK(!c.backwards);
+	}
+	{
+		const float f[3] = { c30, 0.0f, -s30 };     // 30 degrees, the nose back toward his side: the tail leads
+		CHECK(ContactAtRail(f, velocity, from, false, false, c));
+		CHECK(fabsf(c.angle - 30.0f) < 0.1f);
+		CHECK(!c.noseLeads);
+	}
+	{
+		const float f[3] = { -c30, 0.0f, s30 };     // facing back along the rail: the angle folds to 0..90
+		CHECK(ContactAtRail(f, velocity, from, false, true, c));
+		CHECK(fabsf(c.angle - 30.0f) < 0.1f);
+		CHECK(c.noseLeads);
+		CHECK(c.backwards);
+	}
+	{
+		const float f[3] = { 1.0f, 0.3f, 0.0f };    // along the rail, nose up a little: only the level counts
+		CHECK(ContactAtRail(f, velocity, from, false, false, c));
+		CHECK(c.angle < 0.1f);
+	}
+	{
+		const float f[3] = { 0.0f, 0.0f, 1.0f };    // square across, nose onto the rail
+		CHECK(ContactAtRail(f, velocity, from, true, false, c));
+		CHECK(fabsf(c.angle - 90.0f) < 0.1f);
+		CHECK(c.noseLeads);
+		CHECK(c.across);
+	}
+	{
+		const float f[3] = { c30, 0.0f, s30 };
+		const float slow[3] = { 0.5f, 0.0f, 0.0f };  // no speed to tell the rail's line by
+		CHECK(!ContactAtRail(f, slow, from, false, false, c));
+		CHECK(!c.known);
+		const float none[3] = { 0.0f, 0.0f, 0.0f };  // no side he came from
+		CHECK(!ContactAtRail(f, velocity, none, false, false, c));
+		CHECK(!c.known);
+	}
+
+	g_case = "board angle: grind";
+	const int all[] = { GRIND_FIFTY, GRIND_FIVE_O, GRIND_NOSEGRIND, GRIND_CROOKED, GRIND_OVERCROOK, GRIND_FEEBLE, GRIND_SMITH,
+		GRIND_SALAD, GRIND_BOARDLIP, GRIND_TAILSLIDE, GRIND_NOSESLIDE, GRIND_BLUNTSLIDE, GRIND_NOSEBLUNT };
+	const int count = (int)(sizeof(all) / sizeof(all[0]));
+	RailContact b;
+	b.known = true;
+	b.across = false;
+	b.backwards = false;
+	for (int nose = 0; nose < 2; nose++) {
+		b.noseLeads = nose != 0;
+		// along: the stick alone
+		b.angle = 10.0f;
+		for (int i = 0; i < count; i++) CHECK_EQ(GrindFromBoard(all[i], b, 16.0f, false), all[i]);
+		b.angle = 15.9f;
+		for (int i = 0; i < count; i++) CHECK_EQ(GrindFromBoard(all[i], b, 16.0f, false), all[i]);
+
+		// at an angle: the board counts as the stick pushed the way its nose points
+		const float angles[] = { 16.0f, 30.0f, 44.0f };
+		for (int a = 0; a < 3; a++) {
+			b.angle = angles[a];
+			CHECK_EQ(GrindFromBoard(GRIND_FIFTY, b, 16.0f, false), nose ? GRIND_CROOKED : GRIND_SMITH);
+			CHECK_EQ(GrindFromBoard(GRIND_CROOKED, b, 16.0f, false), nose ? GRIND_CROOKED : GRIND_OVERCROOK);
+			CHECK_EQ(GrindFromBoard(GRIND_OVERCROOK, b, 16.0f, false), nose ? GRIND_CROOKED : GRIND_OVERCROOK);
+			CHECK_EQ(GrindFromBoard(GRIND_FEEBLE, b, 16.0f, false), nose ? GRIND_FEEBLE : GRIND_SMITH);
+			CHECK_EQ(GrindFromBoard(GRIND_SMITH, b, 16.0f, false), nose ? GRIND_FEEBLE : GRIND_SMITH);
+			CHECK_EQ(GrindFromBoard(GRIND_SALAD, b, 16.0f, false), nose ? GRIND_FEEBLE : GRIND_SALAD);
+			// straight up and down, and the slides: as asked
+			const int kept[] = { GRIND_NOSEGRIND, GRIND_FIVE_O, GRIND_BOARDLIP, GRIND_TAILSLIDE, GRIND_NOSESLIDE, GRIND_BLUNTSLIDE, GRIND_NOSEBLUNT };
+			for (size_t k = 0; k < sizeof(kept) / sizeof(kept[0]); k++) CHECK_EQ(GrindFromBoard(kept[k], b, 16.0f, false), kept[k]);
+		}
+		// with the game's sides swapped (GrindMirror) the board's lean is swapped as the stick's is;
+		// which end gets there first still picks the truck
+		b.angle = 30.0f;
+		CHECK_EQ(GrindFromBoard(GRIND_FIFTY, b, 16.0f, true), nose ? GRIND_OVERCROOK : GRIND_FEEBLE);
+		CHECK_EQ(GrindFromBoard(GRIND_CROOKED, b, 16.0f, true), nose ? GRIND_OVERCROOK : GRIND_CROOKED);
+		CHECK_EQ(GrindFromBoard(GRIND_OVERCROOK, b, 16.0f, true), nose ? GRIND_OVERCROOK : GRIND_CROOKED);
+		CHECK_EQ(GrindFromBoard(GRIND_FEEBLE, b, 16.0f, true), nose ? GRIND_SMITH : GRIND_FEEBLE);
+		CHECK_EQ(GrindFromBoard(GRIND_SALAD, b, 16.0f, true), nose ? GRIND_SALAD : GRIND_FEEBLE);
+		CHECK_EQ(GrindFromBoard(GRIND_NOSEGRIND, b, 16.0f, true), GRIND_NOSEGRIND);
+
+		// the line between along and at an angle is the setting's
+		b.angle = 20.0f;
+		CHECK_EQ(GrindFromBoard(GRIND_FIFTY, b, 25.0f, false), GRIND_FIFTY);
+		CHECK_EQ(GrindFromBoard(GRIND_FIFTY, b, 10.0f, false), nose ? GRIND_CROOKED : GRIND_SMITH);
+
+		// riding backwards onto it along the rail: the stick alone
+		b.angle = 30.0f;
+		b.backwards = true;
+		for (int i = 0; i < count; i++) CHECK_EQ(GrindFromBoard(all[i], b, 16.0f, false), all[i]);
+		b.backwards = false;
+
+		// across (the game's own test): no truck grind, the game's boardslide or lipslide instead; the slides as asked
+		b.across = true;
+		for (int back = 0; back < 2; back++) {
+			b.backwards = back != 0;
+			const float across[] = { 50.0f, 90.0f };
+			for (int a = 0; a < 2; a++) {
+				b.angle = across[a];
+				const int trucks[] = { GRIND_NOSEGRIND, GRIND_FIVE_O, GRIND_CROOKED, GRIND_OVERCROOK, GRIND_FEEBLE, GRIND_SMITH, GRIND_SALAD };
+				for (size_t k = 0; k < sizeof(trucks) / sizeof(trucks[0]); k++) CHECK_EQ(GrindFromBoard(trucks[k], b, 16.0f, false), GRIND_BOARDLIP);
+				const int kept[] = { GRIND_FIFTY, GRIND_BOARDLIP, GRIND_TAILSLIDE, GRIND_NOSESLIDE, GRIND_BLUNTSLIDE, GRIND_NOSEBLUNT };
+				for (size_t k = 0; k < sizeof(kept) / sizeof(kept[0]); k++) CHECK_EQ(GrindFromBoard(kept[k], b, 16.0f, false), kept[k]);
+			}
+		}
+		b.across = false;
+		b.backwards = false;
+	}
+
+	// nothing known: the stick alone, whatever the rest says
+	b.known = false;
+	b.angle = 30.0f;
+	b.across = true;
+	for (int i = 0; i < count; i++) CHECK_EQ(GrindFromBoard(all[i], b, 16.0f, false), all[i]);
+
+	// What the board's grinds hand the game: across, its own row for a board that lands across;
+	// at an angle (the game takes that as along), rows that start the same grind either way
+	GrindPlan plan;
+	PlanGrind(GRIND_BOARDLIP, true, plan);
+	CHECK_EQ(plan.row, 0);
+	CHECK_EQ(plan.parallel, 0);
+	const int angled[] = { GRIND_CROOKED, GRIND_OVERCROOK, GRIND_FEEBLE, GRIND_SMITH };
+	for (size_t k = 0; k < sizeof(angled) / sizeof(angled[0]); k++) {
+		for (int side = 0; side < 2; side++) {
+			PlanGrind(angled[k], side != 0, plan);
+			CHECK(plan.row >= 5 && plan.row <= 8);
+			CHECK_EQ(plan.parallel, -1);
+		}
+	}
+
+	// The settings: on by default at 16 degrees, kept inside 5..44 (the game's own across starts at about 44)
+	Settings s;
+	SetDefaults(s);
+	CHECK_EQ(s.grindByBoard, 1);
+	CHECK_EQ(s.grindAngle, 16);
+	s.grindAngle = 0;
+	Sanitize(s);
+	CHECK_EQ(s.grindAngle, 5);
+	s.grindAngle = 90;
+	Sanitize(s);
+	CHECK_EQ(s.grindAngle, 44);
+	s.grindByBoard = 7;
+	Sanitize(s);
+	CHECK_EQ(s.grindByBoard, 1);
+}
+
 static void testNameChecksum() {
 	g_case = "name checksum";
 	// Values that stand in the game's code
@@ -3409,6 +3566,7 @@ int main(int argc, char** argv) {
 	testByNameBalance(scriptDir);
 	testExitScripts(scriptDir);
 	testTiltTable();
+	testBoardAngle();
 	testDragNumbers();
 	testRailExit();
 	testReach();

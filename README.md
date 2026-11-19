@@ -169,6 +169,19 @@ There is no grind button to hold: a rail or ledge under the board catches it. Wh
 | Toward the rail, then rolled up / away, then rolled up | Feeble / Smith |
 | Toward the rail, then rolled down / away, then rolled down | Crooked / Overcrook (Skate has the willy and the overwilly here, which THUG does not know) |
 
+The board's own angle to the rail has its say too, as in Skate. THUG turns the board to whatever grind it is handed, so with the stick alone a board that comes in at 40 degrees with its nose over the rail would be swung straight for a 50-50. Instead, a board at an angle counts as the stick pushed the way its nose points, "toward" when the nose points onto the rail:
+
+| The board at touchdown | Grind |
+| --- | --- |
+| Along the rail (under 16 degrees off it) | The stick alone, as in the table above |
+| At an angle, stick at rest | Crooked when the nose points onto the rail, smith when the tail does: the end that points onto the rail is the one that gets there first |
+| At an angle, a crooked or overcrook asked for | Crooked or overcrook, whichever is angled the way the board is |
+| At an angle, a feeble, smith or salad asked for | Feeble when the nose points onto the rail; smith (or the salad) when the tail does |
+| At an angle, up / down / a slide asked for | As asked: nosegrind, 5-0, the slides |
+| Across the rail (THUG's own line, about 44 degrees off it) | The slides as asked; a grind on the trucks (nosegrind, 5-0, crooked and the rest) becomes a boardslide or lipslide, which THUG picks by the end that went over the rail |
+
+Coming onto a rail backwards along it, THUG turns the skater round for its grinds, and there the stick alone picks. `GrindAngle` moves the line between along and at an angle (in degrees, 5 to 44); `GrindByBoard=0` leaves it all to the stick, as before.
+
 On the rail:
 - Stick down is the 5-0, up the nosegrind, let go the 50-50. The game takes such a switch once a grind has settled, about three quarters of a second in. Only these three switch; any other grind stays what it is.
 - A flick pops off the rail, with the flip the flick asks for. Letting the stick go does not pop. A flick is a fast move: taking the stick from one end to the other slowly switches the grind instead.
@@ -309,6 +322,8 @@ The settings live in the `[Flickit]` section of `thugsdl.ini`. Thresholds are pe
 | GrindSwitch | 1 | On a rail, stick down / up / let go switches between 5-0, nosegrind and 50-50 |
 | GrindBalance | 0 | 0: the board does not drift on a rail, and no balance meter is shown there. 1: the game's balance and its meter |
 | GrindMirror | 0 | 1: swap "toward the rail" and "away from it", in case the grinds come out mirrored |
+| GrindByBoard | 1 | The board's angle to the rail at touchdown has its say in the grind (see Grinds). 0: the stick alone |
+| GrindAngle | 16 | Degrees: a board closer than this to the line of the rail counts as along it, and the stick alone picks. 5 to 44 |
 | PauseOffBoard | 1 | Flickit stands down on foot and in a car |
 | Tilt | 50 | How far the stick has to be pushed to lean the board, and to ask for a switch on a rail |
 | TiltSettle | 150 | A stick that is still where a flick ended leans the board only after this long |

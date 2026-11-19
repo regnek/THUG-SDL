@@ -1911,8 +1911,27 @@ namespace FlickitGame {
 			return;
 		}
 
-		int grind = Flickit::GrindFromTilt(s_frame.tilt, left != s_frame.mirror);
+		const int asked = Flickit::GrindFromTilt(s_frame.tilt, left != s_frame.mirror);
 
+		// The board as it reaches the rail. The skater still faces the way he did in the air (the
+		// game has just read that for its along / across test, the Parallel argument), his speed
+		// points along the rail by now, and RailTouched has the side he came from.
+		Flickit::RailContact contact;
+		contact.known = false;
+		contact.angle = 0.0f;
+		contact.noseLeads = true;
+		contact.across = (parallel & 0xFF) == 0;
+		contact.backwards = (backwards & 0xFF) != 0;
+		const uint8_t* skater = *(const uint8_t* const*)(core + COMPONENT_OBJECT);
+		if (skater && s_rail.hasFrom) {
+			Flickit::ContactAtRail((const float*)(skater + OBJECT_FORWARD), (const float*)(skater + OBJECT_VELOCITY), s_rail.from,
+				contact.across, contact.backwards, contact);
+		}
+		int grind = s_frame.byBoard ? Flickit::GrindFromBoard(asked, contact, s_frame.alongAngle, s_frame.mirror) : asked;
+
+		s_pick.asked = asked;
+		s_pick.contact = contact;
+		s_pick.byBoard = s_frame.byBoard;
 		s_pick.grind = grind;
 		s_pick.railOnLeft = left;
 		s_pick.byName = false;

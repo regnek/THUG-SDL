@@ -429,6 +429,8 @@ void loadFlickitSettings() {
 	s.grindSwitch = (int)GetPrivateProfileInt(FLICKIT_SECTION, "GrindSwitch", s.grindSwitch, configFile);
 	s.grindBalance = (int)GetPrivateProfileInt(FLICKIT_SECTION, "GrindBalance", s.grindBalance, configFile);
 	s.grindMirror = (int)GetPrivateProfileInt(FLICKIT_SECTION, "GrindMirror", s.grindMirror, configFile);
+	s.grindByBoard = (int)GetPrivateProfileInt(FLICKIT_SECTION, "GrindByBoard", s.grindByBoard, configFile);
+	s.grindAngle = (int)GetPrivateProfileInt(FLICKIT_SECTION, "GrindAngle", s.grindAngle, configFile);
 	s.pauseOffBoard = (int)GetPrivateProfileInt(FLICKIT_SECTION, "PauseOffBoard", s.pauseOffBoard, configFile);
 	s.tilt = (int)GetPrivateProfileInt(FLICKIT_SECTION, "Tilt", s.tilt, configFile);
 	s.tiltSettle = (int)GetPrivateProfileInt(FLICKIT_SECTION, "TiltSettle", s.tiltSettle, configFile);
@@ -476,6 +478,14 @@ void loadFlickitSettings() {
 		if (hooks) {
 			Log::TypedLog(CHN_SDL, "Flickit grinds: rails catch by themselves %d, the stick picks the grind %d, switches on the rail %d, balance %d, mirrored %d\n",
 				s.grindCatch, s.grindPick, s.grindSwitch, s.grindBalance, s.grindMirror);
+			if (s.grindPick) {
+				if (s.grindByBoard) {
+					Log::TypedLog(CHN_SDL, "Flickit grinds: the board's angle to the rail has its say; under %d degrees it counts as along it and the stick alone picks\n", s.grindAngle);
+				}
+				else {
+					Log::TypedLog(CHN_SDL, "Flickit grinds: the stick alone picks, whatever the board's angle to the rail\n");
+				}
+			}
 			if (s.grindDrag > 0) {
 				Log::TypedLog(CHN_SDL, "Flickit rails: drag %d%% of Skate's, %s when the speed is gone, %s for landing on a rail\n",
 					s.grindDrag, s.grindExit ? "the board steps off" : "the board stays", s.grindBoost ? "the game's speed boost" : "no speed boost");
@@ -558,6 +568,22 @@ static const char* flickitTiltText(const Flickit::Tilt& t, char* buf, size_t siz
 	return buf;
 }
 
+// The board as it reached the rail, for the log
+static const char* flickitBoardText(const FlickitGame::Pick& p, char* buf, size_t size) {
+	if (!p.byBoard) {
+		sprintf_s(buf, size, "the board's angle not asked");
+	}
+	else if (!p.contact.known) {
+		sprintf_s(buf, size, "the board's angle not known");
+	}
+	else {
+		sprintf_s(buf, size, "the board %.0f degrees off the rail with its %s onto it%s", p.contact.angle,
+			p.contact.noseLeads ? "nose" : "tail",
+			p.contact.across ? ", across" : p.contact.backwards ? ", riding backwards (the stick alone)" : "");
+	}
+	return buf;
+}
+
 // What the game did with the last rail and what its grind script says, for the log
 static void flickitLogGame(const FlickitGame::Skater& sk, uint32_t now) {
 	FlickitGame::RailExit off;
@@ -577,14 +603,20 @@ static void flickitLogGame(const FlickitGame::Skater& sk, uint32_t now) {
 	FlickitGame::Pick pick;
 	if (FlickitGame::TakePick(pick)) {
 		char tilt[64];
+		char board[96];
+		char asked[64] = "";
+		if (pick.grind != pick.asked) {
+			sprintf_s(asked, sizeof(asked), " (the stick alone: %s)", Flickit::GrindName(pick.asked));
+		}
 		if (pick.started == pick.grind) {
-			Log::TypedLog(CHN_SDL, "Flickit: rail on the %s, %s: %s%s\n", pick.railOnLeft ? "left" : "right",
-				flickitTiltText(pick.tilt, tilt, sizeof(tilt)), Flickit::GrindName(pick.grind),
+			Log::TypedLog(CHN_SDL, "Flickit: rail on the %s, %s, %s: %s%s%s\n", pick.railOnLeft ? "left" : "right",
+				flickitTiltText(pick.tilt, tilt, sizeof(tilt)), flickitBoardText(pick, board, sizeof(board)), Flickit::GrindName(pick.grind), asked,
 				!pick.byName ? "" : pick.balanceStarted ? " (by script name; its script leaves the balance of the rail to a grind before it, so Flickit started it)" : " (by script name)");
 		}
 		else {
-			Log::TypedLog(CHN_SDL, "Flickit: rail on the %s, %s: %s, which this game's scripts do not have, so %s\n", pick.railOnLeft ? "left" : "right",
-				flickitTiltText(pick.tilt, tilt, sizeof(tilt)), Flickit::GrindName(pick.grind), Flickit::GrindName(pick.started));
+			Log::TypedLog(CHN_SDL, "Flickit: rail on the %s, %s, %s: %s%s, which this game's scripts do not have, so %s\n", pick.railOnLeft ? "left" : "right",
+				flickitTiltText(pick.tilt, tilt, sizeof(tilt)), flickitBoardText(pick, board, sizeof(board)), Flickit::GrindName(pick.grind), asked,
+				Flickit::GrindName(pick.started));
 		}
 	}
 
@@ -939,6 +971,8 @@ void flickitGameFrame(device* dev, const Flickit::Output& out) {
 	frame.pickGrind = flickitSettings.grindPick != 0;
 	frame.noBalance = flickitSettings.grindBalance == 0;
 	frame.mirror = flickitSettings.grindMirror != 0;
+	frame.byBoard = flickitSettings.grindByBoard != 0;
+	frame.alongAngle = (float)flickitSettings.grindAngle;
 	frame.classicGrind = (dev->controlData[3] & (0x01 << 4)) != 0;
 	frame.tilt = flickitRecognizers[0].GetTilt();
 	frame.drag = flickitSettings.grindDrag;

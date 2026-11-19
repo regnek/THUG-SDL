@@ -184,6 +184,8 @@ namespace FlickitGame {
 		bool noBalance;         // the board does not drift on a rail, and the rail's balance meter stays off
 		bool mirror;            // swap "toward the rail" and "away from it"
 		bool classicGrind;      // the player holds the real Grind button: the game picks as it always did
+		bool byBoard;           // the board's angle to the rail at touchdown has its say in the grind (Flickit::GrindFromBoard)
+		float alongAngle;       // degrees under which the board counts as along the rail
 		Flickit::Tilt tilt;     // the lean of the board right now
 		int drag;               // percent of Skate's drag on a rail, 0 for none
 		bool stepOff;           // a board that is out of speed on a rail steps off
@@ -216,8 +218,11 @@ namespace FlickitGame {
 
 	// The last grind the pick started, for the log. Returns false if there was none since the last call.
 	struct Pick {
-		int grind;              // what the tilt asked for
+		int asked;              // what the tilt asked for
+		int grind;              // what the pick went for: the tilt's, or another for the board's angle to the rail
 		int started;            // what was started (differs if the game has no script for it)
+		Flickit::RailContact contact;   // the board as it reached the rail
+		bool byBoard;           // the board's angle had its say (Frame::byBoard)
 		bool railOnLeft;
 		bool byName;            // started as a script by name instead of through the game's table
 		bool balanceStarted;    // its script left the balance of the rail to a grind before it (a salad), so Flickit started it

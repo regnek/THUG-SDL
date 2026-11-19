@@ -32,8 +32,31 @@ Bumpers                    spin + nollie / spin + revert, both = get off the boa
 Flip or Ollie, on the ground   push (tap = a little, hold = a lot)
 Right stick click          Flickit off / on (for looking around)
 
-New in this build: no balance meter on a rail
----------------------------------------------
+New in this build: the board's angle has its say in the grind
+---------------------------------------------------------------
+  - Coming in at an angle, the board was swung straight for whatever the
+    stick asked for: a board that looked like a crooked came down a 50-50,
+    one coming in across the rail with the stick down a 5-0. In Skate the
+    board meets the rail the way it comes in.
+  - Now a board at an angle counts as the stick pushed the way its nose
+    points ("toward" when the nose points onto the rail):
+      along the rail (under 16 degrees)   the stick alone, as before
+      at an angle, stick at rest          crooked when the nose points onto
+                                          the rail, smith when the tail does
+      at an angle, a crooked / overcrook  whichever of the two is angled
+      or feeble / smith asked for         the way the board is
+      at an angle, up / down / a slide    as asked: nosegrind, 5-0, slides
+      across the rail (about 44 degrees)  the slides as asked; a grind on
+                                          the trucks becomes a boardslide
+                                          or lipslide instead of a 5-0
+  - Coming onto a rail backwards along it the stick alone picks, as before.
+  - GrindAngle=16 moves the line between along and at an angle (5 to 44
+    degrees). GrindByBoard=0 leaves it all to the stick, as before.
+  - The log line of every grind now says the board's angle to the rail,
+    which end pointed onto it, and what the stick alone would have given.
+
+No balance meter on a rail (the last build)
+-------------------------------------------
   - Grinds and slides no longer show THUG's balance meter. The board
     cannot lose its balance on a rail, so the meter only ever sat in the
     middle.
@@ -41,7 +64,7 @@ New in this build: no balance meter on a rail
   - GrindBalance=1 in the [Flickit] section gives grinds THUG's balance
     back, and the meter with it.
 
-The turn stays the trucks' (the last build)
+The turn stays the trucks' (two builds ago)
 -------------------------------------------
   - The turn no longer drops into THUG's sharp turn now and then. THUG
     reads Down from how far down the stick is, whatever it does to the
@@ -56,8 +79,8 @@ The turn stays the trucks' (the last build)
     is THUG's own turning again; Steering=200 keeps the trucks and turns
     at speed about as tightly as THUG does.
 
-Off the rail like Skate (two builds ago)
-----------------------------------------
+Off the rail like Skate (three builds ago)
+------------------------------------------
   - When a grind runs out of speed, the board is pushed off to one side
     and the skater drops, as in Skate. Off a ledge he always goes over
     the edge, away from the top, and lands on the ground below; off a
@@ -76,8 +99,8 @@ Off the rail like Skate (two builds ago)
     "Flickit: out of speed on the rail: off to his left (away from the
     ledge; a surface on his right), 80 units/s sideways".
 
-Salads slow down on the rail (three builds ago)
------------------------------------------------
+Salads slow down on the rail (four builds ago)
+----------------------------------------------
   - The FS and BS salad lost no speed on a rail: they lasted as long as
     the rail did. Now they slow down and step off like every other grind.
   - Why: THUG's scripts make the salad a grind you switch to from another
@@ -92,7 +115,7 @@ Salads slow down on the rail (three builds ago)
     script name; its script leaves the balance of the rail to a grind
     before it, so Flickit started it)".
 
-The flicks go by his feet (four builds ago)
+The flicks go by his feet (five builds ago)
 -------------------------------------------
   - As in Skate, the kickflip goes toward the skater's heels. Left foot
     forward (a regular skater in his own stance): the kickflip is down,
@@ -111,8 +134,8 @@ The flicks go by his feet (four builds ago)
     kickflip is ("Flickit: left foot forward (regular): the kickflip is the
     flick up-left") when he is first seen and whenever it changes.
 
-Nollies (five builds ago)
--------------------------
+Nollies (six builds ago)
+------------------------
   - Push the right stick up and the skater goes into THUG's nollie stance
     and crouches, as deep as the stick is pushed (a third of the way is
     enough; further = a higher nollie).
@@ -133,14 +156,14 @@ Nollies (five builds ago)
   - With the console on, the log says "Flickit: the stick crouches up:
     nollie stance" and "Flickit: out of nollie stance".
 
-The crouch you see (six builds ago)
------------------------------------
+The crouch you see (seven builds ago)
+-------------------------------------
   - The skater crouches as deep as the stick is pulled: a little at a third
     of the way, THUG's full crouch all the way down, and anything between.
     Easing the stick back up eases him back up. CrouchPose=0 in the
     [Flickit] section gives THUG's one crouch back.
 
-The stick (seven builds ago)
+The stick (eight builds ago)
 ----------------------------
   - Weak flicks count, as in Skate: a crouch starts a third of the way down,
     and a flick 40 percent of the way out pops. If your thugsdl.ini already
@@ -171,6 +194,11 @@ the rail is on):
   up, rolled toward      noseslide          up, rolled away    nosebluntslide
   down, rolled toward    tailslide          down, rolled away  bluntslide
   toward, rolled up      feeble             away, rolled up    smith
+
+That is for a board that comes in along the rail. Coming in at an angle, the
+board itself counts as the stick pushed the way its nose points (see "New in
+this build" above): at rest that is a crooked when the nose points onto the
+rail, a smith when the tail does.
 
 On the rail: stick down = 5-0, up = nosegrind, let go = 50-50 (the game takes
 the switch about three quarters of a second into a grind). A flick pops off;
@@ -339,8 +367,8 @@ the rail is made of, which drag that gives, and how fast the board came off.
 On foot and in a car Flickit switches itself off. Both bumpers get the skater
 back on the board.
 
-A first check: with a rail on the skater's left, hold the stick up-left as the
-board touches down. That should be a crooked grind. If it comes out as an
+A first check: coming in along a rail that is on the skater's left, hold the
+stick up-left as the board touches down. That should be a crooked grind. If it comes out as an
 overcrook the sides are mirrored: set GrindMirror=1 (see Settings).
 
 If something is wrong
@@ -373,5 +401,6 @@ Flickit works without touching thugsdl.ini. To change something, paste
 flickit-ini-section.txt at the end of thugsdl.ini and edit the values.
 F9 in game re-reads the section, no restart needed.
 To see a line for every flick Flickit recognizes, set Console=1 under [Logger].
-For grinds the log also says which side the rail was on, where the stick was
-and which grind that made, and what the game's grind script reports.
+For grinds the log also says which side the rail was on, where the stick was,
+the board's angle to the rail and which end pointed onto it, which grind that
+made, and what the game's grind script reports.

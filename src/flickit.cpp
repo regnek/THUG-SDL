@@ -99,6 +99,8 @@ namespace Flickit {
 		s.grindSwitch = 1;
 		s.grindBalance = 0;
 		s.grindMirror = 0;
+		s.grindByBoard = 1;
+		s.grindAngle = 16;
 		s.pauseOffBoard = 1;
 		s.tilt = 50;
 		s.tiltSettle = 150;
@@ -159,6 +161,8 @@ namespace Flickit {
 		s.grindSwitch = s.grindSwitch ? 1 : 0;
 		s.grindBalance = s.grindBalance ? 1 : 0;
 		s.grindMirror = s.grindMirror ? 1 : 0;
+		s.grindByBoard = s.grindByBoard ? 1 : 0;
+		s.grindAngle = Clamp(s.grindAngle, 5, 44);
 		s.pauseOffBoard = s.pauseOffBoard ? 1 : 0;
 		s.tilt = Clamp(s.tilt, s.deadzone + 5, 95);
 		s.tiltSettle = Clamp(s.tiltSettle, 0, 1000);
@@ -701,6 +705,78 @@ namespace Flickit {
 			}
 			// Skate has the willy and the overwilly here, which THUG does not know
 			return firstToward ? GRIND_CROOKED : GRIND_OVERCROOK;
+		}
+	}
+
+	bool ContactAtRail(const float forward[3], const float velocity[3], const float from[3], bool across, bool backwards, RailContact& out) {
+		out.known = false;
+		out.angle = 0.0f;
+		out.noseLeads = true;
+		out.across = across;
+		out.backwards = backwards;
+		// On the level: the rail's line is the way he now travels, the facing is the board's
+		const float travel = std::sqrt(velocity[0] * velocity[0] + velocity[2] * velocity[2]);
+		const float facing = std::sqrt(forward[0] * forward[0] + forward[2] * forward[2]);
+		const float side = std::sqrt(from[0] * from[0] + from[2] * from[2]);
+		if (!(travel > 1.0f) || !(facing > 0.1f) || !(side > 0.5f)) {
+			return false;
+		}
+		const float fx = forward[0] / facing, fz = forward[2] / facing;
+		float along = std::fabs(fx * velocity[0] / travel + fz * velocity[2] / travel);
+		if (along > 1.0f) {
+			along = 1.0f;
+		}
+		out.angle = std::acos(along) * 57.29577951f;
+		// Onto the rail is away from the side he came from
+		out.noseLeads = fx * from[0] + fz * from[2] < 0.0f;
+		out.known = true;
+		return true;
+	}
+
+	int GrindFromBoard(int grind, const RailContact& c, float alongAngle, bool mirror) {
+		if (!c.known) {
+			return grind;
+		}
+		if (c.across) {
+			switch (grind) {
+			case GRIND_NOSEGRIND:
+			case GRIND_FIVE_O:
+			case GRIND_CROOKED:
+			case GRIND_OVERCROOK:
+			case GRIND_FEEBLE:
+			case GRIND_SMITH:
+			case GRIND_SALAD:
+				// No truck reaches the rail from across it: the game's slide for a board that
+				// lands across, boardslide or lipslide by the end that went over
+				return GRIND_BOARDLIP;
+			default:
+				return grind;
+			}
+		}
+		if (c.backwards || c.angle < alongAngle) {
+			return grind;
+		}
+		// At an angle: the board counts as the stick pushed the way its nose points, toward the
+		// rail when the nose points onto it (the other way round where the game's sides are, as
+		// GrindMirror swaps them for the stick)
+		const bool toward = c.noseLeads != mirror;
+		switch (grind) {
+		case GRIND_FIFTY:
+			// The end that points onto the rail gets there first: the front truck when it is the nose
+			if (c.noseLeads) {
+				return toward ? GRIND_CROOKED : GRIND_OVERCROOK;
+			}
+			return toward ? GRIND_FEEBLE : GRIND_SMITH;
+		case GRIND_CROOKED:
+		case GRIND_OVERCROOK:
+			return toward ? GRIND_CROOKED : GRIND_OVERCROOK;
+		case GRIND_FEEBLE:
+		case GRIND_SMITH:
+			return toward ? GRIND_FEEBLE : GRIND_SMITH;
+		case GRIND_SALAD:
+			return toward ? GRIND_FEEBLE : GRIND_SALAD;
+		default:
+			return grind;
 		}
 	}
 
