@@ -9,8 +9,13 @@
 // memory behind it. Everything the game asks for after that lands above 2 GB, where code that takes
 // an address for a signed number (or keeps a flag in its top bit) goes wrong at once, rather than
 // only on the day a level is big enough to reach that far.
+//
+// [Memory] BigScriptMemory=1 (the default) makes the game's script heap and the pools of script
+// objects in it 8 times as big, before the game makes them, so that levels with two levels' worth of
+// nodes and scripts fit (see memory.cpp).
 namespace Memory {
-	// While the DLL loads: log the address space, and run the test if the ini asks for it.
+	// While the DLL loads: enlarge the script memory unless the ini says not to, log the address
+	// space, and run the test if the ini asks for it.
 	void AtStartup(const char* configFile);
 	// Log how much of the address space is in use, and where the game's main block is once it has one.
 	void LogStatus();
