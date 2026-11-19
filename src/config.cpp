@@ -1,4 +1,5 @@
 #include "config.h"
+#include "memory.h"
 #include <d3d9types.h>
 #include <QB/QB.h>
 #include <QB/QBKey.h>
@@ -144,6 +145,7 @@ void InitPatch() {
 	Log::TypedLog(CHN_DLL, "THUG SDL %d.%d.%d\n", VERSION_NUMBER_MAJOR, VERSION_NUMBER_MINOR, VERSION_NUMBER_FIX);
 	Log::TypedLog(CHN_DLL, "DIRECTORY: %s\n", (LPSTR)executableDirectory);
 	Log::TypedLog(CHN_DLL, "Patch initialized\n");
+	Memory::AtStartup(configFile);
 	Log::TypedLog(CHN_DLL, "<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<Initializing INI settings\n");
 	Log::TypedLog(CHN_DLL, "Intro movies\t\t\t\t\t%s\n", intromovies ? "Enabled" : "Disabled");
 	Log::TypedLog(CHN_DLL, "Button font\t\t\t\t\t%s\n", (buttonfont == 2) ? "Ps2" : ((buttonfont == 3) ? "Xbox" : ((buttonfont == 4) ? "NGC" : "PC")));

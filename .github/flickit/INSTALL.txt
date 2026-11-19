@@ -32,8 +32,37 @@ Bumpers                    spin + nollie / spin + revert, both = get off the boa
 Flip or Ollie, on the ground   push (tap = a little, hold = a lot)
 Right stick click          Flickit off / on (for looking around)
 
-New in this build: the board's angle has its say in the grind
----------------------------------------------------------------
+New in this build: a test for more memory (optional)
+----------------------------------------------------
+For one big open world the game will need more than the 2 GB of address
+space a 32-bit program gets. One bit in the exe, the large-address flag,
+gives it 4 GB on a 64-bit Windows. Whether THUG copes with memory above
+2 GB is what this test finds out.
+  1. Close the game. Copy the three files in large-address\ into the game
+     folder, next to THUG-SDL.exe.
+  2. Double-click "Large address on.bat". The first time, it keeps a copy
+     of the exe as THUG-SDL.exe.before-large-address.
+  3. Add this to the end of thugsdl.ini:
+         [Memory]
+         HighMemoryTest=1
+     It takes all the free address space below 2 GB while the game starts
+     (reserved only, no memory behind it), so everything the game asks for
+     lands above 2 GB from the first moment. Without it the game would
+     only go there once a level is big enough.
+  4. With [Logger] Console=1 or WriteFile=1 the log says:
+         Memory: 4096 MB of address space; THUG-SDL.exe has the large-address flag
+         Memory: HighMemoryTest holds ... MB below 2 GB ...
+         Memory: the game's main block is 360 MB at 0x... , above 2 GB
+     F9 in a level adds a line with how much of the address space is in use.
+  5. Play as usual; New Jersey with the 4x texture files is a good level for
+     it. A crash, a freeze or anything that looks wrong is the answer we are
+     after. If something goes wrong, HighMemoryTest=0 tells whether it was
+     the test.
+  - Undo: "Large address off.bat", or delete THUG-SDL.exe and rename
+    THUG-SDL.exe.before-large-address back.
+
+The board's angle has its say in the grind (the last build)
+-----------------------------------------------------------
   - Coming in at an angle, the board was swung straight for whatever the
     stick asked for: a board that looked like a crooked came down a 50-50,
     one coming in across the rail with the stick down a 5-0. In Skate the
@@ -55,7 +84,7 @@ New in this build: the board's angle has its say in the grind
   - The log line of every grind now says the board's angle to the rail,
     which end pointed onto it, and what the stick alone would have given.
 
-No balance meter on a rail (the last build)
+No balance meter on a rail (two builds ago)
 -------------------------------------------
   - Grinds and slides no longer show THUG's balance meter. The board
     cannot lose its balance on a rail, so the meter only ever sat in the
@@ -64,8 +93,8 @@ No balance meter on a rail (the last build)
   - GrindBalance=1 in the [Flickit] section gives grinds THUG's balance
     back, and the meter with it.
 
-The turn stays the trucks' (two builds ago)
--------------------------------------------
+The turn stays the trucks' (three builds ago)
+---------------------------------------------
   - The turn no longer drops into THUG's sharp turn now and then. THUG
     reads Down from how far down the stick is, whatever it does to the
     side, and from 40% of the way down that is Down. So a stick pushed
@@ -79,8 +108,8 @@ The turn stays the trucks' (two builds ago)
     is THUG's own turning again; Steering=200 keeps the trucks and turns
     at speed about as tightly as THUG does.
 
-Off the rail like Skate (three builds ago)
-------------------------------------------
+Off the rail like Skate (four builds ago)
+-----------------------------------------
   - When a grind runs out of speed, the board is pushed off to one side
     and the skater drops, as in Skate. Off a ledge he always goes over
     the edge, away from the top, and lands on the ground below; off a
@@ -99,7 +128,7 @@ Off the rail like Skate (three builds ago)
     "Flickit: out of speed on the rail: off to his left (away from the
     ledge; a surface on his right), 80 units/s sideways".
 
-Salads slow down on the rail (four builds ago)
+Salads slow down on the rail (five builds ago)
 ----------------------------------------------
   - The FS and BS salad lost no speed on a rail: they lasted as long as
     the rail did. Now they slow down and step off like every other grind.
@@ -115,8 +144,8 @@ Salads slow down on the rail (four builds ago)
     script name; its script leaves the balance of the rail to a grind
     before it, so Flickit started it)".
 
-The flicks go by his feet (five builds ago)
--------------------------------------------
+The flicks go by his feet (six builds ago)
+------------------------------------------
   - As in Skate, the kickflip goes toward the skater's heels. Left foot
     forward (a regular skater in his own stance): the kickflip is down,
     flick up-left, the heelflip up-right, the pop shove-it a drag to the
@@ -134,8 +163,8 @@ The flicks go by his feet (five builds ago)
     kickflip is ("Flickit: left foot forward (regular): the kickflip is the
     flick up-left") when he is first seen and whenever it changes.
 
-Nollies (six builds ago)
-------------------------
+Nollies (seven builds ago)
+--------------------------
   - Push the right stick up and the skater goes into THUG's nollie stance
     and crouches, as deep as the stick is pushed (a third of the way is
     enough; further = a higher nollie).
@@ -156,15 +185,15 @@ Nollies (six builds ago)
   - With the console on, the log says "Flickit: the stick crouches up:
     nollie stance" and "Flickit: out of nollie stance".
 
-The crouch you see (seven builds ago)
+The crouch you see (eight builds ago)
 -------------------------------------
   - The skater crouches as deep as the stick is pulled: a little at a third
     of the way, THUG's full crouch all the way down, and anything between.
     Easing the stick back up eases him back up. CrouchPose=0 in the
     [Flickit] section gives THUG's one crouch back.
 
-The stick (eight builds ago)
-----------------------------
+The stick (nine builds ago)
+---------------------------
   - Weak flicks count, as in Skate: a crouch starts a third of the way down,
     and a flick 40 percent of the way out pops. If your thugsdl.ini already
     has a [Flickit] section, change these four lines in it (the new section

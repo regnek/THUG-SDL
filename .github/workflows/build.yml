@@ -69,6 +69,7 @@ jobs:
           Copy-Item (Get-ChildItem -Recurse build-default -Filter thugsdl.dll | Select-Object -First 1).FullName out/thugsdl.dll
           Copy-Item (Get-ChildItem -Recurse build-unoptimized -Filter thugsdl.dll | Select-Object -First 1).FullName out/alt-unoptimized/thugsdl.dll
           Copy-Item .github/flickit/INSTALL.txt out/INSTALL.txt
+          Copy-Item -Recurse .github/flickit/large-address out/large-address
           $ini = Get-Content Game/thugsdl.ini
           $start = [array]::IndexOf($ini, '[Flickit]')
           if ($start -lt 0) { throw 'no [Flickit] section in Game/thugsdl.ini' }

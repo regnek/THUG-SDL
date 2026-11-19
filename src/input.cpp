@@ -1,6 +1,7 @@
 #pragma once
 
 #include <windows.h>
+#include "memory.h"
 #include <stdio.h>
 #include <stdint.h>
 #include <SDL.h>
@@ -554,6 +555,7 @@ void loadFlickitSettings() {
 				s.gameHooks ? "the game hooks could not go in" : "game hooks are switched off");
 		}
 	}
+	Memory::LogStatus();
 }
 
 static const char* flickitTiltText(const Flickit::Tilt& t, char* buf, size_t size) {
@@ -2054,6 +2056,7 @@ void __cdecl processController(device* dev) {
 		dev->isPluggedIn = 1;
 
 		// The game's rail code does nothing for Flickit on this frame unless the controller poll below says so
+		Memory::LogOnceReady();
 		FlickitGame::BeginFrame();
 
 		if (!*keyboard_on_screen) {
