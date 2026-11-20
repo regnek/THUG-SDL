@@ -50,7 +50,9 @@ limits. With Console=1 or WriteFile=1 under [Logger] the log says, at
 start-up and then for every level:
     BigWorld: node names in a table as big as the level needs (...)
     BigWorld: room for 2048 level lights (the game has 256)
-    BigWorld: 9725 of the level's 9725 nodes have names, in a table of 32768 (...)
+    BigWorld: 9805 of the level's 9805 nodes have names, in a table of 32768 (...)
+(New Jersey with Manhattan: 9725 nodes from its file and 80 more the game
+adds to every level for goals made in the goal editor.)
 BigNodeNames=0 or BigLights=0 under [Memory] in thugsdl.ini puts the
 game's own back.
 
