@@ -13,6 +13,9 @@ namespace Memory {
 	// setup stores it (0x0057C475), and the size THUG-SDL gives it (patchStaticValues, 360 MB)
 	static const volatile uint32_t* const kMainBlockStart = (const volatile uint32_t*)0x007CA060;
 	static const uint32_t kMainBlockSize = 0x16800000;
+	// Where its size is in the game's code: push size; call malloc; mov [0x007CA060], eax; add eax, size
+	static const uint32_t kMainBlockSizeAt[2] = { 0x0057C460, 0x0057C47B };
+	static uint32_t s_mainBlockSize = kMainBlockSize;
 
 	static uint32_t s_reserved = 0;      // bytes the test holds below 2 GB
 	static bool s_loggedReady = false;
@@ -112,9 +115,46 @@ namespace Memory {
 		return taken;
 	}
 
+	// [Memory] MainHeapMB: the size of the game's main block, where a level's files load and its scene is
+	// built. THUG-SDL makes it 360 MB. A scene file sits in it whole while the level loads (New Jersey, Manhattan
+	// and Tampa at 4x: 230 MB), so a world of more districts needs a bigger one. That needs the large-address
+	// flag: with 2 GB of address space a bigger block may not be had at all. So the default is 1024 MB with
+	// the flag and THUG-SDL's 360 MB without; it never goes below 360 MB, and without the flag never above.
+	static void MainBlock(const char* configFile, bool laa) {
+		const UINT stockMB = kMainBlockSize >> 20;
+		UINT mb = GetPrivateProfileIntA(MEMORY_SECTION, "MainHeapMB", laa ? 1024 : stockMB, configFile);
+		if (mb < stockMB) {
+			mb = stockMB;
+		}
+		if (!laa && mb > stockMB) {
+			Log::TypedLog(CHN_DLL, "Memory: MainHeapMB=%u needs the large-address flag on THUG-SDL.exe; the main block stays %u MB\n", mb, stockMB);
+			mb = stockMB;
+		}
+		if (mb > 1536) {
+			mb = 1536;
+		}
+		if (mb == stockMB) {
+			Log::TypedLog(CHN_DLL, "Memory: the game's main block stays %u MB\n", stockMB);
+			return;
+		}
+		for (int i = 0; i < 2; i++) {
+			if (*(const uint32_t*)(uintptr_t)kMainBlockSizeAt[i] != kMainBlockSize) {
+				Log::TypedLog(CHN_DLL, "Memory: the size of the game's main block is not where it was expected (0x%08X), left at %u MB\n",
+					kMainBlockSizeAt[i], stockMB);
+				return;
+			}
+		}
+		s_mainBlockSize = (uint32_t)mb << 20;
+		for (int i = 0; i < 2; i++) {
+			patchDWord((void*)(uintptr_t)kMainBlockSizeAt[i], s_mainBlockSize);
+		}
+		Log::TypedLog(CHN_DLL, "Memory: the game's main block will be %u MB (THUG-SDL makes it %u)\n", mb, stockMB);
+	}
+
 	void AtStartup(const char* configFile) {
 		EnlargeScriptMemory(configFile);
 		const bool laa = LargeAddressAware();
+		MainBlock(configFile, laa);
 		MEMORYSTATUSEX m;
 		m.dwLength = sizeof(m);
 		const uint64_t space = GlobalMemoryStatusEx(&m) ? m.ullTotalVirtual : 0;
@@ -142,8 +182,8 @@ namespace Memory {
 		}
 		const uint32_t start = *kMainBlockStart;
 		if (start) {
-			Log::TypedLog(CHN_DLL, "Memory: the game's main block is %u MB at 0x%08X to 0x%08X, %s 2 GB\n", kMainBlockSize >> 20,
-				start, start + kMainBlockSize, start >= kTwoGB ? "above" : "below");
+			Log::TypedLog(CHN_DLL, "Memory: the game's main block is %u MB at 0x%08X to 0x%08X, %s 2 GB\n", s_mainBlockSize >> 20,
+				start, start + s_mainBlockSize, start >= kTwoGB ? "above" : "below");
 		}
 	}
 

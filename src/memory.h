@@ -10,6 +10,9 @@
 // an address for a signed number (or keeps a flag in its top bit) goes wrong at once, rather than
 // only on the day a level is big enough to reach that far.
 //
+// [Memory] MainHeapMB sets the game's main block (THUG-SDL: 360 MB), where a level's files load. Default
+// 1024 with the large-address flag, 360 without (and without the flag it cannot grow).
+//
 // [Memory] BigScriptMemory=1 (the default) makes the game's script heap, the pools of script
 // objects in it and the pool of hash table items 8 times as big, before the game makes them, so that
 // levels with two levels' worth of nodes, scripts and geometry fit (see memory.cpp).
