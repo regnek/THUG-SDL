@@ -32,8 +32,30 @@ Bumpers                    spin + nollie / spin + revert, both = get off the boa
 Flip or Ollie, on the ground   push (tap = a little, hold = a lot)
 Right stick click          Flickit off / on (for looking around)
 
-New in this build: room for two levels in one
----------------------------------------------
+New in this build: room for a bigger world
+------------------------------------------
+Two more of the game's fixed limits, for a world made of more levels than
+New Jersey and Manhattan:
+  - Node names. The game finds a level's rails, objects, peds and restart
+    points by name in a table of 16384 slots. More named nodes than that
+    and the game hangs while the level loads (New Jersey with Manhattan
+    has 9725; one more story level fits, two do not), and a node numbered
+    past 32767 cannot be found. This build gives it a table as big as the
+    level needs, and finds the same node for every name as the game does.
+  - Level lights. The game has 256; after that every further light in a
+    level stays dark (New Jersey 85, Manhattan 141, Moscow 202). This
+    build has room for 2048.
+Nothing to set, and nothing changes in a level that fits the game's own
+limits. With Console=1 or WriteFile=1 under [Logger] the log says, at
+start-up and then for every level:
+    BigWorld: node names in a table as big as the level needs (...)
+    BigWorld: room for 2048 level lights (the game has 256)
+    BigWorld: 9725 of the level's 9725 nodes have names, in a table of 32768 (...)
+BigNodeNames=0 or BigLights=0 under [Memory] in thugsdl.ini puts the
+game's own back.
+
+Room for two levels in one (the last build)
+-------------------------------------------
 The game keeps its scripts, and every level's list of rails, objects and
 restart points, in a heap of its own with fixed-size pools inside it, and
 every table it looks things up in takes its overflow from one more fixed
@@ -45,7 +67,7 @@ set; with Console=1 and WriteFile=1 under [Logger] the log says:
     Memory: script memory 8 times as big: a 31.6 MB heap, ... 100000 hash table items
 [Memory] BigScriptMemory=0 in thugsdl.ini leaves it all as the game has it.
 
-A test for more memory (optional, the last build)
+A test for more memory (optional, two builds ago)
 -------------------------------------------------
 For one big open world the game will need more than the 2 GB of address
 space a 32-bit program gets. One bit in the exe, the large-address flag,
@@ -74,8 +96,8 @@ gives it 4 GB on a 64-bit Windows. Whether THUG copes with memory above
   - Undo: "Large address off.bat", or delete THUG-SDL.exe and rename
     THUG-SDL.exe.before-large-address back.
 
-The board's angle has its say in the grind (two builds ago)
------------------------------------------------------------
+The board's angle has its say in the grind (three builds ago)
+-------------------------------------------------------------
   - Coming in at an angle, the board was swung straight for whatever the
     stick asked for: a board that looked like a crooked came down a 50-50,
     one coming in across the rail with the stick down a 5-0. In Skate the
@@ -97,8 +119,8 @@ The board's angle has its say in the grind (two builds ago)
   - The log line of every grind now says the board's angle to the rail,
     which end pointed onto it, and what the stick alone would have given.
 
-No balance meter on a rail (three builds ago)
--------------------------------------------
+No balance meter on a rail (four builds ago)
+--------------------------------------------
   - Grinds and slides no longer show THUG's balance meter. The board
     cannot lose its balance on a rail, so the meter only ever sat in the
     middle.
@@ -106,8 +128,8 @@ No balance meter on a rail (three builds ago)
   - GrindBalance=1 in the [Flickit] section gives grinds THUG's balance
     back, and the meter with it.
 
-The turn stays the trucks' (four builds ago)
----------------------------------------------
+The turn stays the trucks' (five builds ago)
+--------------------------------------------
   - The turn no longer drops into THUG's sharp turn now and then. THUG
     reads Down from how far down the stick is, whatever it does to the
     side, and from 40% of the way down that is Down. So a stick pushed
@@ -121,8 +143,8 @@ The turn stays the trucks' (four builds ago)
     is THUG's own turning again; Steering=200 keeps the trucks and turns
     at speed about as tightly as THUG does.
 
-Off the rail like Skate (five builds ago)
------------------------------------------
+Off the rail like Skate (six builds ago)
+----------------------------------------
   - When a grind runs out of speed, the board is pushed off to one side
     and the skater drops, as in Skate. Off a ledge he always goes over
     the edge, away from the top, and lands on the ground below; off a
@@ -141,8 +163,8 @@ Off the rail like Skate (five builds ago)
     "Flickit: out of speed on the rail: off to his left (away from the
     ledge; a surface on his right), 80 units/s sideways".
 
-Salads slow down on the rail (six builds ago)
-----------------------------------------------
+Salads slow down on the rail (seven builds ago)
+-----------------------------------------------
   - The FS and BS salad lost no speed on a rail: they lasted as long as
     the rail did. Now they slow down and step off like every other grind.
   - Why: THUG's scripts make the salad a grind you switch to from another
@@ -157,8 +179,8 @@ Salads slow down on the rail (six builds ago)
     script name; its script leaves the balance of the rail to a grind
     before it, so Flickit started it)".
 
-The flicks go by his feet (seven builds ago)
-------------------------------------------
+The flicks go by his feet (eight builds ago)
+--------------------------------------------
   - As in Skate, the kickflip goes toward the skater's heels. Left foot
     forward (a regular skater in his own stance): the kickflip is down,
     flick up-left, the heelflip up-right, the pop shove-it a drag to the
@@ -176,8 +198,8 @@ The flicks go by his feet (seven builds ago)
     kickflip is ("Flickit: left foot forward (regular): the kickflip is the
     flick up-left") when he is first seen and whenever it changes.
 
-Nollies (eight builds ago)
---------------------------
+Nollies (nine builds ago)
+-------------------------
   - Push the right stick up and the skater goes into THUG's nollie stance
     and crouches, as deep as the stick is pushed (a third of the way is
     enough; further = a higher nollie).
@@ -198,15 +220,15 @@ Nollies (eight builds ago)
   - With the console on, the log says "Flickit: the stick crouches up:
     nollie stance" and "Flickit: out of nollie stance".
 
-The crouch you see (nine builds ago)
--------------------------------------
+The crouch you see (ten builds ago)
+-----------------------------------
   - The skater crouches as deep as the stick is pulled: a little at a third
     of the way, THUG's full crouch all the way down, and anything between.
     Easing the stick back up eases him back up. CrouchPose=0 in the
     [Flickit] section gives THUG's one crouch back.
 
-The stick (ten builds ago)
----------------------------
+The stick (eleven builds ago)
+-----------------------------
   - Weak flicks count, as in Skate: a crouch starts a third of the way down,
     and a flick 40 percent of the way out pops. If your thugsdl.ini already
     has a [Flickit] section, change these four lines in it (the new section

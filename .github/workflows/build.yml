@@ -32,6 +32,8 @@ jobs:
           ./flickit_pose_test
           g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -I src tests/flickit_stance_test.cpp src/flickit.cpp -o flickit_stance_test
           ./flickit_stance_test scripts/qb/source/scripts/game/skater
+          g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -I src tests/nodenames_test.cpp -o nodenames_test
+          ./nodenames_test
 
   build:
     runs-on: windows-latest
