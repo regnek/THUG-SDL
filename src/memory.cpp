@@ -15,6 +15,8 @@ namespace Memory {
 	static const uint32_t kMainBlockSize = 0x16800000;
 	// Where its size is in the game's code: push size; call malloc; mov [0x007CA060], eax; add eax, size
 	static const uint32_t kMainBlockSizeAt[2] = { 0x0057C460, 0x0057C47B };
+	static const uint32_t kMainBlockCall = 0x0057C470;   // the call to malloc, which is at 0x005F9755
+	static const uint32_t kGameMalloc = 0x005F9755;
 	static uint32_t s_mainBlockSize = kMainBlockSize;
 
 	static uint32_t s_reserved = 0;      // bytes the test holds below 2 GB
@@ -120,6 +122,23 @@ namespace Memory {
 	// and Tampa at 4x: 230 MB), so a world of more districts needs a bigger one. That needs the large-address
 	// flag: with 2 GB of address space a bigger block may not be had at all. So the default is 1024 MB with
 	// the flag and THUG-SDL's 360 MB without; it never goes below 360 MB, and without the flag never above.
+	// Once the block is to be bigger, the game's call to malloc for it comes here: if there is no room for
+	// it, the block is THUG-SDL's 360 MB instead of a crash at start-up. The add of the size to the start
+	// (0x0057C47A) runs after this returns, so it can still be changed.
+	static void* __cdecl AllocMainBlock(size_t size) {
+		typedef void* (__cdecl* MallocFn)(size_t);
+		const MallocFn gameMalloc = (MallocFn)(uintptr_t)kGameMalloc;
+		void* block = gameMalloc(size);
+		if (block || size <= kMainBlockSize) {
+			return block;
+		}
+		Log::TypedLog(CHN_DLL, "Memory: no room for a %u MB main block, so it is %u MB\n",
+			(unsigned)(size >> 20), (unsigned)(kMainBlockSize >> 20));
+		s_mainBlockSize = kMainBlockSize;
+		patchDWord((void*)(uintptr_t)kMainBlockSizeAt[1], kMainBlockSize);
+		return gameMalloc(kMainBlockSize);
+	}
+
 	static void MainBlock(const char* configFile, bool laa) {
 		const UINT stockMB = kMainBlockSize >> 20;
 		UINT mb = GetPrivateProfileIntA(MEMORY_SECTION, "MainHeapMB", laa ? 1024 : stockMB, configFile);
@@ -144,10 +163,17 @@ namespace Memory {
 				return;
 			}
 		}
+		const uint8_t* call = (const uint8_t*)(uintptr_t)kMainBlockCall;
+		if (call[0] != 0xE8 || kMainBlockCall + 5 + *(const uint32_t*)(call + 1) != kGameMalloc) {
+			Log::TypedLog(CHN_DLL, "Memory: the game's call for its main block is not where it was expected (0x%08X), left at %u MB\n",
+				kMainBlockCall, stockMB);
+			return;
+		}
 		s_mainBlockSize = (uint32_t)mb << 20;
 		for (int i = 0; i < 2; i++) {
 			patchDWord((void*)(uintptr_t)kMainBlockSizeAt[i], s_mainBlockSize);
 		}
+		patchCall((void*)(uintptr_t)kMainBlockCall, (void*)AllocMainBlock);
 		Log::TypedLog(CHN_DLL, "Memory: the game's main block will be %u MB (THUG-SDL makes it %u)\n", mb, stockMB);
 	}
 

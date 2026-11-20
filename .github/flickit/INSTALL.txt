@@ -43,7 +43,10 @@ block 1024 MB. Without the flag nothing changes.
   - The log says: Memory: the game's main block will be 1024 MB (...)
     and, once the game has it (F9 adds it again):
     Memory: the game's main block is 1024 MB at 0x... to 0x...
-  - [Memory] MainHeapMB=1024 in thugsdl.ini sets it (360 to 1536).
+  - [Memory] MainHeapMB=1024 in thugsdl.ini sets it (360 to 1536). If
+    Windows has no room for a block that big, the log says
+    "Memory: no room for a 1024 MB main block, so it is 360 MB" and the
+    game goes on with 360 MB.
   - HighMemoryTest=1 can go back to 0 now: it holds all the address space
     below 2 GB, which a bigger block and the 4x textures need too.
 
