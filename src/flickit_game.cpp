@@ -2553,38 +2553,34 @@ namespace FlickitGame {
 		}
 		const bool watchCam = camera && s_camCheck.Trusted();
 
-		// the skater
-		switch (s_watchPolicy.Frame(skaterOk)) {
-		case Watchdog::KEEP:
+		// the skater (if and else, not a switch: an unoptimised build makes a switch a table of addresses in
+		// the code, which check_hooks.py would take for a function)
+		const Watchdog::Action action = s_watchPolicy.Frame(skaterOk);
+		if (action == Watchdog::KEEP) {
 			if (s_watchBad > 0) {
 				Log::TypedLog(CHN_SDL, "Watchdog: the skater is whole again, %d frames later\n", s_watchBad);
 				s_watchBad = 0;
 			}
-			break;
-		case Watchdog::RESTORE:
+		}
+		else if (action == Watchdog::RESTORE || action == Watchdog::RESET) {
 			if (s_watchBad++ == 0) {
 				Report(now, what);
 			}
-			Log::TypedLog(CHN_SDL, RestoreSkater(skater, core) ? "Watchdog: put the skater back as he was a frame ago\n"
-				: "Watchdog: no whole frame of the skater to put back\n");
-			break;
-		case Watchdog::RESET:
-			if (s_watchBad++ == 0) {
-				Report(now, what);
+			const bool restored = RestoreSkater(skater, core);
+			if (action == Watchdog::RESTORE) {
+				Log::TypedLog(CHN_SDL, restored ? "Watchdog: put the skater back as he was a frame ago\n"
+					: "Watchdog: no whole frame of the skater to put back\n");
 			}
-			RestoreSkater(skater, core);
-			if (WatchReady()) {
+			else if (WatchReady()) {
 				ResetPhysics(skater, false, false);
 				Log::TypedLog(CHN_SDL, "Watchdog: put the skater back and had the game reset his physics there (try %d)\n", s_watchPolicy.Tries());
 			}
-			break;
-		case Watchdog::GIVE_UP:
+		}
+		else {
 			s_watchBad++;
-			Log::TypedLog(CHN_SDL, "Watchdog: the skater's %s will not stay a number; leaving him be until he is whole again\n", what);
-			break;
-		case Watchdog::NOTHING:
-			s_watchBad++;
-			break;
+			if (action == Watchdog::GIVE_UP) {
+				Log::TypedLog(CHN_SDL, "Watchdog: the skater's %s will not stay a number; leaving him be until he is whole again\n", what);
+			}
 		}
 
 		// the camera, once it has shown that it is the camera
