@@ -90,6 +90,7 @@ namespace CamRelGame {
 	static double s_newFar = 0.0;          // the farthest middle (along an axis)
 	static uint32_t s_allMeshes = 0;
 	static uint32_t s_partial = 0;         // uploads that were not whole vertices (the tail went as it was)
+	static volatile uint32_t s_draws = 0;  // every mesh drawn, for the watchdog
 	static bool s_toldWorld = false;
 
 	struct Locked {
@@ -218,6 +219,7 @@ namespace CamRelGame {
 	// below); pops all eight.
 	static HRESULT __stdcall DrawMesh(void* mesh, IDirect3DDevice9* dev, D3DPRIMITIVETYPE type, INT base, UINT minIndex,
 		UINT vertices, UINT start, UINT count) {
+		s_draws++;
 		if (s_newMeshes) {
 			LogNew();
 		}
@@ -345,6 +347,14 @@ namespace CamRelGame {
 		}
 		Log::TypedLog(CHN_DLL, "CameraRelative: switched %s; %u meshes sent to the card again %s\n", s_on ? "on" : "off",
 			(unsigned)vbufs.size(), s_on ? "relative to their middles" : "in world units");
+	}
+
+	bool Counting() {
+		return s_installed;
+	}
+
+	uint32_t DrawCount() {
+		return s_draws;
 	}
 
 	void LogStatus() {

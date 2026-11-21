@@ -1,4 +1,5 @@
 #pragma once
+#include <stdint.h>
 
 // Camera-relative drawing of the level (camrel.h): the hooks in the game's mesh code.
 namespace CamRelGame {
@@ -14,4 +15,9 @@ namespace CamRelGame {
 
 	// Where it stands, into the log.
 	void LogStatus();
+
+	// Whether the mesh draw is hooked (on or switched off), and how many meshes it has drawn since the start:
+	// every draw of a mesh of the game's, registered or not. The watchdog's sign that the level is drawn at all.
+	bool Counting();
+	uint32_t DrawCount();
 }

@@ -60,6 +60,23 @@ to. Not tried in the game yet.
     MapKey=16 the key (an SDL scancode; 16 is M). With MapButton set to
     a button of its own, a press opens the map.
 
+Also new in this build: more for the blue screen
+------------------------------------------------
+The blue screen came back with the watchdog in, so the watchdog now looks
+further and keeps what it sees. Not tried in the game yet.
+  - Its notes go to flickit_watchdog.txt next to THUG-SDL.exe, each with
+    the time of day, and that file is kept from one start of the game to
+    the next. No settings needed (the log needs the console on).
+  - Besides the skater and his camera it now watches what the camera
+    follows of him, the view the level is drawn with, and whether the
+    level is drawn at all. A blue screen should show in one of them.
+  - When the view stops being numbers it puts the camera back. If the
+    view does not come back, it has the game restart him where he is
+    (the pause menu's restart, the way autosave uses it), twice.
+  - After a blue screen, send flickit_watchdog.txt and say about what
+    time it happened. F9 while the screen is blue adds where things
+    stand at that moment.
+
 Camera-relative drawing (the last build)
 ----------------------------------------
 For the decals that still flash far from New Jersey (in Manhattan and

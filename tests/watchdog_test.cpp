@@ -150,11 +150,134 @@ static void TestCamera() {
 	Check(!g.Decided(), "reset: undecided again");
 }
 
+static void TestSquare() {
+	const float id[16] = { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 50000, 20, -9000, 1 };
+	Check(Watchdog::Square(id), "the identity, wherever it stands, is square");
+	const float c = 0.8f, s = 0.6f;
+	const float turned[16] = { c, 0, -s, 0, 0, 1, 0, 0, s, 0, c, 0, 0, 0, 0, 1 };
+	Check(Watchdog::Square(turned), "turned about up: square");
+	float m[16];
+	std::memcpy(m, turned, sizeof(m));
+	m[4] = m[8];
+	m[5] = m[9];
+	m[6] = m[10];
+	Check(!Watchdog::Square(m), "up the same as forward: collapsed");
+	std::memcpy(m, turned, sizeof(m));
+	m[4] = m[5] = m[6] = 0;
+	Check(!Watchdog::Square(m), "a row of nothing: collapsed");
+	std::memcpy(m, turned, sizeof(m));
+	m[0] *= 1.15f;
+	m[2] *= 1.15f;
+	Check(!Watchdog::Square(m), "a row 15% long: not square");
+	m[0] = c * 1.05f;
+	m[2] = -s * 1.05f;
+	Check(Watchdog::Square(m), "5% long: square enough");
+	std::memcpy(m, id, sizeof(m));
+	m[1] = 0.15f;
+	Check(!Watchdog::Square(m), "two rows leaning together");
+	m[1] = -0.15f;
+	Check(!Watchdog::Square(m), "or apart");
+	m[1] = std::numeric_limits<float>::quiet_NaN();
+	Check(!Watchdog::Square(m), "a NaN is not square");
+	m[1] = 0.0f;
+	m[15] = std::numeric_limits<float>::quiet_NaN();
+	Check(Watchdog::Square(m), "the fourth row is not looked at");
+
+	float view[16], proj[16];
+	std::memcpy(view, id, sizeof(view));
+	std::memcpy(proj, id, sizeof(proj));
+	proj[14] = -4.0f;
+	Check(Watchdog::ViewSane(view, proj), "a view and a projection");
+	view[13] = std::numeric_limits<float>::quiet_NaN();
+	Check(!Watchdog::ViewSane(view, proj), "a NaN in the view's position");
+	view[13] = 0.0f;
+	proj[0] = std::numeric_limits<float>::infinity();
+	Check(!Watchdog::ViewSane(view, proj), "infinity in the projection");
+	proj[0] = 1.0f;
+	view[12] = 3.0e6f;
+	Check(Watchdog::ViewSane(view, proj), "positions past a million are still a view");
+	view[12] = 2.0e7f;
+	Check(!Watchdog::ViewSane(view, proj), "past ten million they are not");
+}
+
+static void TestViewPolicy() {
+	Watchdog::ViewPolicy p;
+	Check(p.Frame(true, true) == Watchdog::VIEW_KEEP, "a whole view: keep");
+	Check(p.Frame(false, true) == Watchdog::VIEW_CAMERA, "the first bad frame: the camera back");
+	int restarts = 0, firstAt = 0, secondAt = 0, gaveUp = 0, gaveUpAt = 0;
+	for (int f = 2; f <= 400; f++) {
+		const Watchdog::ViewAction a = p.Frame(false, true);
+		if (a == Watchdog::VIEW_RESTART) {
+			restarts++;
+			(restarts == 1 ? firstAt : secondAt) = f;
+		}
+		if (a == Watchdog::VIEW_GIVE_UP) {
+			gaveUp++;
+			gaveUpAt = f;
+		}
+		if (a == Watchdog::VIEW_CAMERA) {
+			Check(false, "the camera only on the first bad frame");
+		}
+	}
+	Check(restarts == 2 && firstAt == Watchdog::ViewPolicy::kFirst && secondAt == firstAt + Watchdog::ViewPolicy::kBetween,
+		"two restarts: after ten bad frames, and a second later");
+	Check(gaveUp == 1 && gaveUpAt == secondAt + Watchdog::ViewPolicy::kBetween, "then it gives up, once, a second after the second");
+	Check(p.Frame(true, true) == Watchdog::VIEW_KEEP && p.Bad() == 0, "whole again");
+	Check(p.Frame(false, true) == Watchdog::VIEW_CAMERA, "bad again: the camera first");
+	int more = 0;
+	for (int f = 2; f <= 200; f++) {
+		more += p.Frame(false, true) == Watchdog::VIEW_RESTART;
+	}
+	Check(more == 0, "no more restarts until it has been whole for two seconds");
+	for (int f = 0; f < Watchdog::ViewPolicy::kForgive; f++) {
+		p.Frame(true, true);
+	}
+	p.Frame(false, true);
+	for (int f = 2; f <= Watchdog::ViewPolicy::kFirst; f++) {
+		more += p.Frame(false, true) == Watchdog::VIEW_RESTART;
+	}
+	Check(more == 1 && p.Restarts() == 1, "after two seconds whole they count from nothing");
+
+	Watchdog::ViewPolicy q;
+	q.Frame(false, true);
+	int at = 0;
+	for (int f = 2; f <= 50 && !at; f++) {
+		if (q.Frame(false, f >= 30) == Watchdog::VIEW_RESTART) {
+			at = f;
+		}
+	}
+	Check(at == 30, "no restart while the skater himself is not whole: the first frame he is");
+}
+
+static void TestBlackout() {
+	Watchdog::Blackout b;
+	Check(b.Frame(100) == 0, "the first count only starts it");
+	Check(b.Frame(150) == 0 && b.Frames() == 0, "drawn: nothing");
+	int fired = 0, firedAt = 0;
+	for (int f = 1; f <= 100; f++) {
+		if (b.Frame(150) == 1) {
+			fired++;
+			firedAt = f;
+		}
+	}
+	Check(fired == 1 && firedAt == Watchdog::Blackout::kFrames, "undrawn: told once, at half a second");
+	Check(b.Frame(151) == -100 && b.Frames() == 0, "drawn again: told how long it was");
+	for (int f = 1; f < Watchdog::Blackout::kFrames; f++) {
+		b.Frame(151);
+	}
+	Check(b.Frame(152) == 0, "a gap shorter than half a second is not told");
+	b.Reset();
+	Check(b.Frame(152) == 0 && b.Frame(152) == 0 && b.Frames() == 1, "a reset starts it from the next count");
+}
+
 int main() {
 	TestSane();
 	TestHistory();
 	TestPolicy();
 	TestCamera();
+	TestSquare();
+	TestViewPolicy();
+	TestBlackout();
 	std::printf("%d checks, %d failed\n", s_checks, s_failed);
 	return s_failed ? 1 : 0;
 }
