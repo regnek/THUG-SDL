@@ -261,4 +261,20 @@ namespace FlickitGame {
 	// he is put back at his spot there through the game's own custom restart. [Flickit] Autosave=0 switches
 	// it off; AutosaveLevels names the levels by their load scripts (load_NJ, the joined world, by default).
 	void SetAutosave(bool on, const char* levels);
+
+	// For the map (worldmap_game.h): the local skater as of his last pad update, which the game does on
+	// every frame it is not paused. False until there has been one.
+	struct Whereabouts {
+		uint32_t tick;          // GetTickCount() at that update
+		float pos[3];
+		float heading;          // the way he faces, radians: 0 faces +z, pi/2 faces +x
+		bool controls;          // no script has taken the controls away from him
+		bool driving;
+		bool settled;           // autosave has no spot still to put him back at in this level
+	};
+	bool SkaterWhereabouts(Whereabouts& out);
+	// At his next pad update the local skater goes to pos, facing heading, through the game's custom restart
+	// (as autosave does); his own custom restart, the pause menu's, is kept. False when the game's code for it
+	// is not as expected.
+	bool RequestTravel(const float pos[3], float heading);
 }

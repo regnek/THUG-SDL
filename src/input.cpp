@@ -11,6 +11,7 @@
 #include "flickit.h"
 #include "flickit_game.h"
 #include "camrel_game.h"
+#include "worldmap_game.h"
 #include "flickit_pose.h"
 #include <QB/LazyStruct.h>
 #include <QB/Qb.h>
@@ -480,6 +481,7 @@ void loadFlickitSettings() {
 	if (s.enabled && s.gameHooks) {
 		hooks = FlickitGame::Install();
 	}
+	WorldMapGame::Configure(configFile);
 
 	loadFlickitPatterns(configFile, s.enabled && s.patterns);
 
@@ -1197,6 +1199,11 @@ bool shouldUseMenuControls() {
 	return (*isMenu && !(ParkEd->m_state == EEditorState::vEDITING) || *isCAG || ((ParkEd->m_state == EEditorState::vEDITING) && ParkEd->m_paused));
 }
 
+// For the map: a menu of the game's is up, or its keyboard on the screen, or the game is not that far yet
+bool mapSeesMenu() {
+	return !ParkEd || *keyboard_on_screen || *otherIsMenu || shouldUseMenuControls();
+}
+
 
 /******************************************************************/
 /*                                                                */
@@ -1379,7 +1386,8 @@ void pollController(device* dev, SDL_GameController* controller) {
 					if (getButton(controller, padbinds.menu)) {
 						dev->controlData[2] |= 0x01 << 3;
 					}
-					if (getButton(controller, padbinds.cameraToggle)) {
+					// Held, the camera button may open the map instead (worldmap_game.h)
+					if (WorldMapGame::CameraButton(dev->port, getButton(controller, padbinds.cameraToggle) != 0, (int)padbinds.cameraToggle, mapSeesMenu())) {
 						dev->controlData[2] |= 0x01 << 0;
 					}
 					// The Flickit on/off button is not passed on as swivel lock
@@ -2092,6 +2100,9 @@ void __cdecl processController(device* dev) {
 	}
 
 	if (dev->port == 0) {
+		// The map: its controls, and the game sees nothing while it is up
+		SDL_GameController* mapPad = players[0].controller && !players[0].lockedOut ? players[0].controller : nullptr;
+		WorldMapGame::AfterPoll(dev->controlData, mapPad, (int)padbinds.cameraToggle, mapSeesMenu());
 		doPauseBuffer(dev);
 	}
 

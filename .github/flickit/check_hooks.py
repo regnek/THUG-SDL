@@ -66,6 +66,9 @@ they have to keep to what the game's code expects there, whatever the compiler m
                 back to the game at 004B6291
   copy free     takes the place of the game's free of a vertex buffer object's copy, which the caller
                 pops: every return is a plain ret
+  frame end     a stub in the place of "mov eax, [device]" just before the game's EndScene (the map,
+                worldmap_game.cpp): saves the registers, calls a function without arguments, puts them
+                back, does that mov and returns. The function it calls returns with a plain ret
   rail boost    a bare function in the place of a call to GetPhysicsFloat: passes esi to a function
                 that answers with the address to go on at, and jumps there with the stack as it found
                 it. That address is the game's GetPhysicsFloat or a function of the DLL that returns
@@ -120,6 +123,10 @@ MESH_DRAW_PATTERN = bytes.fromhex("585650e9") + b"...."
 # pushad / push dword [esp+34h] / call ... / add esp, 4 / popad / mov ecx, [esp+2Ch] / mov fs:[0], ecx / jmp [...]
 # (and then the address of the DLL's variable that holds where it goes back to)
 MESH_SETUP_PATTERN = bytes.fromhex("60ff742434e8") + b"...." + bytes.fromhex("83c404618b4c242c64890d00000000ff25")
+# pushad / call ... / popad / mov eax, [007CEC6Ch] / ret (with or without a ds: before the mov, which
+# changes nothing: ds is where that mov reads from anyway)
+FRAME_END_PATTERNS = [bytes.fromhex("60e8") + b"...." + bytes.fromhex("61a16cec7c00c3"),
+                      bytes.fromhex("60e8") + b"...." + bytes.fromhex("613ea16cec7c00c3")]
 NAMES = {
     DO_GRIND_TRICK: "do_grind_trick",
     BALANCE_UPDATE: "the balance update",
@@ -402,6 +409,7 @@ def check(path):
     air_turn, spin_rate, anim_finished, anim_wait = [], [], [], []
     blend_start, pose = [], []
     mesh_draw, mesh_setup, copy_free = [], [], []
+    frame_end = []
     for p in sorted(set(dll.entry(p) for p in pointers)):
         if matches(dll, p, RAIL_CATCH_PATTERN, (4, 8)):
             catch.append(p)
@@ -414,6 +422,9 @@ def check(path):
             continue
         if matches(dll, p, MESH_SETUP_PATTERN, (6, 10)):
             mesh_setup.append(p)
+            continue
+        if any(matches(dll, p, f, (2, 6)) for f in FRAME_END_PATTERNS):
+            frame_end.append(p)
             continue
         insns = dll.function(p)
         refs = dll.game_refs(insns)
@@ -677,6 +688,22 @@ def check(path):
         tail = insns and insns[-1].mnemonic == "jmp"
         if any(r != 0 for r in rets) or (not rets and not tail):
             problems.append("the copy free hook returns with %s, not with a plain ret" % rets)
+
+    # --- frame end (the map)
+    if len(frame_end) != 1:
+        problems.append("the frame end stub was found %d times" % len(frame_end))
+    for p in frame_end:
+        show(dll, "frame end stub at %08X" % p, dll.function(p, max(len(f) for f in FRAME_END_PATTERNS)))
+        target = dll.entry((p + 6 + struct.unpack("<i", dll.bytes(p + 2, 4))[0]) & 0xFFFFFFFF)
+        if not dll.in_text(target):
+            problems.append("the frame end stub calls %08X, outside the code" % target)
+            continue
+        callee = dll.function(target, 0x10000)
+        rets = returns(callee)
+        print("  which calls %08X: %d instructions, returns %s" % (target, len(callee), [hex(r) for r in rets]))
+        show(dll, "its start", callee[:12])
+        if not rets or any(r != 0 for r in rets):
+            problems.append("the function the frame end stub calls returns with %s, not with a plain ret" % [hex(r) for r in rets])
 
     for problem in problems:
         print("::error::%s: %s" % (path, problem))

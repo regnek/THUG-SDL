@@ -40,6 +40,8 @@ jobs:
           ./autosave_test
           g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -I src tests/camrel_test.cpp -o camrel_test
           ./camrel_test
+          g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -I src tests/worldmap_test.cpp -o worldmap_test
+          ./worldmap_test
 
   build:
     runs-on: windows-latest

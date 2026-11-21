@@ -2816,8 +2816,11 @@ namespace FlickitGame {
 		s_throttle.Wrote(*spot, GetTickCount());
 	}
 
+	static bool s_restoreAhead = false;               // autosave is still to put him back in this level
+
 	// Once a frame, before the physics, for the local skater
 	static void AutosaveFrame(uint8_t* skater, uint8_t* core) {
+		s_restoreAhead = false;
 		if (!s_autosaveOn || !AutosaveReady()) {
 			return;
 		}
@@ -2832,6 +2835,7 @@ namespace FlickitGame {
 		}
 		const bool onGround = listed && FreeOnGround(skater, core);
 		const Autosave::Step step = s_session.Frame(level, BigWorld::NodeLoads(), skater, onGround);
+		s_restoreAhead = listed && step == Autosave::WAIT;
 		if (!listed || step == Autosave::WAIT) {
 			return;
 		}
@@ -2860,6 +2864,93 @@ namespace FlickitGame {
 		}
 	}
 
+	/******************************************************************/
+	/*                                                                */
+	/*  The map: where he is, and travel                              */
+	/******************************************************************/
+
+	static Whereabouts s_where;
+	static bool s_travelAsked = false;
+	static float s_travelPos[3];
+	static float s_travelHeading = 0.0f;
+
+	bool SkaterWhereabouts(Whereabouts& out) {
+		if (!s_where.tick) {
+			return false;
+		}
+		out = s_where;
+		return true;
+	}
+
+	bool RequestTravel(const float pos[3], float heading) {
+		if (!s_installed || !AutosaveReady() || !Watchdog::Sane(pos, 3) || !(heading == heading)) {
+			return false;
+		}
+		memcpy(s_travelPos, pos, sizeof(s_travelPos));
+		s_travelHeading = heading;
+		s_travelAsked = true;
+		return true;
+	}
+
+	// The custom restart, as autosave uses it, with the spot's position and a matrix turned to its heading
+	// (the rows as the game keeps them: side, up, the way he faces). His own custom restart goes back after,
+	// once the skip has put him there.
+	static void Travel(uint8_t* skater) {
+		uint8_t kept[SKATER_CUSTOM_SET + 1 - SKATER_CUSTOM_POS];
+		memcpy(kept, skater + SKATER_CUSTOM_POS, sizeof(kept));
+		float pos[4];
+		memcpy(pos, skater + OBJECT_POSITION, sizeof(pos));
+		memcpy(pos, s_travelPos, sizeof(s_travelPos));
+		float m[16];
+		memcpy(m, skater + OBJECT_MATRIX, sizeof(m));
+		const float c = cosf(s_travelHeading), s = sinf(s_travelHeading);
+		m[0] = c;
+		m[1] = 0.0f;
+		m[2] = -s;
+		m[4] = 0.0f;
+		m[5] = 1.0f;
+		m[6] = 0.0f;
+		m[8] = s;
+		m[9] = 0.0f;
+		m[10] = c;
+		memcpy(skater + SKATER_CUSTOM_POS, pos, sizeof(pos));
+		memcpy(skater + SKATER_CUSTOM_MATRIX, m, sizeof(m));
+		skater[SKATER_CUSTOM_WALK] = 0;
+		skater[SKATER_CUSTOM_SET] = 1;
+		GameStruct none = { 0 };
+		const bool ran = RunGameScript(kSkipToCustomRestart, &none, 0, 0);
+		// (across only: the ground under the spot may set his height)
+		const float* now = (const float*)(skater + OBJECT_POSITION);
+		const bool there = ran && fabsf(now[0] - pos[0]) < 1.0f && fabsf(now[2] - pos[2]) < 1.0f;
+		if (there) {
+			memcpy(skater + SKATER_CUSTOM_POS, kept, sizeof(kept));
+		}
+		Log::TypedLog(CHN_SDL, "Map: %s (%.1f %.1f %.1f) facing %.0f degrees%s\n",
+			there ? "travelled to" : ran ? "the skip ran but did not put him at" : "could not run skip_to_custom_restart to travel to",
+			pos[0], pos[1], pos[2], s_travelHeading * 57.29578f,
+			there ? "; his own custom restart is as it was" : ran ? "; the custom restart is left at that spot" : "");
+	}
+
+	static void MapFrame(uint8_t* skater, const uint8_t* core) {
+		const float* p = (const float*)(skater + OBJECT_POSITION);
+		const float* m = (const float*)(skater + OBJECT_MATRIX);
+		if (Watchdog::Sane(p, 3) && Watchdog::Sane(m, 12)) {
+			const uint8_t* state = *(const uint8_t* const*)(core + CORE_STATE);
+			const uint8_t* input = *(const uint8_t* const*)(core + CORE_INPUT);
+			const uint32_t tick = GetTickCount();
+			s_where.tick = tick ? tick : 1;
+			memcpy(s_where.pos, p, sizeof(s_where.pos));
+			s_where.heading = atan2f(m[8], m[10]);
+			s_where.controls = input && input[INPUT_DISABLED] == 0 && input[INPUT_NET_DISABLED] == 0;
+			s_where.driving = state && state[STATE_DRIVING] != 0;
+			s_where.settled = !s_restoreAhead;
+		}
+		if (s_travelAsked) {
+			s_travelAsked = false;
+			Travel(skater);
+		}
+	}
+
 	static void __fastcall PadUpdateHook(uint8_t* pad, void* /*edx*/, void* data) {
 		PadUpdate(pad, data);
 		if (s_turnKept && s_turnKept + INPUT_PAD == pad) {
@@ -2875,6 +2966,7 @@ namespace FlickitGame {
 			Watch(skater, (uint8_t*)core);
 		}
 		AutosaveFrame(skater, (uint8_t*)core);
+		MapFrame(skater, core);
 		RailExitFrame(skater, (uint8_t*)core);
 		ShowCrouch(skater);
 		KeepStance(skater);
