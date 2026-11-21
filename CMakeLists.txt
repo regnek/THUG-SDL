@@ -43,6 +43,7 @@ set(HEADER_FILES
 	"${SRC}/memory.h"
 	"${SRC}/bigworld.h"
 	"${SRC}/nodenames.h"
+	"${SRC}/autosave.h"
 	"${SRC}/watchdog.h"
 	"${SRC}/displayconfig.h"
 	"${SRC}/observemenu.h"

@@ -49,7 +49,14 @@ namespace BigWorld {
 		return node && GetChecksum(node, kName, name, 0);
 	}
 
+	static uint32_t s_loads = 0;        // level loads (the table is made once for each)
+
+	uint32_t NodeLoads() {
+		return s_loads;
+	}
+
 	static void __cdecl FillNodeNames() {
+		s_loads++;
 		void* nodes = GetGlobalArray(kNodeArray, 0);
 		const uint32_t count = nodes ? NodeCount(nodes) : 0;
 		if (!s_names.Build(count, NameOfNode, nodes)) {

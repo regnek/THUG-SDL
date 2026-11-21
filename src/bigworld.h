@@ -16,4 +16,7 @@
 namespace BigWorld {
 	// While the DLL loads, before the game makes anything: put in what the ini does not switch off.
 	void AtStartup(const char* configFile);
+	// How many times the game has made the table of node names: once for each level load (and each test
+	// of a park in the park editor). 0 while BigNodeNames is off.
+	uint32_t NodeLoads();
 }

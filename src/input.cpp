@@ -401,6 +401,16 @@ void loadFlickitSettings() {
 		const bool watch = GetPrivateProfileInt(FLICKIT_SECTION, "Watchdog", 1, configFile) != 0;
 		FlickitGame::SetWatch(watch);
 		Log::TypedLog(CHN_SDL, watch ? "Watchdog: on (the skater and the camera are checked every frame)\n" : "Watchdog: off\n");
+		const bool autosave = GetPrivateProfileInt(FLICKIT_SECTION, "Autosave", 1, configFile) != 0;
+		char levels[256];
+		GetPrivateProfileString(FLICKIT_SECTION, "AutosaveLevels", "load_NJ", levels, sizeof(levels), configFile);
+		FlickitGame::SetAutosave(autosave, levels);
+		if (autosave) {
+			Log::TypedLog(CHN_SDL, "Autosave: on in %s\n", levels);
+		}
+		else {
+			Log::TypedLog(CHN_SDL, "Autosave: off\n");
+		}
 	}
 	s.debug = (int)GetPrivateProfileInt(FLICKIT_SECTION, "Debug", s.debug, configFile);
 

@@ -1,10 +1,13 @@
 #include "flickit_game.h"
 #include "flickit_pose.h"
 #include "watchdog.h"
+#include "autosave.h"
+#include "bigworld.h"
 
 #include <windows.h>
 #include <string.h>
 #include <cmath>
+#include <ctime>
 
 #include "patch.h"
 #include "Logger/Logger.h"
@@ -2634,6 +2637,229 @@ namespace FlickitGame {
 		LogSample("now:", now);
 	}
 
+	/******************************************************************/
+	/*                                                                */
+	/*  Autosave: where he was last on the ground, back on a load     */
+	/******************************************************************/
+
+	// Skate::Instance() + 0x398: the checksum of the level loaded (its load script, load_NJ ...), as the
+	// script command LevelIs reads it (0x00528DAA)
+	static const uint32_t SKATE_LEVEL = 0x398;
+	// The skater's custom restart, the one the pause menu's "Set Restart" keeps (his member function
+	// SetCustomRestart, 0x00517405): with Set it copies his position (+0x40) to +0x2C8 and his matrix (+0x60)
+	// to +0x2D8, keeps whether he walks at +0x318 and that there is one at +0x319. SkipToCustomRestart
+	// (0x0051776F) goes on from there: the game's reset of his physics, then the position and matrix put back
+	// with all that goes with a move (the drawn matrix, the positions of the frame before, the camera).
+	enum {
+		SKATER_CUSTOM_POS = 0x2C8,
+		SKATER_CUSTOM_MATRIX = 0x2D8,
+		SKATER_CUSTOM_WALK = 0x318,
+		SKATER_CUSTOM_SET = 0x319,
+	};
+	// Script::RunScript (0x0040FD00), as THUG-SDL calls it: the name of a script, its parameters, the object
+	typedef bool(__cdecl* RunScript_t)(uint32_t name, void* params, void* object, void* object2);
+	static const RunScript_t RunGameScript = (RunScript_t)0x0040FD00;
+	// The pause menu's script for "Goto Cust Restart": skater : SkipToCustomRestart
+	static const uint32_t kSkipToCustomRestart = 0x3E77D9CA;  // skip_to_custom_restart
+
+	static const Expect kAutosaveExpect[] = {
+		{ 0x00517428, 18, { 0x8D, 0x46, 0x40, 0x50, 0x8D, 0x8E, 0xC8, 0x02, 0x00, 0x00, 0xC6, 0x86, 0x19, 0x03, 0x00, 0x00, 0x01, 0xE8 }, "SetCustomRestart: the position and the flag" },
+		{ 0x0051743E, 10, { 0x8D, 0x4E, 0x60, 0x51, 0x8D, 0x8E, 0xD8, 0x02, 0x00, 0x00 }, "SetCustomRestart: the matrix" },
+		{ 0x00517458, 6, { 0x88, 0x86, 0x18, 0x03, 0x00, 0x00 }, "SetCustomRestart: walking" },
+		{ 0x0051776F, 11, { 0x3D, 0xE9, 0x19, 0x3C, 0x5A, 0x0F, 0x84, 0xE4, 0xFC, 0xFF, 0xFF }, "SkipToCustomRestart" },
+		{ 0x00528DAA, 6, { 0x8B, 0x8E, 0x98, 0x03, 0x00, 0x00 }, "LevelIs: the level loaded" },
+		{ 0x0040FD00, 12, { 0x6A, 0xFF, 0x68, 0x5B, 0x18, 0x62, 0x00, 0x64, 0xA1, 0x00, 0x00, 0x00 }, "Script::RunScript" },
+	};
+
+	static bool s_autosaveOn = true;                  // [Flickit] Autosave
+	static uint32_t s_autosaveLevels[8];              // [Flickit] AutosaveLevels, as checksums
+	static int s_autosaveLevelCount = 0;
+	static int s_autosaveReady = 0;                   // 1: the game is as expected, -1: not
+	static Autosave::Slots s_slots;
+	static Autosave::Throttle s_throttle;
+	static Autosave::Session s_session;
+	static bool s_slotsRead = false;
+	static bool s_writeTold = false;
+	static bool s_writeFailTold = false;
+	static char s_savePath[MAX_PATH] = "";
+	static char s_saveTemp[MAX_PATH] = "";
+
+	void SetAutosave(bool on, const char* levels) {
+		s_autosaveOn = on;
+		s_autosaveLevelCount = 0;
+		char name[64];
+		const char* p = levels ? levels : "";
+		while (*p && s_autosaveLevelCount < (int)(sizeof(s_autosaveLevels) / sizeof(s_autosaveLevels[0]))) {
+			while (*p == ' ' || *p == ',') {
+				p++;
+			}
+			size_t n = 0;
+			while (p[n] && p[n] != ',' && p[n] != ' ' && n + 1 < sizeof(name)) {
+				name[n] = p[n];
+				n++;
+			}
+			if (n == 0) {
+				break;
+			}
+			name[n] = 0;
+			p += n;
+			s_autosaveLevels[s_autosaveLevelCount++] = Flickit::NameChecksum(name);
+		}
+	}
+
+	static bool AutosaveReady() {
+		if (s_autosaveReady == 0) {
+			s_autosaveReady = 1;
+			for (size_t i = 0; i < sizeof(kAutosaveExpect) / sizeof(kAutosaveExpect[0]); i++) {
+				if (memcmp((const void*)kAutosaveExpect[i].address, kAutosaveExpect[i].bytes, (size_t)kAutosaveExpect[i].size) != 0) {
+					Log::TypedLog(CHN_SDL, "Autosave: the game's code at %08X (%s) is not what was expected; autosave is off\n",
+						kAutosaveExpect[i].address, kAutosaveExpect[i].what);
+					s_autosaveReady = -1;
+				}
+			}
+			if (Flickit::NameChecksum("skip_to_custom_restart") != kSkipToCustomRestart) {
+				s_autosaveReady = -1;
+			}
+			if (s_autosaveReady > 0) {
+				// next to the exe
+				char dir[MAX_PATH];
+				const DWORD n = GetModuleFileNameA(NULL, dir, MAX_PATH);
+				char* slash = n ? strrchr(dir, '\\') : 0;
+				if (!slash) {
+					s_autosaveReady = -1;
+				}
+				else {
+					slash[1] = 0;
+					sprintf_s(s_savePath, sizeof(s_savePath), "%sflickit_autosave.txt", dir);
+					sprintf_s(s_saveTemp, sizeof(s_saveTemp), "%sflickit_autosave.tmp", dir);
+				}
+			}
+		}
+		return s_autosaveReady > 0;
+	}
+
+	static void ReadSlots() {
+		if (s_slotsRead) {
+			return;
+		}
+		s_slotsRead = true;
+		HANDLE f = CreateFileA(s_savePath, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+		if (f == INVALID_HANDLE_VALUE) {
+			Log::TypedLog(CHN_SDL, "Autosave: no flickit_autosave.txt yet\n");
+			return;
+		}
+		static char text[64 * 1024];
+		DWORD got = 0;
+		const BOOL ok = ReadFile(f, text, sizeof(text) - 1, &got, NULL);
+		CloseHandle(f);
+		text[ok ? got : 0] = 0;
+		s_slots.Read(text);
+		Log::TypedLog(CHN_SDL, "Autosave: read flickit_autosave.txt, %d levels in it\n", s_slots.Count());
+	}
+
+	// To a file of its own, then over the old one: a crash while writing leaves the old one whole
+	static void WriteSlots() {
+		const std::string text = s_slots.Text();
+		HANDLE f = CreateFileA(s_saveTemp, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+		bool ok = f != INVALID_HANDLE_VALUE;
+		if (ok) {
+			DWORD put = 0;
+			ok = WriteFile(f, text.data(), (DWORD)text.size(), &put, NULL) && put == (DWORD)text.size();
+			CloseHandle(f);
+		}
+		ok = ok && MoveFileExA(s_saveTemp, s_savePath, MOVEFILE_REPLACE_EXISTING);
+		if (!ok && !s_writeFailTold) {
+			s_writeFailTold = true;
+			Log::TypedLog(CHN_SDL, "Autosave: could not write %s (error %u)\n", s_savePath, (unsigned)GetLastError());
+		}
+		if (ok && !s_writeTold) {
+			s_writeTold = true;
+			Log::TypedLog(CHN_SDL, "Autosave: keeping the skater's spot in %s\n", s_savePath);
+		}
+	}
+
+	// Skating on the ground, not in a bail, the controls his, his numbers whole
+	static bool FreeOnGround(const uint8_t* skater, const uint8_t* core) {
+		const uint8_t* state = *(const uint8_t* const*)(core + CORE_STATE);
+		const uint8_t* input = *(const uint8_t* const*)(core + CORE_INPUT);
+		if (!state || !input) {
+			return false;
+		}
+		if (*(const int32_t*)(state + STATE_STATE) != 0 || *(const int32_t*)(state + STATE_PHYSICS) != 0
+			|| state[STATE_BAILING] != 0 || state[STATE_DRIVING] != 0) {
+			return false;
+		}
+		if (input[INPUT_DISABLED] != 0 || input[INPUT_NET_DISABLED] != 0) {
+			return false;
+		}
+		return Watchdog::Sane((const float*)(skater + OBJECT_POSITION), 3) && Watchdog::Sane((const float*)(skater + OBJECT_MATRIX), 12);
+	}
+
+	static void RestoreSpot(uint8_t* skater, uint32_t level) {
+		ReadSlots();
+		const Autosave::Spot* spot = s_slots.Find(level);
+		if (!spot) {
+			Log::TypedLog(CHN_SDL, "Autosave: no spot kept for this level yet; he starts where the level starts\n");
+			return;
+		}
+		memcpy(skater + SKATER_CUSTOM_POS, spot->pos, sizeof(spot->pos));
+		memcpy(skater + SKATER_CUSTOM_MATRIX, spot->matrix, sizeof(spot->matrix));
+		skater[SKATER_CUSTOM_WALK] = 0;
+		skater[SKATER_CUSTOM_SET] = 1;
+		GameStruct none = { 0 };
+		const bool ran = RunGameScript(kSkipToCustomRestart, &none, 0, 0);
+		const uint32_t now = (uint32_t)time(0);
+		const unsigned age = spot->saved && now >= spot->saved ? (unsigned)(now - spot->saved) : 0;
+		Log::TypedLog(CHN_SDL, "Autosave: %s (%.1f %.1f %.1f), kept %u min %u s ago\n",
+			ran ? "put the skater back where he was" : "could not run skip_to_custom_restart to put the skater back at",
+			spot->pos[0], spot->pos[1], spot->pos[2], age / 60, age % 60);
+		s_throttle.Wrote(*spot, GetTickCount());
+	}
+
+	// Once a frame, before the physics, for the local skater
+	static void AutosaveFrame(uint8_t* skater, uint8_t* core) {
+		if (!s_autosaveOn || !AutosaveReady()) {
+			return;
+		}
+		const uint8_t* skate = (const uint8_t*)*kSkate;
+		if (!skate) {
+			return;
+		}
+		const uint32_t level = *(const uint32_t*)(skate + SKATE_LEVEL);
+		bool listed = false;
+		for (int i = 0; i < s_autosaveLevelCount; i++) {
+			listed = listed || s_autosaveLevels[i] == level;
+		}
+		const bool onGround = listed && FreeOnGround(skater, core);
+		const Autosave::Step step = s_session.Frame(level, BigWorld::NodeLoads(), skater, onGround);
+		if (!listed || step == Autosave::WAIT) {
+			return;
+		}
+		if (step == Autosave::RESTORE) {
+			RestoreSpot(skater, level);
+			return;
+		}
+		if (!onGround) {
+			return;
+		}
+		Autosave::Spot spot;
+		memset(&spot, 0, sizeof(spot));
+		spot.level = level;
+		spot.saved = (uint32_t)time(0);
+		memcpy(spot.pos, skater + OBJECT_POSITION, sizeof(spot.pos));
+		memcpy(spot.matrix, skater + OBJECT_MATRIX, sizeof(spot.matrix));
+		if (!Autosave::Slots::Whole(spot)) {
+			return;
+		}
+		const uint32_t tick = GetTickCount();
+		if (s_throttle.Due(spot, tick)) {
+			ReadSlots();            // the other levels' spots stay in the file
+			s_slots.Put(spot);
+			WriteSlots();
+			s_throttle.Wrote(spot, tick);
+		}
+	}
+
 	static void __fastcall PadUpdateHook(uint8_t* pad, void* /*edx*/, void* data) {
 		PadUpdate(pad, data);
 		if (s_turnKept && s_turnKept + INPUT_PAD == pad) {
@@ -2648,6 +2874,7 @@ namespace FlickitGame {
 		if (s_watchOn) {
 			Watch(skater, (uint8_t*)core);
 		}
+		AutosaveFrame(skater, (uint8_t*)core);
 		RailExitFrame(skater, (uint8_t*)core);
 		ShowCrouch(skater);
 		KeepStance(skater);

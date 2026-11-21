@@ -255,4 +255,10 @@ namespace FlickitGame {
 	// [Flickit] Watchdog=0 switches it off. LogWatch writes where things stand now (the reload key).
 	void SetWatch(bool on);
 	void LogWatch();
+
+	// Autosave (autosave.h): while he skates on the ground, the skater's spot goes to flickit_autosave.txt
+	// next to the exe whenever it moves (at most four times a second); when one of the levels named loads,
+	// he is put back at his spot there through the game's own custom restart. [Flickit] Autosave=0 switches
+	// it off; AutosaveLevels names the levels by their load scripts (load_NJ, the joined world, by default).
+	void SetAutosave(bool on, const char* levels);
 }
