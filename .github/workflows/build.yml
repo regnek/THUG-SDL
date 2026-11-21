@@ -38,6 +38,8 @@ jobs:
           ./watchdog_test
           g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -I src tests/autosave_test.cpp -o autosave_test
           ./autosave_test
+          g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -I src tests/camrel_test.cpp -o camrel_test
+          ./camrel_test
 
   build:
     runs-on: windows-latest

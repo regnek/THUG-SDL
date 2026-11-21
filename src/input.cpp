@@ -10,6 +10,7 @@
 #include "keycodes.h"
 #include "flickit.h"
 #include "flickit_game.h"
+#include "camrel_game.h"
 #include "flickit_pose.h"
 #include <QB/LazyStruct.h>
 #include <QB/Qb.h>
@@ -1951,6 +1952,11 @@ void handleInputEvent(SDL_Event* e) {
 		if (flickitSettings.reloadKey > 0 && (int)e->key.keysym.scancode == flickitSettings.reloadKey && !e->key.repeat) {
 			loadFlickitSettings();
 			FlickitGame::LogWatch();
+			CamRelGame::LogStatus();
+		}
+		// Camera-relative drawing of the level on and off, to compare
+		if (CamRelGame::ToggleKey() > 0 && (int)e->key.keysym.scancode == CamRelGame::ToggleKey() && !e->key.repeat) {
+			CamRelGame::Toggle();
 		}
 		setUsingKeyboard(1);
 		do_key_input((SDL_KeyCode)e->key.keysym.sym);

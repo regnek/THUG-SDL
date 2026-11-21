@@ -57,6 +57,15 @@ they have to keep to what the game's code expects there, whatever the compiler m
   the feet      not a hook: the kick test hook in the physics of the ground, or a function it calls,
                 asks the game where two of the skater's bones are. The game's function takes its two
                 arguments off the stack itself. The code is printed, and it has to be there once
+  mesh draw     not a call the game makes but a stub in the place of "mov eax, [ecx+148h] / call eax" (the
+                device's DrawIndexedPrimitive) in the mesh draw: pop eax / push esi / push eax / jmp, to a
+                function that takes the mesh and the device's seven and pops all eight: every return is
+                ret 20h (camera-relative drawing, camrel_game.cpp)
+  mesh setup    a stub jumped to from the end of the mesh setup: saves the registers, passes the mesh
+                from [esp+34h], puts them back, does the two instructions the jump went over and jumps
+                back to the game at 004B6291
+  copy free     takes the place of the game's free of a vertex buffer object's copy, which the caller
+                pops: every return is a plain ret
   rail boost    a bare function in the place of a call to GetPhysicsFloat: passes esi to a function
                 that answers with the address to go on at, and jumps there with the stack as it found
                 it. That address is the game's GetPhysicsFloat or a function of the DLL that returns
@@ -99,11 +108,18 @@ ANIM_OVER = 0x004310D0
 CHANNEL_OVER = 0x004703B0
 BLEND_START = 0x00430F20
 POSE_BLEND = 0x00431B60
+GAME_FREE = 0x005F9924
+SETUP_BACK = 0x004B6291
 
 # push ecx / push edx / push esi / call ... / add esp, 4 / pop edx / pop ecx / ret
 RAIL_CATCH_PATTERN = bytes.fromhex("515256e8") + b"...." + bytes.fromhex("83c4045a59c3")
 # push esi / call ... / add esp, 4 / jmp eax
 RAIL_BOOST_PATTERN = bytes.fromhex("56e8") + b"...." + bytes.fromhex("83c404ffe0")
+# pop eax / push esi / push eax / jmp ...
+MESH_DRAW_PATTERN = bytes.fromhex("585650e9") + b"...."
+# pushad / push dword [esp+34h] / call ... / add esp, 4 / popad / mov ecx, [esp+2Ch] / mov fs:[0], ecx / jmp [...]
+# (and then the address of the DLL's variable that holds where it goes back to)
+MESH_SETUP_PATTERN = bytes.fromhex("60ff742434e8") + b"...." + bytes.fromhex("83c404618b4c242c64890d00000000ff25")
 NAMES = {
     DO_GRIND_TRICK: "do_grind_trick",
     BALANCE_UPDATE: "the balance update",
@@ -142,6 +158,8 @@ NAMES = {
     CHANNEL_OVER: "is the channel over",
     BLEND_START: "the start of a blend",
     POSE_BLEND: "the pose of an animated object",
+    GAME_FREE: "the game's free",
+    SETUP_BACK: "the end of the mesh setup, after the two instructions jumped over",
 }
 
 
@@ -383,12 +401,19 @@ def check(path):
     brake, kick, friction, turning, held, pad = [], [], [], [], [], []
     air_turn, spin_rate, anim_finished, anim_wait = [], [], [], []
     blend_start, pose = [], []
+    mesh_draw, mesh_setup, copy_free = [], [], []
     for p in sorted(set(dll.entry(p) for p in pointers)):
         if matches(dll, p, RAIL_CATCH_PATTERN, (4, 8)):
             catch.append(p)
             continue
         if matches(dll, p, RAIL_BOOST_PATTERN, (2, 6)):
             boost.append(p)
+            continue
+        if matches(dll, p, MESH_DRAW_PATTERN, (4, 8)):
+            mesh_draw.append(p)
+            continue
+        if matches(dll, p, MESH_SETUP_PATTERN, (6, 10)):
+            mesh_setup.append(p)
             continue
         insns = dll.function(p)
         refs = dll.game_refs(insns)
@@ -432,6 +457,8 @@ def check(path):
             blend_start.append((p, insns))
         elif POSE_BLEND in refs:
             pose.append((p, insns))
+        elif GAME_FREE in refs:
+            copy_free.append((p, insns))
 
     # --- rail catch
     if len(catch) != 1:
@@ -606,6 +633,50 @@ def check(path):
             show(dll, "or hands out %08X, which answers %g" % (v, number), body)
             if not 0.0 < number <= 20.0:
                 problems.append("the rail boost that replaces the game's is %g, not a small speed" % number)
+
+    # --- mesh draw (camera-relative drawing)
+    if len(mesh_draw) != 1:
+        problems.append("the mesh draw stub was found %d times" % len(mesh_draw))
+    for p in mesh_draw:
+        show(dll, "mesh draw stub at %08X" % p, dll.function(p, 8))
+        target = dll.entry((p + 8 + struct.unpack("<i", dll.bytes(p + 4, 4))[0]) & 0xFFFFFFFF)
+        if not dll.in_text(target):
+            problems.append("the mesh draw stub jumps to %08X, outside the code" % target)
+            continue
+        callee = dll.function(target)
+        show(dll, "which jumps to %08X" % target, callee)
+        rets = returns(callee)
+        if not rets or any(r != 0x20 for r in rets):
+            problems.append("the function the mesh draw stub jumps to returns with %s: every return has to pop 0x20 bytes" % [hex(r) for r in rets])
+
+    # --- mesh setup (camera-relative drawing)
+    if len(mesh_setup) != 1:
+        problems.append("the mesh setup stub was found %d times" % len(mesh_setup))
+    for p in mesh_setup:
+        show(dll, "mesh setup stub at %08X" % p, dll.function(p, len(MESH_SETUP_PATTERN) + 4))
+        where = struct.unpack("<I", dll.bytes(p + len(MESH_SETUP_PATTERN), 4))[0]
+        back = dll.u32(where) if dll.in_image(where) else None
+        if back != SETUP_BACK:
+            problems.append("the mesh setup stub goes back to %s, not to %08X" % ("%08X" % back if back is not None else "nowhere", SETUP_BACK))
+        target = dll.entry((p + 10 + struct.unpack("<i", dll.bytes(p + 6, 4))[0]) & 0xFFFFFFFF)
+        if not dll.in_text(target):
+            problems.append("the mesh setup stub calls %08X, outside the code" % target)
+            continue
+        callee = dll.function(target)
+        show(dll, "which calls %08X" % target, callee)
+        rets = returns(callee)
+        if not rets or any(r != 0 for r in rets):
+            problems.append("the function the mesh setup stub calls returns with %s, not with a plain ret" % rets)
+
+    # --- copy free (camera-relative drawing)
+    if len(copy_free) != 1:
+        problems.append("the copy free hook was found %d times" % len(copy_free))
+    for p, insns in copy_free:
+        show(dll, "copy free hook at %08X" % p, insns)
+        rets = returns(insns)
+        tail = insns and insns[-1].mnemonic == "jmp"
+        if any(r != 0 for r in rets) or (not rets and not tail):
+            problems.append("the copy free hook returns with %s, not with a plain ret" % rets)
 
     for problem in problems:
         print("::error::%s: %s" % (path, problem))
