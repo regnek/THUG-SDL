@@ -839,7 +839,7 @@ namespace WorldMapGame {
 		static const char* const kKeys[][2] = { { "Arrows", "Move" }, { "Enter", "Travel" }, { "Tab", "Next spot" }, { "F", "Mark where you are" }, { "Q / E", "Zoom" }, { "Esc", "Close" } };
 		const char* const(*items)[2] = s_keyboardLast ? kKeys : s_playStation ? kPs : kPad;
 		const int n = 6;
-		const float gap = px * 0.35f, space = px * 1.4f;
+		const float gap = px * 0.45f, space = px * 1.4f;
 		float total = 0.0f;
 		for (int i = 0; i < n; i++) {
 			total += TextWidth(items[i][0], px) + gap + TextWidth(items[i][1], px) + (i + 1 < n ? space : 0.0f);
@@ -928,7 +928,7 @@ namespace WorldMapGame {
 				if ((pass == 0) != picked || (!picked && !namesShow)) {
 					continue;
 				}
-				const float px = (picked ? 30.0f : 23.0f) * ui;
+				const float px = 23.0f * ui;      // (the picked one's name is big in the card at the bottom)
 				const float x = sxs[i] + (picked ? 20.0f : 13.0f) * ui, top = sys[i] - px * 0.55f;
 				const Box b = { x - 4 * ui, top, x + TextWidth(s_spots[i].name, px) + 4 * ui, top + px };
 				if (b.x1 < 0 || b.x0 > W || b.y1 < band || b.y0 > H - band || (!picked && Overlaps(taken, b))) {

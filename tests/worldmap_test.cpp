@@ -57,6 +57,20 @@ static void TestSpots() {
 	m.name = "Spot 1";
 	mine.push_back(m);
 	Check(WorldMap::NextMarkName(mine) == "Spot 4", "one more than the highest");
+	m.name = "Spot 9x";
+	mine.push_back(m);
+	m.name = "Spot -7";
+	mine.push_back(m);
+	m.name = "Spots 20";
+	mine.push_back(m);
+	m.name = "Spot +40";
+	mine.push_back(m);
+	m.name = "Spot  50";
+	mine.push_back(m);
+	Check(WorldMap::NextMarkName(mine) == "Spot 4", "names that only start like a marked one do not count");
+	m.name = "Spot 12";
+	mine.push_back(m);
+	Check(WorldMap::NextMarkName(mine) == "Spot 13", "and two figures do");
 }
 
 static void PutU32(std::vector<uint8_t>& b, uint32_t v) {

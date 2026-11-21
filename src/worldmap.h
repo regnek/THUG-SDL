@@ -109,15 +109,19 @@ namespace WorldMap {
 
 	// The name for the next spot the player marks: "Spot n", one more than the highest there is
 	inline std::string NextMarkName(const std::vector<Spot>& spots) {
-		int most = 0;
+		long most = 0;
 		for (size_t i = 0; i < spots.size(); i++) {
-			int n = 0;
-			if (sscanf(spots[i].name.c_str(), "Spot %d", &n) == 1 && n > most) {
-				most = n;
+			const std::string& name = spots[i].name;
+			if (name.size() > 5 && name.compare(0, 5, "Spot ") == 0 && name[5] >= '0' && name[5] <= '9') {
+				char* end = NULL;
+				const long n = strtol(name.c_str() + 5, &end, 10);
+				if (end && *end == 0 && n > most && n < 1000000) {
+					most = n;
+				}
 			}
 		}
 		char buf[32];
-		snprintf(buf, sizeof(buf), "Spot %d", most + 1);
+		snprintf(buf, sizeof(buf), "Spot %ld", most + 1);
 		return buf;
 	}
 
