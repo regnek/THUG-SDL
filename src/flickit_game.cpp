@@ -1,5 +1,6 @@
 #include "flickit_game.h"
 #include "flickit_pose.h"
+#include "watchdog.h"
 
 #include <windows.h>
 #include <string.h>
@@ -2325,6 +2326,318 @@ namespace FlickitGame {
 	static uint8_t* StandUnder(uint8_t* anim, uint32_t stand);
 	static void KeepStance(uint8_t* skater);
 
+	/******************************************************************/
+	/*                                                                */
+	/*  The watchdog: the skater and his camera stay numbers          */
+	/******************************************************************/
+
+	// The game's way to an object by its name, the way its ObjectExists finds one (0x0041FD90): the
+	// composite object manager at 0x0069B6C0, two tables in it (+8, then +0xC), and the lookup in a
+	// table (0x0041FA60: this = the table; the address of the name, 1; ret 8). It only reads.
+	static void* const* const kObjectManager = (void* const*)0x0069B6C0;
+	typedef void* (__thiscall* TableLookup_t)(void* table, const uint32_t* name, int flag);
+	static const TableLookup_t TableLookup = (TableLookup_t)0x0041FA60;
+	// CSkater::ResetPhysics (walk, in_cleanup), a virtual function (its address is in a table at
+	// 0x0063AE30), the one THUG-SDL's script command M_ResetPhysics calls for the local skater
+	typedef void(__thiscall* ResetPhysics_t)(void* skater, bool walk, bool inCleanup);
+	static const ResetPhysics_t ResetPhysics = (ResetPhysics_t)0x00518840;
+	static const uint32_t kSkaterCam0 = 0x967C138C;           // SkaterCam0
+
+	// Checked on their own: if these are not as expected, only the camera and the reset are left out
+	static const Expect kWatchExpect[] = {
+		{ 0x0041FA60, 12, { 0x8B, 0x44, 0x24, 0x04, 0x8B, 0xD1, 0x8B, 0x0A, 0x8B, 0x52, 0x04, 0x56 }, "object table lookup" },
+		{ 0x0041FDAF, 6, { 0x8B, 0x35, 0xC0, 0xB6, 0x69, 0x00 }, "ObjectExists: the object manager" },
+		{ 0x00518840, 12, { 0x6A, 0xFF, 0x68, 0x76, 0x93, 0x62, 0x00, 0x64, 0xA1, 0x00, 0x00, 0x00 }, "CSkater::ResetPhysics" },
+	};
+
+	static Watchdog::History<120> s_watch;            // the last two seconds he was whole
+	static Watchdog::Policy s_watchPolicy;
+	static Watchdog::CameraCheck s_camCheck;
+	static uint32_t s_watchFrame = 0;
+	static int s_watchReady = 0;                      // 1: the functions above are as expected, -1: not
+	static int s_watchReports = 0;                    // reports written this session (at most kWatchReports)
+	static const int kWatchReports = 6;
+	static int s_watchBad = 0;                        // frames in a row his numbers were bad
+	static int s_camBad = 0;                          // frames in a row the camera's were
+	static int s_camTries = 0;
+	static uint8_t* s_watchSkater = 0;                // the skater and camera objects last seen, for the log
+	static uint8_t* s_watchCamera = 0;
+	static bool s_camTold = false;
+	static bool s_watchOn = true;                     // [Flickit] Watchdog
+
+	void SetWatch(bool on) {
+		s_watchOn = on;
+	}
+
+	static bool WatchReady() {
+		if (s_watchReady == 0) {
+			s_watchReady = 1;
+			for (size_t i = 0; i < sizeof(kWatchExpect) / sizeof(kWatchExpect[0]); i++) {
+				if (memcmp((const void*)kWatchExpect[i].address, kWatchExpect[i].bytes, (size_t)kWatchExpect[i].size) != 0) {
+					Log::TypedLog(CHN_SDL, "Watchdog: the game's code at %08X (%s) is not what was expected; it watches the skater only and does not reset him\n",
+						kWatchExpect[i].address, kWatchExpect[i].what);
+					s_watchReady = -1;
+				}
+			}
+			if (Flickit::NameChecksum("SkaterCam0") != kSkaterCam0) {
+				s_watchReady = -1;
+			}
+		}
+		return s_watchReady > 0;
+	}
+
+	static uint8_t* SkaterCamera() {
+		if (!WatchReady()) {
+			return 0;
+		}
+		const uint8_t* manager = (const uint8_t*)*kObjectManager;
+		if (!manager) {
+			return 0;
+		}
+		for (int off = 8; off <= 0xC; off += 4) {
+			void* table = *(void* const*)(manager + off);
+			if (table) {
+				void* object = TableLookup(table, &kSkaterCam0, 1);
+				if (object) {
+					return (uint8_t*)object;
+				}
+			}
+		}
+		return 0;
+	}
+
+	static void ReadSample(uint8_t* skater, const uint8_t* core, uint8_t* camera, Watchdog::Sample& s) {
+		memset(&s, 0, sizeof(s));
+		s.frame = s_watchFrame;
+		s.tick = GetTickCount();
+		const uint8_t* state = *(const uint8_t* const*)(core + CORE_STATE);
+		s.state = state ? *(const int32_t*)(state + STATE_STATE) : -1;
+		const ScriptAt at = ScriptOf(skater);
+		s.script = at.running;
+		s.caller = at.caller;
+		memcpy(s.pos, skater + OBJECT_POSITION, sizeof(s.pos));
+		memcpy(s.vel, skater + OBJECT_VELOCITY, sizeof(s.vel));
+		memcpy(s.matrix, skater + OBJECT_MATRIX, sizeof(s.matrix));
+		memcpy(s.display, core + CORE_DISPLAY_MATRIX, sizeof(s.display));
+		const uint8_t* node = *(const uint8_t* const*)(core + CORE_RAIL_NODE);
+		if (s.state == 4 && node) {
+			s.onRail = true;
+			memcpy(s.rail, node + RAIL_POSITION, sizeof(s.rail));
+			const uint8_t* next = *(const uint8_t* const*)(node + RAIL_NEXT);
+			const uint8_t* previous = *(const uint8_t* const*)(node + RAIL_PREVIOUS);
+			if (next) {
+				s.hasNext = true;
+				memcpy(s.next, next + RAIL_POSITION, sizeof(s.next));
+			}
+			if (previous) {
+				s.hasPrevious = true;
+				memcpy(s.previous, previous + RAIL_POSITION, sizeof(s.previous));
+			}
+		}
+		if (camera) {
+			s.camKnown = true;
+			memcpy(s.cam, camera + OBJECT_POSITION, sizeof(s.cam));
+			memcpy(s.camMatrix, camera + OBJECT_MATRIX, sizeof(s.camMatrix));
+		}
+	}
+
+	// The orientation rows of a matrix (the fourth is checked with them only where it is a position)
+	static bool SkaterSane(const Watchdog::Sample& s, const char** what) {
+		*what = !Watchdog::Sane(s.pos, 3) ? "position" : !Watchdog::Sane(s.vel, 3) ? "speed"
+			: !Watchdog::Sane(s.matrix, 12) ? "matrix" : !Watchdog::Sane(s.display, 12) ? "drawn matrix" : 0;
+		return *what == 0;
+	}
+
+	static bool CameraSane(const Watchdog::Sample& s, const char** what) {
+		*what = !Watchdog::Sane(s.cam, 3) ? "camera position" : !Watchdog::Sane(s.camMatrix, 12) ? "camera matrix" : 0;
+		return *what == 0;
+	}
+
+	static void LogSample(const char* label, const Watchdog::Sample& s) {
+		const float speed = std::sqrt(s.vel[0] * s.vel[0] + s.vel[1] * s.vel[1] + s.vel[2] * s.vel[2]);
+		char rail[160] = "";
+		if (s.onRail) {
+			sprintf_s(rail, sizeof(rail), ", rail node at (%.1f %.1f %.1f)%s", s.rail[0], s.rail[1], s.rail[2],
+				s.hasNext ? "" : " (an end)");
+			if (s.hasNext) {
+				const size_t n = strlen(rail);
+				sprintf_s(rail + n, sizeof(rail) - n, " to (%.1f %.1f %.1f)", s.next[0], s.next[1], s.next[2]);
+			}
+		}
+		char cam[80] = "";
+		if (s.camKnown) {
+			sprintf_s(cam, sizeof(cam), ", camera at (%.1f %.1f %.1f)", s.cam[0], s.cam[1], s.cam[2]);
+		}
+		Log::TypedLog(CHN_SDL, "Watchdog: %s frame %u, state %d, script %08X from %08X, at (%.2f %.2f %.2f), moving (%.2f %.2f %.2f) %.1f/s, facing (%.3f %.3f %.3f)%s%s\n",
+			label, s.frame, s.state, s.script, s.caller, s.pos[0], s.pos[1], s.pos[2], s.vel[0], s.vel[1], s.vel[2], speed,
+			s.matrix[8], s.matrix[9], s.matrix[10], rail, cam);
+	}
+
+	static void Report(const Watchdog::Sample& now, const char* what) {
+		if (s_watchReports >= kWatchReports) {
+			return;
+		}
+		s_watchReports++;
+		Log::TypedLog(CHN_SDL, "Watchdog: the %s stopped being a number%s (report %d). Skater object at %08X, camera at %08X%s\n",
+			what, s_rail.hasPick ? " on a rail Flickit's pick started" : "", s_watchReports, (uint32_t)(uintptr_t)s_watchSkater,
+			(uint32_t)(uintptr_t)s_watchCamera, (uintptr_t)s_watchSkater >= 0x80000000u ? " (the skater is above 2 GB)" : "");
+		LogSample("now:", now);
+		Log::TypedLog(CHN_SDL, "Watchdog: Flickit on the rail: pick %d (%s), grind %d, drag class %d, active %d\n",
+			s_rail.pick, s_rail.hasPick ? "its own" : "none", s_grind, s_rail.dragClass, s_active ? 1 : 0);
+		// the frames before, oldest first: every frame of the last half second, then every fifth
+		const int count = s_watch.Count();
+		for (int back = count - 1; back >= 0; back--) {
+			if (back >= 30 && back % 5 != 0) {
+				continue;
+			}
+			char label[24];
+			sprintf_s(label, sizeof(label), "-%d:", back + 1);
+			LogSample(label, *s_watch.Back(back));
+		}
+	}
+
+	// Writes the newest whole frame back over the skater, if it is from the last two seconds
+	static bool RestoreSkater(uint8_t* skater, uint8_t* core) {
+		const Watchdog::Sample* good = s_watch.Back(0);
+		if (!good || s_watchFrame - good->frame > 120) {
+			return false;
+		}
+		memcpy(skater + OBJECT_POSITION, good->pos, sizeof(good->pos));
+		memcpy(skater + OBJECT_VELOCITY, good->vel, sizeof(good->vel));
+		memcpy(skater + OBJECT_MATRIX, good->matrix, sizeof(good->matrix));
+		memcpy(core + CORE_DISPLAY_MATRIX, good->display, sizeof(good->display));
+		return true;
+	}
+
+	static void RestoreCamera(uint8_t* camera) {
+		for (int back = 0; back < s_watch.Count(); back++) {
+			const Watchdog::Sample* good = s_watch.Back(back);
+			const char* what;
+			if (good->camKnown && CameraSane(*good, &what)) {
+				memcpy(camera + OBJECT_POSITION, good->cam, sizeof(good->cam));
+				memcpy(camera + OBJECT_MATRIX, good->camMatrix, sizeof(good->camMatrix));
+				return;
+			}
+		}
+	}
+
+	// Once a frame, before the physics, for the local skater
+	static void Watch(uint8_t* skater, uint8_t* core) {
+		s_watchFrame++;
+		uint8_t* camera = SkaterCamera();
+		if (skater != s_watchSkater || camera != s_watchCamera) {
+			if (skater != s_watchSkater) {
+				s_watch.Clear();
+			}
+			if (camera != s_watchCamera) {
+				s_camCheck.Reset();
+				s_camTold = false;
+			}
+			s_watchSkater = skater;
+			s_watchCamera = camera;
+		}
+		Watchdog::Sample now;
+		ReadSample(skater, core, camera, now);
+		const char* what = 0;
+		const bool skaterOk = SkaterSane(now, &what);
+		const char* camWhat = 0;
+		const bool camOk = !camera || CameraSane(now, &camWhat);
+		if (skaterOk && camOk && camera && !s_camCheck.Decided()) {
+			s_camCheck.Feed(now.pos, now.cam, now.camMatrix);
+			if (s_camCheck.Decided() && !s_camTold) {
+				s_camTold = true;
+				Log::TypedLog(CHN_SDL, s_camCheck.Trusted() ? "Watchdog: watching the skater (object at %08X) and the camera (at %08X)\n"
+					: "Watchdog: watching the skater (object at %08X); what was taken for the camera (at %08X) does not behave like it\n",
+					(uint32_t)(uintptr_t)skater, (uint32_t)(uintptr_t)camera);
+			}
+		}
+		const bool watchCam = camera && s_camCheck.Trusted();
+
+		// the skater
+		switch (s_watchPolicy.Frame(skaterOk)) {
+		case Watchdog::KEEP:
+			if (s_watchBad > 0) {
+				Log::TypedLog(CHN_SDL, "Watchdog: the skater is whole again, %d frames later\n", s_watchBad);
+				s_watchBad = 0;
+			}
+			break;
+		case Watchdog::RESTORE:
+			if (s_watchBad++ == 0) {
+				Report(now, what);
+			}
+			Log::TypedLog(CHN_SDL, RestoreSkater(skater, core) ? "Watchdog: put the skater back as he was a frame ago\n"
+				: "Watchdog: no whole frame of the skater to put back\n");
+			break;
+		case Watchdog::RESET:
+			if (s_watchBad++ == 0) {
+				Report(now, what);
+			}
+			RestoreSkater(skater, core);
+			if (WatchReady()) {
+				ResetPhysics(skater, false, false);
+				Log::TypedLog(CHN_SDL, "Watchdog: put the skater back and had the game reset his physics there (try %d)\n", s_watchPolicy.Tries());
+			}
+			break;
+		case Watchdog::GIVE_UP:
+			s_watchBad++;
+			Log::TypedLog(CHN_SDL, "Watchdog: the skater's %s will not stay a number; leaving him be until he is whole again\n", what);
+			break;
+		case Watchdog::NOTHING:
+			s_watchBad++;
+			break;
+		}
+
+		// the camera, once it has shown that it is the camera
+		if (!watchCam) {
+			if (skaterOk && camOk) {
+				s_watch.Push(now);
+			}
+			return;
+		}
+		if (camOk) {
+			if (s_camBad > 0) {
+				Log::TypedLog(CHN_SDL, "Watchdog: the camera is whole again, %d frames later\n", s_camBad);
+				s_camBad = 0;
+				s_camTries = 0;
+			}
+			if (skaterOk) {
+				s_watch.Push(now);
+			}
+			return;
+		}
+		if (s_camBad++ == 0) {
+			Report(now, camWhat);
+		}
+		if (s_camTries < 30) {
+			s_camTries++;
+			RestoreCamera(camera);
+			if (s_camTries == 1 || s_camTries == 30) {
+				Log::TypedLog(CHN_SDL, s_camTries == 1 ? "Watchdog: put the camera back as it was\n"
+					: "Watchdog: the camera will not stay a number; leaving it be\n");
+			}
+		}
+	}
+
+	void LogWatch() {
+		uint8_t* skater = LocalSkater();
+		const uint8_t* core = skater ? (const uint8_t*)GetComponent(skater, kSkaterCorePhysics) : 0;
+		if (!skater || !core) {
+			Log::TypedLog(CHN_SDL, "Watchdog: no skater\n");
+			return;
+		}
+		Watchdog::Sample now;
+		ReadSample(skater, core, SkaterCamera(), now);
+		const char* what = 0;
+		const char* camWhat = 0;
+		const bool ok = SkaterSane(now, &what);
+		const bool camOk = !now.camKnown || CameraSane(now, &camWhat);
+		Log::TypedLog(CHN_SDL, "Watchdog: skater object at %08X, %s; camera at %08X, %s; %d reports so far\n",
+			(uint32_t)(uintptr_t)skater, ok ? "whole" : what, (uint32_t)(uintptr_t)SkaterCamera(),
+			!now.camKnown ? "not found" : (camOk ? (s_camCheck.Trusted() ? "whole" : "whole (not yet trusted as the camera)") : camWhat),
+			s_watchReports);
+		LogSample("now:", now);
+	}
+
 	static void __fastcall PadUpdateHook(uint8_t* pad, void* /*edx*/, void* data) {
 		PadUpdate(pad, data);
 		if (s_turnKept && s_turnKept + INPUT_PAD == pad) {
@@ -2335,6 +2648,9 @@ namespace FlickitGame {
 		uint8_t* input = core ? *(uint8_t* const*)(core + CORE_INPUT) : 0;
 		if (!input || input + INPUT_PAD != pad) {
 			return;
+		}
+		if (s_watchOn) {
+			Watch(skater, (uint8_t*)core);
 		}
 		RailExitFrame(skater, (uint8_t*)core);
 		ShowCrouch(skater);

@@ -19,7 +19,8 @@ namespace Memory {
 	static const uint32_t kGameMalloc = 0x005F9755;
 	static uint32_t s_mainBlockSize = kMainBlockSize;
 
-	static uint32_t s_reserved = 0;      // bytes the test holds below 2 GB
+	static uint32_t s_reserved = 0;      // bytes held (reserved, never used) by HighMemoryTest or StayBelow2GB
+	static const char* s_held = "";      // which of the two
 	static bool s_loggedReady = false;
 
 	// The game's script memory: a heap of its own (carved out of the main block) and, inside it,
@@ -85,21 +86,28 @@ namespace Memory {
 	}
 
 	// Reserve every free stretch below 2 GB (address space only, nothing committed)
-	static uint32_t TakeLowAddressSpace() {
+	static uint32_t TakeAddressSpace(uint32_t from, uint32_t to) {
 		SYSTEM_INFO si;
 		GetSystemInfo(&si);
 		const uint32_t grain = si.dwAllocationGranularity;
 		uint32_t taken = 0;
-		uint32_t at = (uint32_t)(uintptr_t)si.lpMinimumApplicationAddress;
-		while (at < kTwoGB) {
+		uint32_t at = from;
+		if (at < (uint32_t)(uintptr_t)si.lpMinimumApplicationAddress) {
+			at = (uint32_t)(uintptr_t)si.lpMinimumApplicationAddress;
+		}
+		const uint32_t top = (uint32_t)(uintptr_t)si.lpMaximumApplicationAddress;
+		if (to > top) {
+			to = top;
+		}
+		while (at < to) {
 			MEMORY_BASIC_INFORMATION mbi;
 			if (VirtualQuery((LPCVOID)(uintptr_t)at, &mbi, sizeof(mbi)) != sizeof(mbi) || mbi.RegionSize == 0) {
 				break;
 			}
 			const uint32_t start = (uint32_t)(uintptr_t)mbi.BaseAddress;
 			uint32_t end = start + (uint32_t)mbi.RegionSize;
-			if (end < start || end > kTwoGB) {
-				end = kTwoGB;
+			if (end < start || end > to) {
+				end = to;
 			}
 			if (mbi.State == MEM_FREE) {
 				// Reservations start on the allocation grain; the tail of a grain behind
@@ -139,14 +147,14 @@ namespace Memory {
 		return gameMalloc(kMainBlockSize);
 	}
 
-	static void MainBlock(const char* configFile, bool laa) {
+	static void MainBlock(const char* configFile, bool high) {
 		const UINT stockMB = kMainBlockSize >> 20;
-		UINT mb = GetPrivateProfileIntA(MEMORY_SECTION, "MainHeapMB", laa ? 1024 : stockMB, configFile);
+		UINT mb = GetPrivateProfileIntA(MEMORY_SECTION, "MainHeapMB", high ? 1024 : stockMB, configFile);
 		if (mb < stockMB) {
 			mb = stockMB;
 		}
-		if (!laa && mb > stockMB) {
-			Log::TypedLog(CHN_DLL, "Memory: MainHeapMB=%u needs the large-address flag on THUG-SDL.exe; the main block stays %u MB\n", mb, stockMB);
+		if (!high && mb > stockMB) {
+			Log::TypedLog(CHN_DLL, "Memory: MainHeapMB=%u needs the address space above 2 GB (the large-address flag on THUG-SDL.exe, and StayBelow2GB=0); the main block stays %u MB\n", mb, stockMB);
 			mb = stockMB;
 		}
 		if (mb > 1536) {
@@ -180,20 +188,32 @@ namespace Memory {
 	void AtStartup(const char* configFile) {
 		EnlargeScriptMemory(configFile);
 		const bool laa = LargeAddressAware();
-		MainBlock(configFile, laa);
 		MEMORYSTATUSEX m;
 		m.dwLength = sizeof(m);
 		const uint64_t space = GlobalMemoryStatusEx(&m) ? m.ullTotalVirtual : 0;
+		const bool four = laa && space >= 0xC0000000ull;
+		// [Memory] StayBelow2GB=1: with the flag on the exe, hold everything above 2 GB, so the game runs in
+		// the 2 GB it was made for (to tell whether something goes wrong only up there)
+		const bool low = four && GetPrivateProfileIntA(MEMORY_SECTION, "StayBelow2GB", 0, configFile) != 0;
+		MainBlock(configFile, laa && !low);
 		Log::TypedLog(CHN_DLL, "Memory: %u MB of address space; THUG-SDL.exe %s\n", (unsigned)(space >> 20),
 			laa ? "has the large-address flag" : "does not have the large-address flag");
+		if (low) {
+			s_reserved = TakeAddressSpace(kTwoGB, 0xFFFFFFFFu);
+			s_held = "StayBelow2GB";
+			Log::TypedLog(CHN_DLL, "Memory: StayBelow2GB holds %u MB above 2 GB (reserved, not used), so the game's memory stays below it\n",
+				s_reserved >> 20);
+			return;
+		}
 		if (!GetPrivateProfileIntA(MEMORY_SECTION, "HighMemoryTest", 0, configFile)) {
 			return;
 		}
-		if (!laa || space < 0xC0000000ull) {
+		if (!four) {
 			Log::TypedLog(CHN_DLL, "Memory: HighMemoryTest needs the large-address flag on THUG-SDL.exe and a 64-bit Windows, so it is off\n");
 			return;
 		}
-		s_reserved = TakeLowAddressSpace();
+		s_reserved = TakeAddressSpace(0, kTwoGB);
+		s_held = "HighMemoryTest";
 		Log::TypedLog(CHN_DLL, "Memory: HighMemoryTest holds %u MB below 2 GB (reserved, not used), so the game's memory lands above it\n",
 			s_reserved >> 20);
 	}
@@ -203,8 +223,8 @@ namespace Memory {
 		m.dwLength = sizeof(m);
 		if (GlobalMemoryStatusEx(&m)) {
 			const uint64_t used = m.ullTotalVirtual - m.ullAvailVirtual - s_reserved;
-			Log::TypedLog(CHN_DLL, "Memory: %u MB of the %u MB address space in use%s\n", (unsigned)(used >> 20),
-				(unsigned)(m.ullTotalVirtual >> 20), s_reserved ? ", besides what HighMemoryTest holds" : "");
+			Log::TypedLog(CHN_DLL, "Memory: %u MB of the %u MB address space in use%s%s\n", (unsigned)(used >> 20),
+				(unsigned)(m.ullTotalVirtual >> 20), s_reserved ? ", besides what is held for " : "", s_reserved ? s_held : "");
 		}
 		const uint32_t start = *kMainBlockStart;
 		if (start) {

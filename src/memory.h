@@ -10,6 +10,10 @@
 // an address for a signed number (or keeps a flag in its top bit) goes wrong at once, rather than
 // only on the day a level is big enough to reach that far.
 //
+// [Memory] StayBelow2GB=1, with the flag set, does the opposite: it holds every free stretch above 2 GB,
+// so the game runs in the 2 GB it was made for while the exe keeps its flag. A way to tell whether
+// something goes wrong only above 2 GB. MainHeapMB then stays at 360.
+//
 // [Memory] MainHeapMB sets the game's main block (THUG-SDL: 360 MB), where a level's files load. Default
 // 1024 with the large-address flag, 360 without (and without the flag it cannot grow).
 //

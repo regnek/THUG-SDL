@@ -248,4 +248,11 @@ namespace FlickitGame {
 		bool inAir;             // he came off into the air and got the push; else he skated in, bailed or stayed
 	};
 	bool TakeExit(RailExit& out);
+
+	// The watchdog (watchdog.h): every frame it checks that the skater's position, speed and matrices,
+	// and the skater camera's, are numbers. The frame they stop being, it writes the two seconds before
+	// to the log and puts him back where he was last whole (then the game's reset of his physics there).
+	// [Flickit] Watchdog=0 switches it off. LogWatch writes where things stand now (the reload key).
+	void SetWatch(bool on);
+	void LogWatch();
 }

@@ -397,6 +397,11 @@ void loadFlickitSettings() {
 	s.enabled = (int)GetPrivateProfileInt(FLICKIT_SECTION, "Enabled", s.enabled, configFile);
 	s.toggleButton = (int)GetPrivateProfileInt(FLICKIT_SECTION, "ToggleButton", s.toggleButton, configFile);
 	s.reloadKey = (int)GetPrivateProfileInt(FLICKIT_SECTION, "ReloadKey", s.reloadKey, configFile);
+	{
+		const bool watch = GetPrivateProfileInt(FLICKIT_SECTION, "Watchdog", 1, configFile) != 0;
+		FlickitGame::SetWatch(watch);
+		Log::TypedLog(CHN_SDL, watch ? "Watchdog: on (the skater and the camera are checked every frame)\n" : "Watchdog: off\n");
+	}
 	s.debug = (int)GetPrivateProfileInt(FLICKIT_SECTION, "Debug", s.debug, configFile);
 
 	s.kickflipSide = (int)GetPrivateProfileInt(FLICKIT_SECTION, "KickflipSide", s.kickflipSide, configFile);
@@ -1935,6 +1940,7 @@ void handleInputEvent(SDL_Event* e) {
 		// Re-read the [Flickit] section of the ini while the game is running
 		if (flickitSettings.reloadKey > 0 && (int)e->key.keysym.scancode == flickitSettings.reloadKey && !e->key.repeat) {
 			loadFlickitSettings();
+			FlickitGame::LogWatch();
 		}
 		setUsingKeyboard(1);
 		do_key_input((SDL_KeyCode)e->key.keysym.sym);
