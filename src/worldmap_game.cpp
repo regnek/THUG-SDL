@@ -416,8 +416,8 @@ namespace WorldMapGame {
 		Close(true, mapButtonDown);
 	}
 
-	static void OpenFrame(uint8_t* cd, SDL_GameController* c, const Uint8* keys, double dt, bool inMenu) {
-		if (inMenu) {
+	static void OpenFrame(uint8_t* cd, SDL_GameController* c, const Uint8* keys, double dt, bool menuUp) {
+		if (menuUp) {
 			// a menu of the game's came up over it (the pause is the menu's now)
 			Log::TypedLog(CHN_SDL, "Map: closed for a menu of the game's\n");
 			Close(false, c && Button(c, s_button));
@@ -490,7 +490,7 @@ namespace WorldMapGame {
 		return pass;
 	}
 
-	void AfterPoll(uint8_t* cd, SDL_GameController* controller, int cameraButton, bool inMenu) {
+	void AfterPoll(uint8_t* cd, SDL_GameController* controller, int cameraButton, bool inMenu, bool menuUp) {
 		if (!s_ready) {
 			return;
 		}
@@ -508,7 +508,7 @@ namespace WorldMapGame {
 		const bool buttonDown = ownButton && c && Button(c, s_button);
 
 		if (s_open) {
-			OpenFrame(cd, c, keys, dt, inMenu);
+			OpenFrame(cd, c, keys, dt, menuUp);
 			s_keyWas = keyDown;
 			s_buttonWas = buttonDown;
 			s_gateOpened = false;

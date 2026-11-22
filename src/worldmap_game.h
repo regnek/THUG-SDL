@@ -26,8 +26,10 @@ namespace WorldMapGame {
 
 	// After the look at player one's keyboard and controller, before the buttons are turned the way the game
 	// reads them: the map's controls, and while it is up (and until the buttons down when it closed are let
-	// go) the game's picture of the pad left blank. cameraButton is the controller's camera button.
-	void AfterPoll(uint8_t* controlData, SDL_GameController* controller, int cameraButton, bool inMenu);
+	// go) the game's picture of the pad left blank. cameraButton is the controller's camera button. inMenu:
+	// whether the game counts as in a menu (for opening); menuUp: whether a menu of its own is on the screen,
+	// for closing the map under one (the game counts any pause as a menu, the map's own as well).
+	void AfterPoll(uint8_t* controlData, SDL_GameController* controller, int cameraButton, bool inMenu, bool menuUp);
 
 	bool IsOpen();
 }

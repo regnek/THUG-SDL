@@ -1204,6 +1204,13 @@ bool mapSeesMenu() {
 	return !ParkEd || *keyboard_on_screen || *otherIsMenu || shouldUseMenuControls();
 }
 
+// For the map while it is up. Its own pause sets otherIsMenu: the game's FrontEnd update (0x00503690) is
+// handed the paused flag and writes it there (0x00503835). So only the menus themselves count then: one
+// of the menu anchors (isMenu) or the keyboard on the screen.
+bool mapMenuUp() {
+	return !ParkEd || *isMenu || *keyboard_on_screen;
+}
+
 
 /******************************************************************/
 /*                                                                */
@@ -2102,7 +2109,7 @@ void __cdecl processController(device* dev) {
 	if (dev->port == 0) {
 		// The map: its controls, and the game sees nothing while it is up
 		SDL_GameController* mapPad = players[0].controller && !players[0].lockedOut ? players[0].controller : nullptr;
-		WorldMapGame::AfterPoll(dev->controlData, mapPad, (int)padbinds.cameraToggle, mapSeesMenu());
+		WorldMapGame::AfterPoll(dev->controlData, mapPad, (int)padbinds.cameraToggle, mapSeesMenu(), mapMenuUp());
 		doPauseBuffer(dev);
 	}
 
