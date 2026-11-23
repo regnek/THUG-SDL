@@ -333,6 +333,7 @@ bool flickitOllieWas = false;                            // the Ollie button on 
 bool flickitOlliePush = false;                           // the press of the Ollie button that is down is a push: it began while the board rolled
 bool flickitFlipPush = false;                            // the Flip button is down and has been a push since the board last rolled under it
 bool flickitPushHeld = false;                            // a push button is down
+bool flickitGrabMade = false;                            // Flickit put Circle down for a grab, his own buttons did not (first player)
 uint32_t flickitPushSerial = 0;                          // for the log: the last push
 uint32_t flickitFootSerial = 0;                          // for the log: the last word on the feet in a push animation
 uint32_t flickitBlindSerial = 0;                         // for the log: the last time the pushes went over to the clock
@@ -1079,6 +1080,9 @@ void flickitApply(device* dev, const Flickit::Output& o) {
 		dev->controlData[12] = 0xff;
 	}
 	if (o.grab) {
+		if (dev->port == 0 && !(dev->controlData[3] & (0x01 << 5))) {
+			flickitGrabMade = true;                         // not his own Circle: it takes no car
+		}
 		dev->controlData[3] |= 0x01 << 5;
 		dev->controlData[13] = 0xff;
 	}
@@ -2097,6 +2101,7 @@ void __cdecl processController(device* dev) {
 		// The game's rail code does nothing for Flickit on this frame unless the controller poll below says so
 		Memory::LogOnceReady();
 		FlickitGame::BeginFrame();
+		flickitGrabMade = false;
 
 		if (!*keyboard_on_screen) {
 			pollKeyboard(dev);
@@ -2109,6 +2114,7 @@ void __cdecl processController(device* dev) {
 	}
 
 	if (dev->port == 0) {
+		DriveGame::GrabMade(flickitGrabMade);
 		// The map: its controls, and the game sees nothing while it is up
 		SDL_GameController* mapPad = players[0].controller && !players[0].lockedOut ? players[0].controller : nullptr;
 		WorldMapGame::AfterPoll(dev->controlData, mapPad, (int)padbinds.cameraToggle, mapSeesMenu(), mapMenuUp());

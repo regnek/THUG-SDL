@@ -1,5 +1,5 @@
 // Flickit's cars: any car in the level can be taken, a moving one too, by walking or skating up to it and
-// pressing Triangle (the button the game gets out of a car with), and it stays where he gets out.
+// pressing Circle (the button the game gets into its own drivable cars with), and it stays where he gets out.
 //
 // src/drive_game.cpp finds the car in reach, starts Flickit_CarSteal, and answers the Flickit_Car... commands
 // below (the car's place and speed, the place to get out at). These scripts do the rest the game's own way:
@@ -176,8 +176,8 @@ SCRIPT Flickit_CarIsTraffic
 	RETURN traffic = 0
 ENDSCRIPT
 
-// Holding Triangle stops the car and gets him out once it is slow (the game's own), but not with the
-// press that got him in: that has to be let go first.
+// Holding Triangle stops the car and gets him out once it is slow (the game's own), but not with a press
+// he was already holding when he got in: that has to be let go first.
 SCRIPT Flickit_CarWaitForExit
 	Wait 0.5 Seconds
 	BEGIN

@@ -281,6 +281,7 @@ namespace FlickitGame {
 		INPUT_LEFT_PRESSED = 0x60,      // Left is, by the d-pad or by the stick
 		INPUT_RIGHT_PRESSED = 0x80,
 		BUTTON_PRESSED_AT = 0x04,       // in a button of the pad: the game's clock (ms) when it went down
+		INPUT_CIRCLE_PRESSED = 0x160,   // Circle is down (the pad's buttons by the names it gives them: 0x0051AA60)
 		INPUT_GRIND_PRESSED = 0x1A0,    // the Grind button (Triangle) is down
 		INPUT_JUMP_PRESSED = 0x1C0,     // the jump button (X) is
 		INPUT_DISABLED = 0x498,         // one byte: a script has taken the controls away (DisablePlayerInput)
@@ -3238,7 +3239,7 @@ namespace FlickitGame {
 		DriveGame::Skater s;
 		s.object = skater;
 		s.pos = (const float*)(skater + OBJECT_POSITION);
-		s.triangle = input + INPUT_GRIND_PRESSED;
+		s.take = input + INPUT_CIRCLE_PRESSED;
 		s.driving = state && state[STATE_DRIVING] != 0;
 		s.free = state && !s.driving && state[STATE_BAILING] == 0 && *(const int32_t*)(state + STATE_STATE) == 0
 			&& input[INPUT_DISABLED] == 0 && input[INPUT_NET_DISABLED] == 0

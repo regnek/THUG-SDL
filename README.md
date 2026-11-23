@@ -290,7 +290,7 @@ THUG turns the skater in the air at 6.85 to 7.75 radians a second (by his spin s
 Flip tricks are not touched. In both games how long a flip takes is in its animation: THUG plays it 1.16 to 1.3 times as fast as it was made, by the skater's flip stat, and bails a landing that comes more than 25 frames before its end; Skate blends the flip's animation by the height of the pop. Neither game's animations were measured, and how the speed of the flick enters Skate's was not worked out.
 
 ### Cars
-Any car of the level can be taken, a moving one too, the way GTA has it: walk or skate up to a car and press Triangle (the Grind button, which is also the one the game gets out of a car with). Near enough is `CarReach` units (45 by default) from the car's body, from any side.
+Any car of the level can be taken, a moving one too, the way GTA has it: walk or skate up to a car and press Circle (B on an Xbox pad), the button the game gets into its own drivable cars with ("Press Circle to drive"). Only the Circle button itself does it: a grab the triggers make with `TriggerGrabs` takes no car. Near enough is `CarReach` units (45 by default) from the car's body, from any side.
 - The car becomes the game's own drivable car (the one its goals use, `PlayerVehicle`) with the model of the car taken: it is put where that car was, facing its way, on the ground, and a car that was moving goes on at the speed it had. The physics are those of one of the game's own drivable cars: the one made for that model where there is one (the custom car, Tampa's police car, San Diego's security cart), otherwise the police car's, with colliders and wheels of the model's own size (measured from each model, in `scripts/flickit/cars.q`). The game's own buttons drive it; a panel shows them for five seconds.
 - Holding Triangle stops it and gets him out once it is slow, as the game has it for its own cars. He stands beside the driver's door on his board (on the other side, behind or in front of it when there is a wall or no ground there; on the roof when there is room nowhere), and the car stays there, to be taken again. The last four cars he left stay; the fifth takes the place of the one left longest ago.
 - A car of the level's traffic that was taken comes back at the start of its way, no sooner than 15 seconds later and only once he is 2500 units from there, so that no car appears before his eyes. A car the level makes for a goal does not.
@@ -361,7 +361,7 @@ The settings live in the `[Flickit]` section of `thugsdl.ini`. Thresholds are pe
 | Coast | 100 | What the board loses while it rolls, in percent of Skate's (see Rolling). 0: the game's own friction. Up to 1000 |
 | Steering | 100 | The grip of the wheels in a turn, in percent of Skate's (see Rolling). 0: the game's own turning. 25 to 400 |
 | Spin | 100 | How fast the stick turns the skater in the air, in percent of Skate's (see Spinning). 0: the game's own turning in the air. 25 to 400 |
-| Cars | 1 | Triangle by a car takes it, and the car stays where he gets out (see Cars). 0: off |
+| Cars | 1 | Circle by a car takes it, and the car stays where he gets out (see Cars). 0: off |
 | CarReach | 45 | How near a car's body he has to be to take it, in game units. 10 to 200 |
 
 ### Stick patterns

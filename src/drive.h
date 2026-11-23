@@ -1,7 +1,7 @@
 #pragma once
 // Flickit's cars: the parts that need neither Windows nor the game, tested by tests/drive_test.cpp.
 //
-// Any car of the level can be taken, a moving one too: walk or skate up to it and press Triangle. The car is
+// Any car of the level can be taken, a moving one too: walk or skate up to it and press Circle. The car is
 // the game's own drivable one with the model of the car taken, put where that car was and given its speed.
 // Getting out (Triangle held, the game's own) leaves the car standing there, to be taken again.
 //

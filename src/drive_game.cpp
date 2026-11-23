@@ -200,7 +200,8 @@ namespace DriveGame {
 	};
 	static Leaving s_leaving;
 
-	static bool s_down = false;              // Triangle on the frame before
+	static bool s_down = false;              // Circle on the frame before (his own press)
+	static bool s_grabMade = false;          // Flickit's own Circle (a trigger grab) on this frame's pad data
 	static bool s_released = true;           // let go since a car was taken
 	static LARGE_INTEGER s_lastFrame;        // zero: no frame yet
 	static uint32_t s_lastComeBack = 0;
@@ -274,7 +275,7 @@ namespace DriveGame {
 			const uint8_t* tune = LookUpSymbol(s_n.defaultTune);
 			if (steal && steal[1] == SYMBOL_SCRIPT && tune && tune[1] == SYMBOL_STRUCTURE) {
 				s_parsed = 1;
-				Log::TypedLog(CHN_SDL, "Cars: on; Triangle near a car takes it (reach %.0f), the game has Flickit's car scripts (%u bytes)\n",
+				Log::TypedLog(CHN_SDL, "Cars: on; Circle near a car takes it (reach %.0f), the game has Flickit's car scripts (%u bytes)\n",
 					s_reach, (unsigned)sizeof(data));
 			}
 			else {
@@ -475,8 +476,12 @@ namespace DriveGame {
 			ran && !s.driving && !s_driven.set ? ", but he is not driving it" : "");
 	}
 
+	void GrabMade(bool made) {
+		s_grabMade = made;
+	}
+
 	void PadFrame(const DriveGame::Skater& s) {
-		if (!s_on || !Ready() || !Parsed() || !s.object || !s.pos || !s.triangle) {
+		if (!s_on || !Ready() || !Parsed() || !s.object || !s.pos || !s.take) {
 			return;
 		}
 		LevelKey key;
@@ -489,7 +494,7 @@ namespace DriveGame {
 			FindCars();
 		}
 		const float seconds = FrameSeconds();
-		const bool down = *s.triangle != 0;
+		const bool down = *s.take != 0 && !s_grabMade;     // a grab Flickit made for a trigger takes no car
 		const bool pressed = down && !s_down;
 		s_down = down;
 		if (!down) {
@@ -552,7 +557,7 @@ namespace DriveGame {
 
 		if (pressed && s_released && best >= 0 && s.free && !s.driving) {
 			s_released = false;
-			*s.triangle = 0;                     // the game does not see the press that takes a car
+			*s.take = 0;                         // the game does not see the press that takes a car
 			Steal(s_cars[best], s);
 		}
 	}
@@ -628,7 +633,7 @@ namespace DriveGame {
 		return true;
 	}
 
-	// Flickit_CarButtonUp: Triangle let go, as the car reads it
+	// Flickit_CarButtonUp: Triangle (the button that gets him out) let go, as the car reads it
 	static bool CFunc_CarButtonUp(Script::LazyStruct*, DummyScript*) {
 		void* vehicle = 0;
 		if (!PlayerVehicle(&vehicle)) {
