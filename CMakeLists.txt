@@ -19,6 +19,7 @@ set(SOURCE_FILES
 	"${SRC}/camrel_game.cpp"
 	"${SRC}/worldmap_game.cpp"
 	"${SRC}/drive_game.cpp"
+	"${SRC}/guard_game.cpp"
 	"${SRC}/script.cpp"
 	"${SRC}/displayconfig.cpp"
 	"${SRC}/observemenu.cpp"
@@ -55,6 +56,8 @@ set(HEADER_FILES
 	"${SRC}/nodenames.h"
 	"${SRC}/autosave.h"
 	"${SRC}/watchdog.h"
+	"${SRC}/guard.h"
+	"${SRC}/guard_game.h"
 	"${SRC}/displayconfig.h"
 	"${SRC}/observemenu.h"
 	"${SRC}/script.h"
@@ -102,6 +105,17 @@ set_target_properties(
     PROPERTIES 
         OUTPUT_NAME "thugsdl"
 )
+
+# A map of the DLL next to it (thugsdl.map), for telling which function an address in it is in
+if(MSVC)
+	set_property(TARGET ${PROJECT_NAME_VAR} APPEND_STRING PROPERTY LINK_FLAGS " /MAP")
+endif()
+
+# The guard's breakpoint tried on Windows itself, outside the game (the CI runs it): not part of the DLL
+if(WIN32)
+	add_executable(guard_windows_test EXCLUDE_FROM_ALL "${CMAKE_SOURCE_DIR}/tests/guard_windows_test.cpp")
+	target_include_directories(guard_windows_test PRIVATE "${SRC}")
+endif()
 
 add_executable(tsdl-launcher)
 

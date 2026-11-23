@@ -44,6 +44,8 @@ jobs:
           ./worldmap_test
           g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -I src tests/drive_test.cpp -o drive_test
           ./drive_test
+          g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -I src tests/guard_test.cpp -o guard_test
+          ./guard_test
       - name: Flickit's car scripts
         run: |
           # the compiler gives the game's own compiled files for these sources (but for the order of the names)
@@ -82,6 +84,22 @@ jobs:
       - name: Build, optimization off
         run: cmake --build build-unoptimized --config Release --target THUG_SDL
 
+      # The guard's write breakpoint, tried on Windows itself: src/guard_game.cpp watching a word of a test
+      # program's (32-bit, as the game is), written over from threads old and new. Both builds. Its result is
+      # read from the log: a failure here does not keep the DLL from the run.
+      - name: The guard on Windows
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          foreach ($tree in 'build-default', 'build-unoptimized') {
+            cmake --build $tree --config Release --target guard_windows_test
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            $exe = (Get-ChildItem -Recurse $tree -Filter guard_windows_test.exe | Select-Object -First 1).FullName
+            Write-Host "== $exe"
+            & $exe
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+
       - name: Collect
         shell: pwsh
         run: |
@@ -110,6 +128,18 @@ jobs:
         shell: pwsh
         run: |
           python .github/flickit/check_hooks.py out/thugsdl.dll out/alt-unoptimized/thugsdl.dll
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      # The guard writes down where a stray write came from; in the DLL, that is thugsdl.dll and how far into it.
+      # The linker's map of the optimized build says which of the DLL's functions that is: its own part goes
+      # into the log.
+      - name: Where the DLL's own functions are (from the linker's map)
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $map = Get-ChildItem -Recurse build-default -Filter thugsdl.map | Select-Object -First 1
+          if (-not $map) { throw 'no thugsdl.map from the linker' }
+          python .github/flickit/map_functions.py $map.FullName
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - uses: actions/upload-artifact@v4

@@ -7,6 +7,7 @@
 #include "Resources/Resources.h"
 #include "Mod/mod_template.h"
 #include "observemenu.h"
+#include "guard_game.h"
 
 #pragma data_seg (".d3d9_shared")
 HINSTANCE gl_hOriginalDll;
@@ -34,7 +35,7 @@ BOOL WINAPI DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved
 		//addCustomCFuncs();
 		break;
 		case DLL_PROCESS_DETACH: ExitInstance(); break;
-		case DLL_THREAD_ATTACH: break;
+		case DLL_THREAD_ATTACH: GuardGame::ThreadStarted(); break;
 		case DLL_THREAD_DETACH: break;
     }
     return TRUE;

@@ -255,6 +255,8 @@ namespace FlickitGame {
 	// [Flickit] Watchdog=0 switches it off. LogWatch writes where things stand now (the reload key).
 	void SetWatch(bool on);
 	void LogWatch();
+	// A line of someone else's for the log and flickit_watchdog.txt (with the time of day in the file)
+	void WatchNote(const char* text);
 
 	// Autosave (autosave.h): while he skates on the ground, the skater's spot goes to flickit_autosave.txt
 	// next to the exe whenever it moves (at most four times a second); when one of the levels named loads,

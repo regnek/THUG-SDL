@@ -13,6 +13,7 @@
 #include "camrel_game.h"
 #include "worldmap_game.h"
 #include "drive_game.h"
+#include "guard_game.h"
 #include "flickit_pose.h"
 #include <QB/LazyStruct.h>
 #include <QB/Qb.h>
@@ -2100,6 +2101,7 @@ void __cdecl processController(device* dev) {
 
 		// The game's rail code does nothing for Flickit on this frame unless the controller poll below says so
 		Memory::LogOnceReady();
+		GuardGame::Frame();
 		FlickitGame::BeginFrame();
 		flickitGrabMade = false;
 

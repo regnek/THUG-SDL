@@ -2453,6 +2453,10 @@ namespace FlickitGame {
 		WatchFileLine(line);
 	}
 
+	void WatchNote(const char* text) {
+		WatchLog("%s", text);
+	}
+
 	static Watchdog::History<120> s_watch;            // the last two seconds he was whole
 	static Watchdog::Policy s_watchPolicy;
 	static Watchdog::CameraCheck s_camCheck;
