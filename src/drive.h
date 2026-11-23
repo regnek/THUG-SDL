@@ -141,6 +141,104 @@ namespace Drive {
 		}
 	}
 
+	// Where a car is left standing: its model's origin on the ground, the ground's slope under it. The game's car
+	// drives with its body up on its springs, so the place it is at is above the place its model stands at (a
+	// car of the traffic stands with its model's origin on the ground, at its node); a parked car put at the
+	// driven car's place floats.
+	//
+	// probes: n places under the car, each its x along the car's left and z along the way it faces (from the
+	// car's place, level), and the height of the ground found there (found[i] false: none). The plane through
+	// them by least squares (three or more), else level at their average; a plane steeper than steepest (rise
+	// over run) or more than within off any probe is not trusted and the car stands level at the probe nearest
+	// its middle. pos: the car's place (x and z kept); m: its matrix's rows (left, up, the way it faces), at
+	// heading. False when no probe found ground (then nothing changes).
+	inline bool GroundUnder(float pos[3], float m[12], float heading, const float probes[][3], const bool found[], int n,
+			float steepest = 0.5f, float within = 6.0f) {
+		int have = 0, nearest = -1;
+		float nearestAway = 1.0e9f, mean = 0.0f;
+		for (int i = 0; i < n; i++) {
+			if (!found[i]) {
+				continue;
+			}
+			have++;
+			mean += probes[i][1];
+			const float away = probes[i][0] * probes[i][0] + probes[i][2] * probes[i][2];
+			if (away < nearestAway) {
+				nearestAway = away;
+				nearest = i;
+			}
+		}
+		if (have == 0) {
+			return false;
+		}
+		mean /= (float)have;
+		float y = mean, slopeLeft = 0.0f, slopeAhead = 0.0f;
+		if (have >= 3) {
+			// y = a + b x + c z: the normal equations, solved by Cramer's rule
+			double s[3][3] = { { 0 } }, t[3] = { 0 };
+			for (int i = 0; i < n; i++) {
+				if (!found[i]) {
+					continue;
+				}
+				const double row[3] = { 1.0, probes[i][0], probes[i][2] };
+				for (int r = 0; r < 3; r++) {
+					for (int c = 0; c < 3; c++) {
+						s[r][c] += row[r] * row[c];
+					}
+					t[r] += row[r] * probes[i][1];
+				}
+			}
+			const double det = s[0][0] * (s[1][1] * s[2][2] - s[1][2] * s[2][1]) - s[0][1] * (s[1][0] * s[2][2] - s[1][2] * s[2][0]) +
+				s[0][2] * (s[1][0] * s[2][1] - s[1][1] * s[2][0]);
+			if (fabs(det) > 1.0e-6) {
+				double sol[3];
+				for (int k = 0; k < 3; k++) {
+					double mm[3][3];
+					for (int r = 0; r < 3; r++) {
+						for (int c = 0; c < 3; c++) {
+							mm[r][c] = c == k ? t[r] : s[r][c];
+						}
+					}
+					sol[k] = (mm[0][0] * (mm[1][1] * mm[2][2] - mm[1][2] * mm[2][1]) - mm[0][1] * (mm[1][0] * mm[2][2] - mm[1][2] * mm[2][0]) +
+						mm[0][2] * (mm[1][0] * mm[2][1] - mm[1][1] * mm[2][0])) / det;
+				}
+				bool trusted = fabs(sol[1]) <= steepest && fabs(sol[2]) <= steepest;
+				for (int i = 0; i < n && trusted; i++) {
+					if (found[i] && fabs(sol[0] + sol[1] * probes[i][0] + sol[2] * probes[i][2] - probes[i][1]) > within) {
+						trusted = false;
+					}
+				}
+				if (trusted) {
+					y = (float)sol[0];
+					slopeLeft = (float)sol[1];
+					slopeAhead = (float)sol[2];
+				}
+				else {
+					y = probes[nearest][1];
+				}
+			}
+		}
+		// the rows: the way it faces up the slope ahead, its left up the slope to the left, up square to both
+		const float fx = sinf(heading), fz = cosf(heading);
+		const float lx = fz, lz = -fx;
+		float ahead[3] = { fx, slopeAhead, fz };
+		float left[3] = { lx, slopeLeft, lz };
+		float up[3] = { ahead[1] * left[2] - ahead[2] * left[1], ahead[2] * left[0] - ahead[0] * left[2], ahead[0] * left[1] - ahead[1] * left[0] };
+		const float upLen = sqrtf(up[0] * up[0] + up[1] * up[1] + up[2] * up[2]);
+		const float aheadLen = sqrtf(ahead[0] * ahead[0] + ahead[1] * ahead[1] + ahead[2] * ahead[2]);
+		for (int k = 0; k < 3; k++) {
+			up[k] /= upLen;
+			ahead[k] /= aheadLen;
+		}
+		left[0] = up[1] * ahead[2] - up[2] * ahead[1];
+		left[1] = up[2] * ahead[0] - up[0] * ahead[2];
+		left[2] = up[0] * ahead[1] - up[1] * ahead[0];
+		const float rows[12] = { left[0], left[1], left[2], 0.0f, up[0], up[1], up[2], 0.0f, ahead[0], ahead[1], ahead[2], 0.0f };
+		memcpy(m, rows, sizeof(rows));
+		pos[1] = y;
+		return true;
+	}
+
 	// The name of the structure in cars.q for a model: Flickit_Car_ and the model's file name without its
 	// folders and its ending, lower case (veh\veh_suv_drg\veh_suv_drg.mdl: Flickit_Car_veh_suv_drg).
 	inline bool TuneName(const char* model, char* out, size_t size) {

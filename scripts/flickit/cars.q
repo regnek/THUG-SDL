@@ -142,10 +142,12 @@ SCRIPT Flickit_CarSteal
 	IF ( <traffic> = 1 )
 		Flickit_CarComesBack car = <car>
 	ENDIF
-	// a car of the level's own to drive ("Press ... to drive") leaves its box on the screen otherwise
+	// a car of the level's own to drive ("Press ... to drive") leaves its box on the screen otherwise, and so
+	// would Flickit's own
 	IF ObjectExists id = goal_start_dialog
 		speech_box_exit anchor_id = goal_start_dialog
 	ENDIF
+	Flickit_CarPromptOff
 	IF Skater : Skitching
 		Skater : StopSkitch
 		Skater : SetState Ground
@@ -165,6 +167,35 @@ SCRIPT Flickit_CarSteal
 	KillSpawnedScript name = Flickit_CarWaitForExit
 	SpawnScript Flickit_CarWaitForExit
 	create_panel_block id = flickit_car_help text = "\\b3 = Accelerate\\n\\b1 = Brake/Reverse\\n\\bf = Handbrake\\nHold \\b0 = Stop and get out" rgba = [ 128 128 128 100 ] time = 5000
+ENDSCRIPT
+
+// The game's own prompt for a car to drive, as car_scripts.q shows it for a car of the level's own ("Press
+// Circle to drive."), while a car is in reach (src/drive_game.cpp says when). Only the box: the DLL reads
+// Circle itself. Not over a goal's or the level's own car's box.
+SCRIPT Flickit_CarPrompt
+	IF ObjectExists id = flickit_car_prompt
+		RETURN
+	ENDIF
+	IF ObjectExists id = goal_start_dialog
+		RETURN
+	ENDIF
+	create_speech_box {
+		anchor_id = flickit_car_prompt
+		text = "Press \\m5 to drive."
+		no_pad_choose
+		no_pad_start
+		bg_rgba = [ 100 100 100 128 ]
+		text_rgba = [ 128 128 128 128 ]
+		font = small
+		z_priority = 5
+	}
+ENDSCRIPT
+
+// The prompt away (not speech_box_exit: that holds the jump button back for a moment)
+SCRIPT Flickit_CarPromptOff
+	IF ObjectExists id = flickit_car_prompt
+		DestroyScreenElement id = flickit_car_prompt
+	ENDIF
 ENDSCRIPT
 
 // The tags Car_Generic01 gives every car of the traffic

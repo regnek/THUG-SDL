@@ -1,5 +1,5 @@
 // Tests for drive.h: the reach of a car, its speed, the places to get out at, the names of the tunings,
-// the cars that come back and the cars left parked.
+// the cars that come back, the cars left parked and the ground they are left on.
 // g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -I src tests/drive_test.cpp -o drive_test
 
 #include "drive.h"
@@ -206,6 +206,67 @@ static void TestParking() {
 	Check(p.Model(7) == 0 && !p.Used(-1), "no such slot");
 }
 
+static void TestGround() {
+	const float heading = 0.7f;
+	float wantLevel[12];
+	Facing(heading, wantLevel);
+	// the middle and four wheels (x along the car's left, z the way it faces)
+	const float at[5][2] = { { 0, 0 }, { 30, 110 }, { -30, 110 }, { 30, -40 }, { -30, -40 } };
+	float probes[5][3];
+	bool found[5];
+	// flat ground at -6, the car's body up on its springs at 14
+	for (int i = 0; i < 5; i++) {
+		probes[i][0] = at[i][0];
+		probes[i][1] = -6.0f;
+		probes[i][2] = at[i][1];
+		found[i] = true;
+	}
+	float pos[3] = { 100, 14, 200 }, m[12];
+	Check(Drive::GroundUnder(pos, m, heading, probes, found, 5), "flat: ground found");
+	bool level = true;
+	for (int k = 0; k < 12; k++) {
+		level = level && Near(m[k], wantLevel[k], 0.001f);
+	}
+	Check(Near(pos[1], -6.0f) && Near(pos[0], 100) && Near(pos[2], 200) && level, "flat: on the ground, level, the way it faced");
+
+	// up a slope of one in ten ahead and one in twenty to its left
+	for (int i = 0; i < 5; i++) {
+		probes[i][1] = 10.0f + 0.1f * at[i][1] + 0.05f * at[i][0];
+	}
+	found[2] = false;                       // and one wheel over nothing
+	pos[1] = 30;
+	Check(Drive::GroundUnder(pos, m, heading, probes, found, 5), "slope: ground found");
+	Check(Near(pos[1], 10.0f), "slope: the height of the plane at its middle");
+	const float aheadLen = std::sqrt(1.0f + 0.01f);
+	Check(Near(m[8], std::sin(heading) / aheadLen, 0.001f) && Near(m[9], 0.1f / aheadLen, 0.001f) && Near(m[10], std::cos(heading) / aheadLen, 0.001f),
+		"slope: it faces up the slope ahead");
+	Check(Near(m[1], 0.05f, 0.003f), "slope: its left side up the slope to the left");
+	const float dotUA = m[4] * m[8] + m[5] * m[9] + m[6] * m[10], dotUL = m[4] * m[0] + m[5] * m[1] + m[6] * m[2];
+	const float lenU = std::sqrt(m[4] * m[4] + m[5] * m[5] + m[6] * m[6]);
+	Check(Near(dotUA, 0.0f, 0.0001f) && Near(dotUL, 0.0f, 0.0001f) && Near(lenU, 1.0f, 0.0001f) && m[5] > 0.99f, "slope: square rows, up mostly up");
+
+	// one wheel on top of a kerb post: not a plane to trust, level on the ground at its middle
+	for (int i = 0; i < 5; i++) {
+		probes[i][1] = -6.0f;
+		found[i] = true;
+	}
+	probes[1][1] = 34.0f;
+	pos[1] = 14;
+	Check(Drive::GroundUnder(pos, m, heading, probes, found, 5) && Near(pos[1], -6.0f) && Near(m[5], 1.0f), "a kerb post under a wheel: level at its middle");
+
+	// only one probe: level at it; none: nothing changes
+	for (int i = 0; i < 5; i++) {
+		found[i] = i == 3;
+	}
+	pos[1] = 14;
+	Check(Drive::GroundUnder(pos, m, heading, probes, found, 5) && Near(pos[1], -6.0f) && Near(m[5], 1.0f), "one probe: level at it");
+	for (int i = 0; i < 5; i++) {
+		found[i] = false;
+	}
+	pos[1] = 14;
+	Check(!Drive::GroundUnder(pos, m, heading, probes, found, 5) && Near(pos[1], 14.0f), "no ground: nothing changes");
+}
+
 int main() {
 	TestBox();
 	TestReach();
@@ -215,6 +276,7 @@ int main() {
 	TestTuneName();
 	TestComeback();
 	TestParking();
+	TestGround();
 	std::printf("%d checks, %d failed\n", s_checks, s_failed);
 	return s_failed == 0 ? 0 : 1;
 }

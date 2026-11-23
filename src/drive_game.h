@@ -5,7 +5,8 @@
 // the game gets into its own drivable cars with: "Press Circle to drive", car_scripts.q). The car becomes the
 // game's own drivable car (PlayerVehicle) with the model of the car taken, put where that car was, facing its
 // way, and given its speed. Holding Triangle stops it and gets him out (the game's own); he stands beside the
-// driver's door on his board, and the car stays there to be taken again (the last four he left are kept).
+// driver's door on his board, and the car stays there, on the ground under it, to be taken again (the last four
+// he left are kept). While a car is in reach the game's own "Press Circle to drive." box shows.
 // A car of the level's traffic comes back at the start of its way once he is far from there.
 //
 // The steps are scripts of Flickit's own (scripts/flickit/cars.q, compiled into flickit_cars_qb.h), which

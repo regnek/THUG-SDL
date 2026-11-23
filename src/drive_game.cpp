@@ -125,7 +125,7 @@ namespace DriveGame {
 	struct Names {
 		uint32_t nodeArray, className, vehicle, skeletonName, car, model, name, pos, angles;
 		uint32_t carPhysics, staticVehicle, vehicleComponent, playerVehicle, colliders, setup, tune, speed, parked;
-		uint32_t stealScript, backScript, defaultTune;
+		uint32_t stealScript, backScript, defaultTune, promptScript, promptOffScript;
 		uint32_t parkedCar[Drive::Parking::kSlots];
 	};
 	static Names s_n;
@@ -197,9 +197,14 @@ namespace DriveGame {
 		float matrix[16];
 		float door[3];
 		float heading;
+		float parkPos[4];            // where the car is left: its model on the ground (Drive::GroundUnder)
+		float parkMatrix[16];
 	};
 	static Leaving s_leaving;
 
+	static bool s_prompt = false;            // the game's "Press Circle to drive" box is up
+	static uint32_t s_promptSeen = 0;        // the last time a car was in reach
+	static const uint32_t kPromptLingerMs = 400;   // it stays this long after (the edge of the reach, an ollie)
 	static bool s_down = false;              // Circle on the frame before (his own press)
 	static bool s_grabMade = false;          // Flickit's own Circle (a trigger grab) on this frame's pad data
 	static bool s_released = true;           // let go since a car was taken
@@ -234,6 +239,8 @@ namespace DriveGame {
 		s_n.stealScript = Flickit::NameChecksum("Flickit_CarSteal");
 		s_n.backScript = Flickit::NameChecksum("Flickit_CarBack");
 		s_n.defaultTune = Flickit::NameChecksum("Flickit_Car_Default");
+		s_n.promptScript = Flickit::NameChecksum("Flickit_CarPrompt");
+		s_n.promptOffScript = Flickit::NameChecksum("Flickit_CarPromptOff");
 		for (int i = 0; i < Drive::Parking::kSlots; i++) {
 			char name[32];
 			sprintf_s(name, sizeof(name), "Flickit_ParkedCar%d", i);
@@ -378,9 +385,28 @@ namespace DriveGame {
 		return m ? m : "";
 	}
 
+	// The game's prompt for a car to drive ("Press Circle to drive", as car_scripts.q shows it for a car of the
+	// level's own), while a car is in reach and he could take it; only the box: Circle itself is read here
+	static void Prompt(bool want, uint32_t now) {
+		if (want) {
+			s_promptSeen = now;
+			if (!s_prompt) {
+				s_prompt = RunGameScript(s_n.promptScript, 0, 0, 0);
+			}
+		}
+		else if (s_prompt && now - s_promptSeen > kPromptLingerMs) {
+			RunGameScript(s_n.promptOffScript, 0, 0, 0);
+			s_prompt = false;
+		}
+	}
+
 	// The level's cars: its Vehicle nodes whose models have the car's skeleton (the one the game's
 	// drivable car has), and a place for each parked car after them
 	static void FindCars() {
+		if (s_prompt) {
+			RunGameScript(s_n.promptOffScript, 0, 0, 0);
+			s_prompt = false;
+		}
 		s_levelCars = 0;
 		s_parking.Clear();
 		s_back.Clear();
@@ -469,6 +495,7 @@ namespace DriveGame {
 		p->AddChecksum(s_n.setup, c.setup);
 		p->AddChecksum(s_n.tune, c.tune);
 		memset(&s_taken, 0, sizeof(s_taken));
+		s_prompt = false;                    // the steal script takes the prompt away
 		const bool ran = RunGameScript(s_n.stealScript, p, s.object, 0);
 		Script::LazyStruct::s_free(p);
 		Log::TypedLog(CHN_SDL, "Cars: %s %s (%08X, %s)%s\n", ran ? "took" : "could not run Flickit_CarSteal for",
@@ -554,6 +581,8 @@ namespace DriveGame {
 				}
 			}
 		}
+
+		Prompt(best >= 0 && s.free && !s.driving, now);
 
 		if (pressed && s_released && best >= 0 && s.free && !s.driving) {
 			s_released = false;
@@ -643,6 +672,76 @@ namespace DriveGame {
 		return !input || input[INPUT_TRIANGLE] == 0;
 	}
 
+	// The height of the ground under (x, z) between top and bottom, by the skater's own line test (which only
+	// says whether a line hits): halved down fourteen times, to about a sixtieth of a unit over 230
+	static bool GroundAt(float x, float z, float top, float bottom, float* y) {
+		const float from[3] = { x, top, z };
+		const float to[3] = { x, bottom, z };
+		if (!FlickitGame::LineBlocked(from, to)) {
+			return false;
+		}
+		float clear = top, hits = bottom;        // the line down to clear hits nothing, down to hits it does
+		for (int i = 0; i < 14; i++) {
+			const float mid[3] = { x, 0.5f * (clear + hits), z };
+			if (FlickitGame::LineBlocked(from, mid)) {
+				hits = mid[1];
+			}
+			else {
+				clear = mid[1];
+			}
+		}
+		*y = hits;
+		return true;
+	}
+
+	// Where the car is left: its model's origin on the ground under its middle and wheels, on the ground's
+	// slope (the driven car's place is its body, up on its springs: a car parked there floats)
+	static void ParkPlace(const void* vehicle, Leaving* l) {
+		memcpy(l->parkPos, l->pos, sizeof(l->parkPos));
+		memcpy(l->parkMatrix, l->matrix, sizeof(l->parkMatrix));
+		float probes[9][3];
+		bool found[9];
+		int n = 0;
+		probes[n][0] = 0.0f;
+		probes[n][2] = 0.0f;
+		n++;
+		const uint8_t* v = (const uint8_t*)vehicle;
+		const int count = *(const int*)(v + VEHICLE_WHEEL_COUNT);
+		const uint8_t* wheels = *(const uint8_t* const*)(v + VEHICLE_WHEELS);
+		if (wheels && count >= 2 && count <= 8) {
+			for (int i = 0; i < count; i++) {
+				const float* p = (const float*)(wheels + i * WHEEL_SIZE + WHEEL_PLACE);
+				probes[n][0] = p[0];
+				probes[n][2] = p[2];
+				n++;
+			}
+		}
+		else {
+			const float side = l->box.halfWidth * 0.8f;
+			const float corners[4][2] = { { side, l->box.front * 0.7f }, { -side, l->box.front * 0.7f }, { side, l->box.rear * 0.7f }, { -side, l->box.rear * 0.7f } };
+			for (int i = 0; i < 4; i++) {
+				probes[n][0] = corners[i][0];
+				probes[n][2] = corners[i][1];
+				n++;
+			}
+		}
+		const float fx = sinf(l->heading), fz = cosf(l->heading);
+		const float lx = fz, lz = -fx;
+		int got = 0;
+		for (int i = 0; i < n; i++) {
+			const float x = l->pos[0] + lx * probes[i][0] + fx * probes[i][2];
+			const float z = l->pos[2] + lz * probes[i][0] + fz * probes[i][2];
+			found[i] = GroundAt(x, z, l->pos[1] + 30.0f, l->pos[1] - 200.0f, &probes[i][1]);
+			got += found[i] ? 1 : 0;
+		}
+		if (!Drive::GroundUnder(l->parkPos, l->parkMatrix, l->heading, probes, found, n)) {
+			Log::TypedLog(CHN_SDL, "Cars: no ground under the car; it is left where it stood\n");
+			return;
+		}
+		Log::TypedLog(CHN_SDL, "Cars: left on the ground at %.1f (its body was at %.1f), %d of %d places under it found\n",
+			l->parkPos[1], l->pos[1], got, n);
+	}
+
 	// The box of the car driven from its wheels, for a model with no box of its own
 	static Drive::Box BoxFromWheels(const void* vehicle, const Drive::Box& fallback) {
 		const uint8_t* v = (const uint8_t*)vehicle;
@@ -682,6 +781,7 @@ namespace DriveGame {
 		strncpy_s(s_leaving.model, sizeof(s_leaving.model), s_driven.model, _TRUNCATE);
 		s_leaving.box = s_driven.box;
 		const Drive::Box wheels = BoxFromWheels(vehicle, s_driven.box);
+		ParkPlace(vehicle, &s_leaving);
 
 		// beside the driver's door if there is room (nothing between the seat and there, and ground under
 		// it), else the other side, behind, in front; on the roof if there is no room at all
@@ -715,7 +815,7 @@ namespace DriveGame {
 		if (back) {
 			back->AddChecksum(s_n.parked, s_n.parkedCar[s_leaving.slot]);
 			back->AddString(s_n.model, s_leaving.model);
-			StructAddVector(back, s_n.pos, s_leaving.pos[0], s_leaving.pos[1], s_leaving.pos[2]);
+			StructAddVector(back, s_n.pos, s_leaving.parkPos[0], s_leaving.parkPos[1], s_leaving.parkPos[2]);
 		}
 		static const char* const kWhere[4] = { "by the driver's door", "on the other side", "behind it", "in front of it" };
 		Log::TypedLog(CHN_SDL, "Cars: getting out at (%.1f %.1f %.1f), %s\n", s_leaving.door[0], s_leaving.door[1], s_leaving.door[2],
@@ -735,7 +835,7 @@ namespace DriveGame {
 		return there;
 	}
 
-	// Flickit_CarParked: the car left, as it stood (its matrix), on the list of cars to take
+	// Flickit_CarParked: the car left on the ground under it (ParkPlace), on the list of cars to take
 	static bool CFunc_CarParked(Script::LazyStruct*, DummyScript*) {
 		if (!s_leaving.set) {
 			return false;
@@ -747,9 +847,9 @@ namespace DriveGame {
 			Log::TypedLog(CHN_SDL, "Cars: the car he got out of was not made again\n");
 			return false;
 		}
-		memcpy(obj + OBJECT_POSITION, s_leaving.pos, sizeof(s_leaving.pos));
-		memcpy(obj + OBJECT_MATRIX, s_leaving.matrix, sizeof(s_leaving.matrix));
-		memcpy(obj + OBJECT_DISPLAY_MATRIX, s_leaving.matrix, sizeof(s_leaving.matrix));
+		memcpy(obj + OBJECT_POSITION, s_leaving.parkPos, sizeof(s_leaving.parkPos));
+		memcpy(obj + OBJECT_MATRIX, s_leaving.parkMatrix, sizeof(s_leaving.parkMatrix));
+		memcpy(obj + OBJECT_DISPLAY_MATRIX, s_leaving.parkMatrix, sizeof(s_leaving.parkMatrix));
 		s_parking.Park(s_leaving.slot, s_leaving.model, s_leaving.box);
 		Car* c = CarNamed(s_n.parkedCar[s_leaving.slot]);
 		if (c) {
