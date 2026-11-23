@@ -12,6 +12,7 @@
 #include "flickit_game.h"
 #include "camrel_game.h"
 #include "worldmap_game.h"
+#include "drive_game.h"
 #include "flickit_pose.h"
 #include <QB/LazyStruct.h>
 #include <QB/Qb.h>
@@ -482,6 +483,7 @@ void loadFlickitSettings() {
 		hooks = FlickitGame::Install();
 	}
 	WorldMapGame::Configure(configFile);
+	DriveGame::Configure(configFile);
 
 	loadFlickitPatterns(configFile, s.enabled && s.patterns);
 

@@ -2,6 +2,7 @@
 #include "memory.h"
 #include "bigworld.h"
 #include "camrel_game.h"
+#include "drive_game.h"
 #include <d3d9types.h>
 #include <QB/QB.h>
 #include <QB/QBKey.h>
@@ -1174,4 +1175,5 @@ void addScriptCFuncs() {
 	CFuncs::AddFunction("M_SetFOV", CFunc_SetFOV);
 	CFuncs::AddFunction("M_SetAspectRatio", CFunc_SetAspectRatio);
 	CFuncs::AddFunction("M_SetFinalScoreDisplay", CFunc_SetFinalScoreDisplay);
+	DriveGame::AddCFuncs();
 }

@@ -42,6 +42,17 @@ jobs:
           ./camrel_test
           g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -I src tests/worldmap_test.cpp -o worldmap_test
           ./worldmap_test
+          g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -I src tests/drive_test.cpp -o drive_test
+          ./drive_test
+      - name: Flickit's car scripts
+        run: |
+          # the compiler gives the game's own compiled files for these sources (but for the order of the names)
+          for f in game/misc/car_scripts game/player_controlled_vehicle game/skater/switch_control game/goal_utilities thugsdl/thugsdl_scripts; do
+            python3 scripts/flickit/qbc.py --check scripts/qb/source/scripts/$f.q scripts/qb/compiled/scripts/$f.qb
+          done
+          # and src/flickit_cars_qb.h is what scripts/flickit/cars.q compiles to
+          python3 scripts/flickit/qbc.py --header scripts/flickit/cars.q /tmp/flickit_cars_qb.h
+          diff /tmp/flickit_cars_qb.h src/flickit_cars_qb.h
 
   build:
     runs-on: windows-latest

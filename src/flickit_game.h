@@ -277,4 +277,11 @@ namespace FlickitGame {
 	// (as autosave does); his own custom restart, the pause menu's, is kept. False when the game's code for it
 	// is not as expected.
 	bool RequestTravel(const float pos[3], float heading);
+
+	// For the cars (drive_game.h). PutSkater: the local skater at pos, facing heading, now, through the
+	// game's custom restart (as travel does; his own custom restart is kept). False when he is not there
+	// after it. LineBlocked: does the line from one place to another hit what the skater collides with?
+	// Through the skater's own line test.
+	bool PutSkater(const float pos[3], float heading);
+	bool LineBlocked(const float from[3], const float to[3]);
 }

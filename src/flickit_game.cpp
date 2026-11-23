@@ -3,6 +3,7 @@
 #include "watchdog.h"
 #include "autosave.h"
 #include "bigworld.h"
+#include "drive_game.h"
 
 #include <windows.h>
 #include <string.h>
@@ -3159,12 +3160,10 @@ namespace FlickitGame {
 		return AutosaveReady() && SkipTo(skater, pos, matrix, 0);
 	}
 
-	// To the spot, with a matrix turned to its heading (the rows as the game keeps them: side, up, the way
-	// he faces)
-	static void Travel(uint8_t* skater) {
-		float m[16];
-		memcpy(m, skater + OBJECT_MATRIX, sizeof(m));
-		const float c = cosf(s_travelHeading), s = sinf(s_travelHeading);
+	// His matrix turned to a heading, level (the rows as the game keeps them: side, up, the way he faces)
+	static void HeadingMatrix(const uint8_t* skater, float heading, float m[16]) {
+		memcpy(m, skater + OBJECT_MATRIX, 16 * sizeof(float));
+		const float c = cosf(heading), s = sinf(heading);
 		m[0] = c;
 		m[1] = 0.0f;
 		m[2] = -s;
@@ -3174,6 +3173,37 @@ namespace FlickitGame {
 		m[8] = s;
 		m[9] = 0.0f;
 		m[10] = c;
+	}
+
+	bool PutSkater(const float pos[3], float heading) {
+		uint8_t* skater = LocalSkater();
+		if (!s_installed || !skater || !AutosaveReady() || !Watchdog::Sane(pos, 3) || !(heading == heading)) {
+			return false;
+		}
+		float m[16];
+		HeadingMatrix(skater, heading, m);
+		return SkipTo(skater, pos, m, 0);
+	}
+
+	bool LineBlocked(const float from[3], const float to[3]) {
+		uint8_t* skater = LocalSkater();
+		uint8_t* core = skater ? (uint8_t*)GetComponent(skater, kSkaterCorePhysics) : 0;
+		if (!s_installed || !core || !Watchdog::Sane(from, 3) || !Watchdog::Sane(to, 3)) {
+			return false;
+		}
+		float* start = (float*)(core + CORE_LINE_START);
+		float* end = (float*)(core + CORE_LINE_END);
+		memcpy(start, from, 3 * sizeof(float));
+		start[3] = 1.0f;
+		memcpy(end, to, 3 * sizeof(float));
+		end[3] = 1.0f;
+		return LineHit(core, 0x10, 0);
+	}
+
+	// To the spot, with a matrix turned to its heading
+	static void Travel(uint8_t* skater) {
+		float m[16];
+		HeadingMatrix(skater, s_travelHeading, m);
 		bool ran = false;
 		const bool there = SkipTo(skater, s_travelPos, m, &ran);
 		Log::TypedLog(CHN_SDL, "Map: %s (%.1f %.1f %.1f) facing %.0f degrees%s\n",
@@ -3202,6 +3232,20 @@ namespace FlickitGame {
 		}
 	}
 
+	// The cars (drive_game.h): him as they need him, once a frame after the game has read his pad
+	static void CarsFrame(uint8_t* skater, const uint8_t* core, uint8_t* input) {
+		const uint8_t* state = *(const uint8_t* const*)(core + CORE_STATE);
+		DriveGame::Skater s;
+		s.object = skater;
+		s.pos = (const float*)(skater + OBJECT_POSITION);
+		s.triangle = input + INPUT_GRIND_PRESSED;
+		s.driving = state && state[STATE_DRIVING] != 0;
+		s.free = state && !s.driving && state[STATE_BAILING] == 0 && *(const int32_t*)(state + STATE_STATE) == 0
+			&& input[INPUT_DISABLED] == 0 && input[INPUT_NET_DISABLED] == 0
+			&& Watchdog::Sane((const float*)(skater + OBJECT_POSITION), 3);
+		DriveGame::PadFrame(s);
+	}
+
 	static void __fastcall PadUpdateHook(uint8_t* pad, void* /*edx*/, void* data) {
 		PadUpdate(pad, data);
 		if (s_turnKept && s_turnKept + INPUT_PAD == pad) {
@@ -3218,6 +3262,7 @@ namespace FlickitGame {
 		}
 		AutosaveFrame(skater, (uint8_t*)core);
 		MapFrame(skater, core);
+		CarsFrame(skater, core, input);
 		RailExitFrame(skater, (uint8_t*)core);
 		ShowCrouch(skater);
 		KeepStance(skater);
