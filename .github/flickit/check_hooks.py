@@ -73,6 +73,9 @@ they have to keep to what the game's code expects there, whatever the compiler m
                 that answers with the address to go on at, and jumps there with the stack as it found
                 it. That address is the game's GetPhysicsFloat or a function of the DLL that returns
                 a small number the way the game expects a number back (on the x87 stack, plain ret)
+  trigger       jumped to from the start of the game's run of a touched trigger face's script, which
+                pops four arguments (this in ecx): every return is ret 10h. It finds the face's node
+                with the game's own look-up of a node by its name (drive_game.cpp)
 
 The functions are found without symbols: their addresses are in the DLL's relocation table (they are
 handed to patchCall), and each one refers to the address of the game function it stands in for. The
@@ -113,6 +116,7 @@ BLEND_START = 0x00430F20
 POSE_BLEND = 0x00431B60
 GAME_FREE = 0x005F9924
 SETUP_BACK = 0x004B6291
+FIND_NAMED_NODE = 0x00530AE0
 
 # push ecx / push edx / push esi / call ... / add esp, 4 / pop edx / pop ecx / ret
 RAIL_CATCH_PATTERN = bytes.fromhex("515256e8") + b"...." + bytes.fromhex("83c4045a59c3")
@@ -167,6 +171,7 @@ NAMES = {
     POSE_BLEND: "the pose of an animated object",
     GAME_FREE: "the game's free",
     SETUP_BACK: "the end of the mesh setup, after the two instructions jumped over",
+    FIND_NAMED_NODE: "the look-up of a node by its name",
 }
 
 
@@ -408,6 +413,7 @@ def check(path):
     brake, kick, friction, turning, held, pad = [], [], [], [], [], []
     air_turn, spin_rate, anim_finished, anim_wait = [], [], [], []
     blend_start, pose = [], []
+    trigger = []
     mesh_draw, mesh_setup, copy_free = [], [], []
     frame_end = []
     for p in sorted(set(dll.entry(p) for p in pointers)):
@@ -470,6 +476,8 @@ def check(path):
             pose.append((p, insns))
         elif GAME_FREE in refs:
             copy_free.append((p, insns))
+        elif FIND_NAMED_NODE in refs:
+            trigger.append((p, insns))
 
     # --- rail catch
     if len(catch) != 1:
@@ -539,7 +547,8 @@ def check(path):
                                      (turning, "turning hook", 1, 0), (held, "held hook", 1, 4), (pad, "pad update hook", 1, 4),
                                      (air_turn, "air turning hook", 1, 0), (spin_rate, "spin rate hook", 1, 4),
                                      (anim_finished, "anim finished hook", 1, 0), (anim_wait, "anim wait hook", 1, 0),
-                                     (blend_start, "blend start hook", 1, 4), (pose, "pose hook", 1, 0)):
+                                     (blend_start, "blend start hook", 1, 4), (pose, "pose hook", 1, 0),
+                                     (trigger, "trigger hook", 1, 0x10)):
         if len(found) != count:
             problems.append("the %s was found %d times, not %d" % (what, len(found), count))
         for p, insns in found:

@@ -35,8 +35,24 @@ Circle by a car            take it (hold Triangle in it to stop and get out)
 Circle by another player   his card
 F6 (keyboard)              start / stop recording a run for the fake players
 
-New in this build: fake players, to try the online mode from one end
---------------------------------------------------------------------
+New in this build: the crash at the highway barricades
+------------------------------------------------------
+The crash driving into the barricades on Jersey's highway (at
+0x004110B3, "Read of 0x00000000"):
+  - When a car's feelers or the skater touch a "trigger" face (one that
+    runs a script, like a gap or a kill zone), the game looks up that
+    face's node and reads its script without checking it found one. The
+    node it looked for was missing, and it read through nothing.
+  - The DLL now checks first: a trigger face whose node is missing is
+    left alone, and the game goes on. Which node it was goes into
+    flickit_watchdog.txt once, on a line that starts "Triggers:".
+    Please send that file if you see one: it says which piece of the
+    world (or which car) has the bad face, so it can be fixed in the
+    level too.
+  - Not tried in the game yet.
+
+Fake players, to try the online mode from one end (the last build)
+------------------------------------------------------------------
 Other skaters in your world, each with his card. For now they are fake:
 they skate runs you record yourself, with made-up names, sponsors,
 story and stats. Once seeing them works, only seeing real players
@@ -73,7 +89,7 @@ needs a second player to try with.
     (floating, sunk, turned the wrong way) or in the wrong animation, a
     screenshot and the log lines that start "Players:" help.
 
-Three car fixes, and cars go back after two minutes (the last build)
+Three car fixes, and cars go back after two minutes (two builds ago)
 --------------------------------------------------------------------
 The three things from your last screenshots:
   - The crash on top of a car you had parked (at 0x004110B3): a parked
@@ -117,8 +133,8 @@ the level has one car fewer in its traffic.
     3600). 0 leaves the cars standing, as before.
   - Not tried in the game yet.
 
-A guard for the crash while driving (two builds ago)
-----------------------------------------------------
+A guard for the crash while driving (three builds ago)
+------------------------------------------------------
 The crash while driving (at 0x0041FBB3, "Read of 0x003B0042") was the
 game's pointer to its object manager, which every look-up of an object
 by its name goes through: something had written 0x003B003A over it, and
@@ -138,8 +154,8 @@ box, so this build watches that pointer:
   - [Flickit] Guard=0 switches it off.
   - Not tried in the game yet.
 
-The drive prompt, and parked cars on the ground (three builds ago)
-------------------------------------------------------------------
+The drive prompt, and parked cars on the ground (four builds ago)
+-----------------------------------------------------------------
   - Near enough to a car to take it, the game's own "Press Circle to
     drive." box shows (the one its own drivable cars have). It goes
     when you move away.
@@ -148,7 +164,7 @@ The drive prompt, and parked cars on the ground (three builds ago)
     body up on its springs, and the parked car was put there.
   - Not tried in the game yet.
 
-Circle takes a car (four builds ago)
+Circle takes a car (five builds ago)
 ------------------------------------
 Circle (B on an Xbox pad) by a car takes it, the button the game gets
 into its own drivable cars with ("Press Circle to drive"). The build
@@ -156,8 +172,8 @@ before it used Triangle. Getting out is the game's own, as before:
 hold Triangle. A grab the triggers make (TriggerGrabs) takes no car:
 only the Circle button itself does.
 
-Cars (five builds ago)
-----------------------
+Cars (six builds ago)
+---------------------
 Any car can be taken, like in GTA, a moving one too.
   - Walk or skate up to a car (near enough to touch it, from any side)
     and press Circle (B on an Xbox pad). You are in it, where it was and
@@ -180,8 +196,8 @@ Any car can be taken, like in GTA, a moving one too.
   - [Flickit] Cars=0 switches it off. CarReach=45 is how near you have
     to be to a car's body, in game units (10 to 200).
 
-The map (six builds ago)
-------------------------
+The map (seven builds ago)
+--------------------------
 A map of the joined world from above, like Skate's, with spots to travel
 to.
   - Hold Back (the camera button) for a moment to open it; a tap still
@@ -208,8 +224,8 @@ to.
     MapKey=16 the key (an SDL scancode; 16 is M). With MapButton set to
     a button of its own, a press opens the map.
 
-More for the blue screen (six builds ago)
------------------------------------------
+More for the blue screen (seven builds ago)
+-------------------------------------------
 The blue screen came back with the watchdog in, so the watchdog now looks
 further and keeps what it sees. Not tried in the game yet.
   - Its notes go to flickit_watchdog.txt next to THUG-SDL.exe, each with
@@ -225,7 +241,7 @@ further and keeps what it sees. Not tried in the game yet.
     time it happened. F9 while the screen is blue adds where things
     stand at that moment.
 
-Camera-relative drawing (seven builds ago)
+Camera-relative drawing (eight builds ago)
 ------------------------------------------
 For the decals that still flash far from New Jersey (in Manhattan and
 Tampa). The game draws the level from points measured from New Jersey's
@@ -246,8 +262,8 @@ Not tried in the game yet.
   - [Render] CameraRelative=0 leaves the game's drawing alone (from the
     next start); CameraRelativeKey=64 is F7 (an SDL scancode; 0: no key).
 
-Autosave (eight builds ago)
----------------------------
+Autosave (nine builds ago)
+--------------------------
 The game keeps where the skater last was on the ground, and when the
 level loads again it puts him back there.
   - While he skates on the ground (not in the air, on a rail or a lip,
@@ -266,8 +282,8 @@ level loads again it puts him back there.
     name of their load script (load_NY, load_FL ...). Each keeps its own
     spot. Delete flickit_autosave.txt to start at the level's start.
 
-A watchdog for the blue screen (nine builds ago)
-------------------------------------------------
+A watchdog for the blue screen (ten builds ago)
+-----------------------------------------------
 The blue screen with the score still counting is the game drawing nothing
 but its clear colour: the skater's (or the camera's) numbers have stopped
 being numbers, and stay that way. This build watches them every frame.
@@ -284,13 +300,13 @@ being numbers, and stay that way. This build watches them every frame.
     exe keeps its large-address flag (the main block is 360 MB then). It
     tells whether the blue screen only happens with memory above 2 GB.
 
-A bigger main block for a bigger world (ten builds ago)
--------------------------------------------------------
+A bigger main block for a bigger world (eleven builds ago)
+----------------------------------------------------------
 The game loads a level's files into one block of memory, 360 MB in
 THUG-SDL. A level's scene file sits in it whole while the level loads,
 and New Jersey with Manhattan and Tampa at 4x is a 230 MB scene file, so
 the next districts would not fit. With the large-address flag on
-THUG-SDL.exe (the 4 GB test from thirteen builds ago), the build makes the
+THUG-SDL.exe (the 4 GB test from fourteen builds ago), the build makes the
 block 1024 MB. Without the flag nothing changes.
   - The log says: Memory: the game's main block will be 1024 MB (...)
     and, once the game has it (F9 adds it again):
@@ -302,7 +318,7 @@ block 1024 MB. Without the flag nothing changes.
   - HighMemoryTest=1 can go back to 0 now: it holds all the address space
     below 2 GB, which a bigger block and the 4x textures need too.
 
-Room for a bigger world (eleven builds ago)
+Room for a bigger world (twelve builds ago)
 -------------------------------------------
 Two more of the game's fixed limits, for a world made of more levels than
 New Jersey and Manhattan:
@@ -326,8 +342,8 @@ adds to every level for goals made in the goal editor.)
 BigNodeNames=0 or BigLights=0 under [Memory] in thugsdl.ini puts the
 game's own back.
 
-Room for two levels in one (twelve builds ago)
-----------------------------------------------
+Room for two levels in one (thirteen builds ago)
+------------------------------------------------
 The game keeps its scripts, and every level's list of rails, objects and
 restart points, in a heap of its own with fixed-size pools inside it, and
 every table it looks things up in takes its overflow from one more fixed
@@ -339,7 +355,7 @@ set; with Console=1 and WriteFile=1 under [Logger] the log says:
     Memory: script memory 8 times as big: a 31.6 MB heap, ... 100000 hash table items
 [Memory] BigScriptMemory=0 in thugsdl.ini leaves it all as the game has it.
 
-A test for more memory (optional, thirteen builds ago)
+A test for more memory (optional, fourteen builds ago)
 ------------------------------------------------------
 For one big open world the game will need more than the 2 GB of address
 space a 32-bit program gets. One bit in the exe, the large-address flag,
@@ -368,8 +384,8 @@ gives it 4 GB on a 64-bit Windows. Whether THUG copes with memory above
   - Undo: "Large address off.bat", or delete THUG-SDL.exe and rename
     THUG-SDL.exe.before-large-address back.
 
-The board's angle has its say in the grind (fourteen builds ago)
-----------------------------------------------------------------
+The board's angle has its say in the grind (fifteen builds ago)
+---------------------------------------------------------------
   - Coming in at an angle, the board was swung straight for whatever the
     stick asked for: a board that looked like a crooked came down a 50-50,
     one coming in across the rail with the stick down a 5-0. In Skate the
@@ -391,7 +407,7 @@ The board's angle has its say in the grind (fourteen builds ago)
   - The log line of every grind now says the board's angle to the rail,
     which end pointed onto it, and what the stick alone would have given.
 
-No balance meter on a rail (fifteen builds ago)
+No balance meter on a rail (sixteen builds ago)
 -----------------------------------------------
   - Grinds and slides no longer show THUG's balance meter. The board
     cannot lose its balance on a rail, so the meter only ever sat in the
@@ -400,8 +416,8 @@ No balance meter on a rail (fifteen builds ago)
   - GrindBalance=1 in the [Flickit] section gives grinds THUG's balance
     back, and the meter with it.
 
-The turn stays the trucks' (sixteen builds ago)
------------------------------------------------
+The turn stays the trucks' (seventeen builds ago)
+-------------------------------------------------
   - The turn no longer drops into THUG's sharp turn now and then. THUG
     reads Down from how far down the stick is, whatever it does to the
     side, and from 40% of the way down that is Down. So a stick pushed
@@ -415,8 +431,8 @@ The turn stays the trucks' (sixteen builds ago)
     is THUG's own turning again; Steering=200 keeps the trucks and turns
     at speed about as tightly as THUG does.
 
-Off the rail like Skate (seventeen builds ago)
-----------------------------------------------
+Off the rail like Skate (eighteen builds ago)
+---------------------------------------------
   - When a grind runs out of speed, the board is pushed off to one side
     and the skater drops, as in Skate. Off a ledge he always goes over
     the edge, away from the top, and lands on the ground below; off a
@@ -435,7 +451,7 @@ Off the rail like Skate (seventeen builds ago)
     "Flickit: out of speed on the rail: off to his left (away from the
     ledge; a surface on his right), 80 units/s sideways".
 
-Salads slow down on the rail (eighteen builds ago)
+Salads slow down on the rail (nineteen builds ago)
 --------------------------------------------------
   - The FS and BS salad lost no speed on a rail: they lasted as long as
     the rail did. Now they slow down and step off like every other grind.
@@ -451,8 +467,8 @@ Salads slow down on the rail (eighteen builds ago)
     script name; its script leaves the balance of the rail to a grind
     before it, so Flickit started it)".
 
-The flicks go by his feet (nineteen builds ago)
------------------------------------------------
+The flicks go by his feet (twenty builds ago)
+---------------------------------------------
   - As in Skate, the kickflip goes toward the skater's heels. Left foot
     forward (a regular skater in his own stance): the kickflip is down,
     flick up-left, the heelflip up-right, the pop shove-it a drag to the
@@ -470,8 +486,8 @@ The flicks go by his feet (nineteen builds ago)
     kickflip is ("Flickit: left foot forward (regular): the kickflip is the
     flick up-left") when he is first seen and whenever it changes.
 
-Nollies (twenty builds ago)
----------------------------
+Nollies (twenty-one builds ago)
+-------------------------------
   - Push the right stick up and the skater goes into THUG's nollie stance
     and crouches, as deep as the stick is pushed (a third of the way is
     enough; further = a higher nollie).
@@ -492,15 +508,15 @@ Nollies (twenty builds ago)
   - With the console on, the log says "Flickit: the stick crouches up:
     nollie stance" and "Flickit: out of nollie stance".
 
-The crouch you see (twenty-one builds ago)
+The crouch you see (twenty-two builds ago)
 ------------------------------------------
   - The skater crouches as deep as the stick is pulled: a little at a third
     of the way, THUG's full crouch all the way down, and anything between.
     Easing the stick back up eases him back up. CrouchPose=0 in the
     [Flickit] section gives THUG's one crouch back.
 
-The stick (twenty-two builds ago)
----------------------------------
+The stick (twenty-three builds ago)
+-----------------------------------
   - Weak flicks count, as in Skate: a crouch starts a third of the way down,
     and a flick 40 percent of the way out pops. If your thugsdl.ini already
     has a [Flickit] section, change these four lines in it (the new section

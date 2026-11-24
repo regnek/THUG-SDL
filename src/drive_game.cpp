@@ -11,6 +11,7 @@
 #include "config.h"
 #include "flickit.h"
 #include "flickit_game.h"
+#include "patch.h"
 #include "QB/CFuncs.h"
 #include "QB/LazyArray.h"
 #include "QB/LazyStruct.h"
@@ -1019,6 +1020,139 @@ namespace DriveGame {
 
 	/******************************************************************/
 	/*                                                                */
+	/*  A trigger face with no node                                   */
+	/*                                                                */
+	/******************************************************************/
+
+	// 0x00456840 runs the TriggerScript of a trigger face something touched (0x004569E0 calls it for the faces
+	// a feeler of a car or of the skater meets, and the skater's physics call it as well): this a component of
+	// what touched it, then the kind of touch, the name of the face's node, the nodes of the object the face is
+	// on (its NodeArray component's, or none for the level's faces), and that object. It finds the node in
+	// those nodes, or in the level's (0x00530AE0, -1 for none), and reads its TriggerScript without a look at
+	// what it found: a node not in the level's nodes is CArray::GetStructure(-1), and an object whose nodes
+	// are an empty list leaves no node at all. Either reads through nothing in CStruct::GetChecksum: the crash
+	// at 0x004110B3 (a car into the barricades on Jersey's highway). An object's own nodes that do not name the
+	// face run the TriggerScript of their first node instead.
+	//
+	// The function now starts in TriggerTouched, which finds the node the way the game does and runs the game's
+	// own function only when there is one; else it writes down once which node was missing. The game's first
+	// three instructions go to a piece of code of the DLL's that goes on in the game's function after them.
+	typedef void(__thiscall* TriggerTouched_t)(void* self, uint32_t touch, uint32_t node, void* nodes, void* object);
+	typedef int32_t(__cdecl* FindNamedNode_t)(uint32_t name, int assertIfMissing);
+	static const FindNamedNode_t FindNamedNode = (FindNamedNode_t)0x00530AE0;   // (BigWorld's when BigNodeNames is on)
+	static const uint32_t kTriggerTouched = 0x00456840;
+	static const uint8_t kTriggerStart[] = { 0x83, 0xEC, 0x08, 0x53, 0x8B, 0x5C, 0x24, 0x18, 0x56, 0x57, 0x33, 0xFF };   // sub esp, 8 / push ebx / mov ebx, [esp+18h] / ...
+	static const uint8_t kTriggerEnd[] = { 0xC2, 0x10, 0x00 };          // its ret 10h at 0x0045696A
+	static const uint8_t kTriggerRead[] = { 0x53, 0x8D, 0x44, 0x24, 0x20, 0x50, 0x68, 0x99, 0xA2, 0xA8, 0x2C, 0x8B, 0xCF };   // GetChecksum(TriggerScript) on the node it found
+	enum { kTriggerCopied = 8 };                                        // the three instructions moved: 8 bytes
+	static uint8_t* s_triggerGame = 0;                                  // the moved instructions, then a jump back
+	static bool s_triggerHooked = false;
+	static uint32_t s_triggerSaid[32];
+	static int s_triggerSaidCount = 0;
+
+	static const char* ObjectNodesName(const void* nodes, uint32_t node, int32_t* found) {
+		const uint32_t count = *(const uint32_t*)((const uint8_t*)nodes + 8);
+		*found = -1;
+		if (count == 0) {
+			return "the object's own nodes are an empty list";
+		}
+		for (uint32_t i = 0; i < count; i++) {
+			void* n = ArrayStructure((void*)nodes, i);
+			uint32_t name = 0;
+			if (n && StructChecksum(n, s_n.name, &name, 0) && name == node) {
+				*found = (int32_t)i;
+				return 0;
+			}
+		}
+		return "the object's own nodes have no node of that name";
+	}
+
+	static void TriggerMissing(uint32_t node, const void* object, const char* why) {
+		for (int i = 0; i < s_triggerSaidCount; i++) {
+			if (s_triggerSaid[i] == node) {
+				return;
+			}
+		}
+		if (s_triggerSaidCount < (int)(sizeof(s_triggerSaid) / sizeof(s_triggerSaid[0]))) {
+			s_triggerSaid[s_triggerSaidCount++] = node;
+		}
+		char text[256];
+		if (object) {
+			const float* p = (const float*)((const uint8_t*)object + OBJECT_POSITION);
+			sprintf_s(text, sizeof(text), "Triggers: a trigger face of node %08X was touched, on object %08X at (%.0f %.0f %.0f): %s; nothing was run (the game read through nothing here: the crash at 0x004110B3)",
+				node, *(const uint32_t*)((const uint8_t*)object + 0x14), p[0], p[1], p[2], why);
+		}
+		else {
+			sprintf_s(text, sizeof(text), "Triggers: a trigger face of node %08X was touched, in the level's collision: %s; nothing was run (the game read through nothing here: the crash at 0x004110B3)",
+				node, why);
+		}
+		Log::TypedLog(CHN_SDL, "%s\n", text);
+		FlickitGame::WatchNote(text);
+	}
+
+	static void __fastcall TriggerTouched(void* self, void* /*edx*/, uint32_t touch, uint32_t node, void* nodes, void* object) {
+		if (s_n.nodeArray == 0) {
+			InitNames();
+		}
+		const char* why = 0;
+		if (nodes) {
+			int32_t found = -1;
+			why = ObjectNodesName(nodes, node, &found);
+		}
+		else {
+			const int32_t index = FindNamedNode(node, 0);
+			void* level = GetGlobalArray(s_n.nodeArray, 0);
+			const uint32_t count = level ? *(const uint32_t*)((const uint8_t*)level + 8) : 0;
+			if (index < 0 || (uint32_t)index >= count || !ArrayStructure(level, (uint32_t)index)) {
+				why = "the level has no node of that name";
+			}
+		}
+		if (why) {
+			TriggerMissing(node, object, why);
+			return;
+		}
+		// the object's own node is looked up in the level's as well, for the script's parameters: an object
+		// that is not a node of the level (a car he left, his car) is left out of that, as the game would
+		// have it if it had looked
+		if (object) {
+			const int32_t index = FindNamedNode(*(const uint32_t*)((const uint8_t*)object + 0x14), 0);
+			void* level = GetGlobalArray(s_n.nodeArray, 0);
+			const uint32_t count = level ? *(const uint32_t*)((const uint8_t*)level + 8) : 0;
+			if (index < 0 || (uint32_t)index >= count) {
+				object = 0;
+			}
+		}
+		((TriggerTouched_t)s_triggerGame)(self, touch, node, nodes, object);
+	}
+
+	static void HookTriggers() {
+		if (s_triggerHooked) {
+			return;
+		}
+		if (memcmp((const void*)(uintptr_t)kTriggerTouched, kTriggerStart, sizeof(kTriggerStart)) != 0
+			|| memcmp((const void*)(uintptr_t)0x0045696A, kTriggerEnd, sizeof(kTriggerEnd)) != 0
+			|| memcmp((const void*)(uintptr_t)0x004568FE, kTriggerRead, sizeof(kTriggerRead)) != 0) {
+			Log::TypedLog(CHN_SDL, "Triggers: the game's code for a touched trigger face is not what was expected; left as it is\n");
+			return;
+		}
+		uint8_t* code = (uint8_t*)VirtualAlloc(NULL, 32, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+		if (!code) {
+			Log::TypedLog(CHN_SDL, "Triggers: no memory for the hook of a touched trigger face; left as it is\n");
+			return;
+		}
+		memcpy(code, (const void*)(uintptr_t)kTriggerTouched, kTriggerCopied);
+		code[kTriggerCopied] = 0xE9;
+		*(uint32_t*)(code + kTriggerCopied + 1) = (kTriggerTouched + kTriggerCopied) - ((uint32_t)(uintptr_t)code + kTriggerCopied + 5);
+		FlushInstructionCache(GetCurrentProcess(), code, 32);
+		s_triggerGame = code;
+		patchJump((void*)(uintptr_t)kTriggerTouched, (void*)&TriggerTouched);
+		FlushInstructionCache(GetCurrentProcess(), (void*)(uintptr_t)kTriggerTouched, 8);
+		s_triggerHooked = true;
+		Log::TypedLog(CHN_SDL, "Triggers: a trigger face whose node is missing is left alone (it crashed the game at 0x004110B3)\n");
+	}
+
+	/******************************************************************/
+	/*                                                                */
 	/*  Settings                                                      */
 	/*                                                                */
 	/******************************************************************/
@@ -1043,6 +1177,10 @@ namespace DriveGame {
 	}
 
 	void Configure(const char* configFile) {
+		// (for cars or not: the skater touches trigger faces too)
+		if (FlickitGame::Installed()) {
+			HookTriggers();
+		}
 		s_on = GetPrivateProfileIntA(FLICKIT_SECTION, "Cars", 1, configFile) != 0;
 		int reach = (int)GetPrivateProfileIntA(FLICKIT_SECTION, "CarReach", 45, configFile);
 		reach = reach < 10 ? 10 : (reach > 200 ? 200 : reach);
