@@ -1507,23 +1507,25 @@ void pollController(device* dev, SDL_GameController* controller) {
 						}
 					}
 				}
-				// D-Pad
-				if (SDL_GameControllerGetButton(controller, (SDL_GameControllerButton)padbinds.up)) {
+				// D-Pad: while a player's card or the players' list is up it is theirs, and the game gets the rest
+				// of the controller (worldmap_game.h); Flickit's own directions for its tricks still come after
+				const bool dpadOurs = dev->port == 0 && WorldMapGame::DpadTaken(controller);
+				if (!dpadOurs && SDL_GameControllerGetButton(controller, (SDL_GameControllerButton)padbinds.up)) {
 					dev->controlData[2] |= 0x01 << 4;
 					dev->controlData[10] = 0xFF;
 					//dev->controlData[7] = 0;
 				}
-				if (SDL_GameControllerGetButton(controller, (SDL_GameControllerButton)padbinds.right)) {
+				if (!dpadOurs && SDL_GameControllerGetButton(controller, (SDL_GameControllerButton)padbinds.right)) {
 					dev->controlData[2] |= 0x01 << 5;
 					dev->controlData[8] = 0xFF;
 					//dev->controlData[6] = 255;
 				}
-				if (SDL_GameControllerGetButton(controller, (SDL_GameControllerButton)padbinds.down)) {
+				if (!dpadOurs && SDL_GameControllerGetButton(controller, (SDL_GameControllerButton)padbinds.down)) {
 					dev->controlData[2] |= 0x01 << 6;
 					dev->controlData[11] = 0xFF;
 					//dev->controlData[7] = 255;
 				}
-				if (SDL_GameControllerGetButton(controller, (SDL_GameControllerButton)padbinds.left)) {
+				if (!dpadOurs && SDL_GameControllerGetButton(controller, (SDL_GameControllerButton)padbinds.left)) {
 					dev->controlData[2] |= 0x01 << 7;
 					dev->controlData[9] = 0xFF;
 					//dev->controlData[6] = 0;

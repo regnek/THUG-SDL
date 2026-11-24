@@ -126,8 +126,15 @@ namespace WorldMapGame {
 	static Players::Identity s_cardWho;
 	static bool s_cardOpen = false;
 	static int s_cardPick = 0;
-	static WorldMap::Pad s_cardWas;     // the pad on the look before: a press is a button going down
-	static int s_cardStickWas = 0;      // the stick up (-1) or down (1) on the look before
+
+	// The card and the list take only the d-pad (and the keyboard's arrows): the game gets the rest of the
+	// controller, so he skates on. The directions as they were on the look before: a press is one going down.
+	struct Dpad {
+		bool up, down, left, right;
+	};
+	static Dpad s_cardWas = { true, true, true, true };
+	static bool s_dpadHold = false;     // after the card or the list: the d-pad kept from the game until let go
+	static uint32_t s_dpadHoldSince = 0;
 	static std::string s_cardMessage;
 	static uint32_t s_cardMessageUntil = 0;
 	static bool s_cardFromList = false; // opened from the players' list: closing it goes back to the list
@@ -139,8 +146,7 @@ namespace WorldMapGame {
 	static bool s_listOpen = false;
 	static int s_listPick = 0;          // the row picked
 	static int s_listSlot = -1;         // whose row it is: the pick stays with him as the rows move
-	static WorldMap::Pad s_listWas;
-	static int s_listStickWas = 0;
+	static Dpad s_listWas = { true, true, true, true };
 	static bool s_listButtonWas = true; // down on the look before (down at the start: not a press)
 	static bool s_listKeyWas = true;
 	static std::vector<PlayersGame::Listed> s_listRows;
@@ -422,6 +428,27 @@ namespace WorldMapGame {
 		}
 	}
 
+	// The d-pad and the keyboard's arrows (the game steers with WASD, not the arrows)
+	static Dpad ReadDpad(SDL_GameController* c, const Uint8* keys) {
+		Dpad d;
+		d.up = (c && Button(c, SDL_CONTROLLER_BUTTON_DPAD_UP)) || Key(keys, SDL_SCANCODE_UP);
+		d.down = (c && Button(c, SDL_CONTROLLER_BUTTON_DPAD_DOWN)) || Key(keys, SDL_SCANCODE_DOWN);
+		d.left = (c && Button(c, SDL_CONTROLLER_BUTTON_DPAD_LEFT)) || Key(keys, SDL_SCANCODE_LEFT);
+		d.right = (c && Button(c, SDL_CONTROLLER_BUTTON_DPAD_RIGHT)) || Key(keys, SDL_SCANCODE_RIGHT);
+		if (Key(keys, SDL_SCANCODE_UP) || Key(keys, SDL_SCANCODE_DOWN) || Key(keys, SDL_SCANCODE_LEFT) || Key(keys, SDL_SCANCODE_RIGHT)) {
+			s_keyboardLast = true;
+		}
+		else if (c && (d.up || d.down || d.left || d.right)) {
+			s_keyboardLast = false;
+		}
+		return d;
+	}
+
+	static bool AnyDpad(SDL_GameController* c) {
+		return c && (Button(c, SDL_CONTROLLER_BUTTON_DPAD_UP) || Button(c, SDL_CONTROLLER_BUTTON_DPAD_DOWN)
+			|| Button(c, SDL_CONTROLLER_BUTTON_DPAD_LEFT) || Button(c, SDL_CONTROLLER_BUTTON_DPAD_RIGHT));
+	}
+
 	static void MarkSpot() {
 		WorldMap::Spot s;
 		s.x = s_where.pos[0];
@@ -590,13 +617,12 @@ namespace WorldMapGame {
 		return NULL;
 	}
 
-	static void OpenList(const WorldMap::Pad& now);
+	static void OpenList(const Dpad& now);
 
-	static void OpenCard(const WorldMap::Pad& now) {
+	static void OpenCard(const Dpad& now) {
 		ScreenSize();
 		s_cardPick = 0;
-		s_cardWas = now;                // what is down already (the Circle that asked) does nothing
-		s_cardStickWas = now.ly < -0.5f ? -1 : (now.ly > 0.5f ? 1 : 0);
+		s_cardWas = now;                // a direction down already does nothing
 		s_cardMessage.clear();
 		s_toast.clear();
 		s_overlayLevel = LevelNow();
@@ -609,9 +635,15 @@ namespace WorldMapGame {
 			s_cardFromList ? ", from the list" : "");
 	}
 
-	// The game goes on under the card: closing it is only a matter of the buttons still down. back: to the
-	// list, if it came from there.
-	static void CloseCard(bool back, const WorldMap::Pad& now) {
+	// The d-pad stays the card's and the list's until it is let go, so the press that closed one does not
+	// reach the game
+	static void HoldDpad() {
+		s_dpadHold = true;
+		s_dpadHoldSince = GetTickCount();
+	}
+
+	// The game goes on under the card. back: to the list, if it came from there.
+	static void CloseCard(bool back, const Dpad& now) {
 		s_cardOpen = false;
 		if (back && s_cardFromList) {
 			s_cardFromList = false;
@@ -619,39 +651,33 @@ namespace WorldMapGame {
 			return;
 		}
 		s_cardFromList = false;
-		s_holdOff = true;
-		s_holdOffSince = GetTickCount();
+		HoldDpad();
 	}
 
-	static void CardFrame(uint8_t* cd, SDL_GameController* c, const Uint8* keys, bool menuUp) {
+	// Up and down choose, right takes, left closes (back to the list, if it came from there)
+	static void CardFrame(SDL_GameController* c, const Uint8* keys, bool menuUp) {
+		const Dpad d = ReadDpad(c, keys);
 		const char* end = OverlayEnd(menuUp);
 		if (end) {
 			Log::TypedLog(CHN_SDL, "Map: the card closed: %s\n", end);
 			s_cardFromList = false;
-			CloseCard(false, ReadPad(c, keys));
-			if (!menuUp) {
-				Blank(cd, true);
-			}
+			CloseCard(false, d);
 			return;
 		}
-		const WorldMap::Pad p = ReadPad(c, keys);
-		const int stick = p.ly < -0.5f ? -1 : (p.ly > 0.5f ? 1 : (fabsf(p.ly) < 0.3f ? 0 : s_cardStickWas));
 		int move = 0;
-		if ((p.up && !s_cardWas.up) || (stick < 0 && s_cardStickWas >= 0)) {
+		if (d.up && !s_cardWas.up) {
 			move = -1;
 		}
-		if ((p.down && !s_cardWas.down) || (stick > 0 && s_cardStickWas <= 0)) {
+		if (d.down && !s_cardWas.down) {
 			move = 1;
 		}
 		s_cardPick = (s_cardPick + move + kCardItemCount) % kCardItemCount;
-		const bool choose = p.a && !s_cardWas.a;
-		const bool close = (p.b && !s_cardWas.b) || (p.back && !s_cardWas.back) || (p.start && !s_cardWas.start);
-		s_cardWas = p;
-		s_cardStickWas = stick;
+		const bool choose = d.right && !s_cardWas.right;
+		const bool close = d.left && !s_cardWas.left;
+		s_cardWas = d;
 		if (close || (choose && kCardItems[s_cardPick].built)) {
 			Log::TypedLog(CHN_SDL, "Map: the card of %s, closed\n", s_cardWho.name);
-			CloseCard(true, p);
-			Blank(cd, true);
+			CloseCard(true, d);
 			return;
 		}
 		if (choose) {
@@ -659,7 +685,6 @@ namespace WorldMapGame {
 			s_cardMessageUntil = GetTickCount() + 2600;
 			Log::TypedLog(CHN_SDL, "Map: %s with %s: not built yet\n", kCardItems[s_cardPick].text, s_cardWho.name);
 		}
-		Blank(cd, true);
 	}
 
 	bool AskCard(const Players::Identity& who) {
@@ -707,10 +732,9 @@ namespace WorldMapGame {
 		s_listSlot = n ? s_listRows[s_listPick].slot : -1;
 	}
 
-	static void OpenList(const WorldMap::Pad& now) {
+	static void OpenList(const Dpad& now) {
 		ScreenSize();
 		s_listWas = now;
-		s_listStickWas = now.ly < -0.5f ? -1 : (now.ly > 0.5f ? 1 : 0);
 		s_overlayLevel = LevelNow();
 		ListRows();
 		s_listOpen = true;
@@ -718,39 +742,34 @@ namespace WorldMapGame {
 
 	static void CloseList() {
 		s_listOpen = false;
-		s_holdOff = true;
-		s_holdOffSince = GetTickCount();
+		HoldDpad();
 	}
 
-	static void ListFrame(uint8_t* cd, SDL_GameController* c, const Uint8* keys, bool menuUp, bool keyPressed) {
+	// Up and down choose, right opens the card of the one picked, left (or the list's key) closes
+	static void ListFrame(SDL_GameController* c, const Uint8* keys, bool menuUp, bool keyPressed) {
+		const Dpad d = ReadDpad(c, keys);
 		const char* end = OverlayEnd(menuUp);
 		if (end) {
 			Log::TypedLog(CHN_SDL, "Map: the players' list closed: %s\n", end);
 			CloseList();
-			if (!menuUp) {
-				Blank(cd, true);
-			}
 			return;
 		}
 		ListRows();
 		const int n = (int)s_listRows.size();
-		const WorldMap::Pad p = ReadPad(c, keys);
-		const int stick = p.ly < -0.5f ? -1 : (p.ly > 0.5f ? 1 : (fabsf(p.ly) < 0.3f ? 0 : s_listStickWas));
 		int move = 0;
-		if ((p.up && !s_listWas.up) || (stick < 0 && s_listStickWas >= 0)) {
+		if (d.up && !s_listWas.up) {
 			move = -1;
 		}
-		if ((p.down && !s_listWas.down) || (stick > 0 && s_listStickWas <= 0)) {
+		if (d.down && !s_listWas.down) {
 			move = 1;
 		}
 		if (n > 0 && move) {
 			s_listPick = (s_listPick + move + n) % n;
 			s_listSlot = s_listRows[s_listPick].slot;
 		}
-		const bool choose = p.a && !s_listWas.a;
-		const bool close = (p.b && !s_listWas.b) || (p.back && !s_listWas.back) || (p.start && !s_listWas.start) || keyPressed;
-		s_listWas = p;
-		s_listStickWas = stick;
+		const bool choose = d.right && !s_listWas.right;
+		const bool close = (d.left && !s_listWas.left) || keyPressed;
+		s_listWas = d;
 		if (close) {
 			CloseList();
 		}
@@ -758,9 +777,22 @@ namespace WorldMapGame {
 			s_listOpen = false;
 			s_cardWho = s_listRows[s_listPick].who;
 			s_cardFromList = true;
-			OpenCard(p);
+			OpenCard(d);
 		}
-		Blank(cd, true);
+	}
+
+	bool DpadTaken(SDL_GameController* controller) {
+		if (s_cardOpen || s_listOpen) {
+			return true;
+		}
+		if (s_dpadHold) {
+			SDL_GameController* c = controller && SDL_GameControllerGetAttached(controller) ? controller : NULL;
+			if (AnyDpad(c) && GetTickCount() - s_dpadHoldSince < 1500) {
+				return true;
+			}
+			s_dpadHold = false;
+		}
+		return false;
 	}
 
 	static void TravelTo(int i, bool mapButtonDown) {
@@ -885,15 +917,16 @@ namespace WorldMapGame {
 			s_gateOpened = false;
 			return;
 		}
+		// the card and the list leave the game the controller but for the d-pad (input.cpp keeps that from it)
 		if (s_cardOpen) {
-			CardFrame(cd, c, keys, menuUp);
+			CardFrame(c, keys, menuUp);
 			s_keyWas = keyDown;
 			s_buttonWas = buttonDown;
 			s_gateOpened = false;
 			return;
 		}
 		if (s_listOpen) {
-			ListFrame(cd, c, keys, menuUp, listKeyPress);
+			ListFrame(c, keys, menuUp, listKeyPress);
 			s_keyWas = keyDown;
 			s_buttonWas = buttonDown;
 			s_gateOpened = false;
@@ -906,8 +939,7 @@ namespace WorldMapGame {
 				Log::TypedLog(CHN_SDL, "Map: the card of %s, not now: %s\n", s_cardWho.name, why);
 			}
 			else {
-				OpenCard(ReadPad(c, keys));
-				Blank(cd, true);
+				OpenCard(ReadDpad(c, keys));
 				s_keyWas = keyDown;
 				s_buttonWas = buttonDown;
 				s_gateOpened = false;
@@ -922,9 +954,13 @@ namespace WorldMapGame {
 				Log::TypedLog(CHN_SDL, "Map: the players' list, not now: %s\n", why);
 			}
 			else {
-				OpenList(ReadPad(c, keys));
+				OpenList(ReadDpad(c, keys));
 				Log::TypedLog(CHN_SDL, "Map: the players' list, open (%u there)\n", (unsigned)s_listRows.size());
-				Blank(cd, true);
+				// the press that opened it is in this frame's pad already: not the game's
+				if (listPress && s_listButton == SDL_CONTROLLER_BUTTON_DPAD_DOWN) {
+					cd[2] &= (uint8_t)~(0x01 << 6);
+					cd[11] = 0;
+				}
 				s_keyWas = keyDown;
 				s_buttonWas = buttonDown;
 				s_gateOpened = false;
@@ -1441,6 +1477,14 @@ namespace WorldMapGame {
 		}
 	}
 
+	// The card and the list sit at the right of the screen, out of the way of the skater in the middle: he
+	// skates on while they are up
+	static float OverlayLeft(float width) {
+		const float W = (float)s_screenW, ui = (float)s_ui;
+		const float x0 = floorf(W - 48.0f * ui - width);
+		return x0 < 40.0f * ui ? 40.0f * ui : x0;
+	}
+
 	// The card of another player: who he is at the top (his sponsor level, his name, the companies he rides
 	// for), his story and his stats in the middle, and what can be done with him below
 	static void DrawCard(IDirect3DDevice9* dev) {
@@ -1450,9 +1494,7 @@ namespace WorldMapGame {
 		const D3DCOLOR white = Rgba(255, 255, 255, 255), soft = Rgba(226, 230, 238, 235), dim = Rgba(146, 153, 167, 235);
 		const D3DCOLOR line = Rgba(255, 255, 255, 34);
 		const float cw = 640.0f * ui, ch = 896.0f * ui, pad = 40.0f * ui;
-		float x0 = floorf(W * 0.64f - cw * 0.5f);
-		x0 = x0 + cw > W - 40.0f * ui ? W - 40.0f * ui - cw : x0;
-		x0 = x0 < 40.0f * ui ? 40.0f * ui : x0;
+		const float x0 = OverlayLeft(cw);
 		const float y0 = floorf((H - ch) * 0.5f - 16.0f * ui), x1 = x0 + cw, y1 = y0 + ch;
 		const float L = x0 + pad, R = x1 - pad;
 		const float d1 = y0 + 206.0f * ui, d2 = y0 + 306.0f * ui, d3 = y0 + 634.0f * ui;
@@ -1559,14 +1601,11 @@ namespace WorldMapGame {
 			Text(s_cardMessage, (x0 + x1) * 0.5f, y0 + 858.0f * ui, 20.0f * ui, Rgba(255, 210, 120, 255), 0, 0.0f, false);
 		}
 		// the buttons, under the card
-		static const char* const kPad[][2] = { { "D-pad", "Choose" }, { "A", "Select" }, { "B", "Close" } };
-		static const char* const kPs[][2] = { { "D-pad", "Choose" }, { "Cross", "Select" }, { "Circle", "Close" } };
-		static const char* const kKeys[][2] = { { "Arrows", "Choose" }, { "Enter", "Select" }, { "Esc", "Close" } };
-		static const char* const kPadBack[][2] = { { "D-pad", "Choose" }, { "A", "Select" }, { "B", "Back" } };
-		static const char* const kPsBack[][2] = { { "D-pad", "Choose" }, { "Cross", "Select" }, { "Circle", "Back" } };
-		static const char* const kKeysBack[][2] = { { "Arrows", "Choose" }, { "Enter", "Select" }, { "Esc", "Back" } };
-		const char* const(*items)[2] = s_cardFromList ? (s_keyboardLast ? kKeysBack : s_playStation ? kPsBack : kPadBack)
-			: (s_keyboardLast ? kKeys : s_playStation ? kPs : kPad);
+		static const char* const kPad[][2] = { { "D-pad up / down", "Choose" }, { "Right", "Select" }, { "Left", "Close" } };
+		static const char* const kKeys[][2] = { { "Up / Down", "Choose" }, { "Right", "Select" }, { "Left", "Close" } };
+		static const char* const kPadBack[][2] = { { "D-pad up / down", "Choose" }, { "Right", "Select" }, { "Left", "Back" } };
+		static const char* const kKeysBack[][2] = { { "Up / Down", "Choose" }, { "Right", "Select" }, { "Left", "Back" } };
+		const char* const(*items)[2] = s_cardFromList ? (s_keyboardLast ? kKeysBack : kPadBack) : (s_keyboardLast ? kKeys : kPad);
 		ButtonLine(items, 3, (x0 + x1) * 0.5f, y1 + 18.0f * ui, 21.0f * ui);
 		Flush(dev, s_fontTex);
 	}
@@ -1578,9 +1617,7 @@ namespace WorldMapGame {
 		const int n = (int)s_listRows.size();
 		const float cw = 560.0f * ui, pad = 36.0f * ui, rowH = 78.0f * ui, headH = 104.0f * ui;
 		const float ch = headH + (n ? n : 1) * rowH + 22.0f * ui;
-		float x0 = floorf(W * 0.64f - cw * 0.5f);
-		x0 = x0 + cw > W - 40.0f * ui ? W - 40.0f * ui - cw : x0;
-		x0 = x0 < 40.0f * ui ? 40.0f * ui : x0;
+		const float x0 = OverlayLeft(cw);
 		const float y0 = floorf((H - ch) * 0.5f - 16.0f * ui), x1 = x0 + cw, y1 = y0 + ch;
 		const float L = x0 + pad, R = x1 - pad;
 		const D3DCOLOR white = Rgba(255, 255, 255, 255), dim = Rgba(146, 153, 167, 235), gold = Rgba(255, 210, 120, 255);
@@ -1628,10 +1665,9 @@ namespace WorldMapGame {
 			sprintf_s(away, sizeof(away), "%.0f m", r.away * 0.0254f);
 			Text(away, R - 40.0f * ui, top + 26.0f * ui, 23.0f * ui, picked ? white : Rgba(226, 230, 238, 220), 1, 0.0f, false);
 		}
-		static const char* const kPad[][2] = { { "D-pad", "Choose" }, { "A", "View card" }, { "B", "Close" } };
-		static const char* const kPs[][2] = { { "D-pad", "Choose" }, { "Cross", "View card" }, { "Circle", "Close" } };
-		static const char* const kKeys[][2] = { { "Arrows", "Choose" }, { "Enter", "View card" }, { "Esc", "Close" } };
-		ButtonLine(s_keyboardLast ? kKeys : s_playStation ? kPs : kPad, 3, (x0 + x1) * 0.5f, y1 + 18.0f * ui, 21.0f * ui);
+		static const char* const kPad[][2] = { { "D-pad up / down", "Choose" }, { "Right", "View card" }, { "Left", "Close" } };
+		static const char* const kKeys[][2] = { { "Up / Down", "Choose" }, { "Right", "View card" }, { "Left", "Close" } };
+		ButtonLine(s_keyboardLast ? kKeys : kPad, 3, (x0 + x1) * 0.5f, y1 + 18.0f * ui, 21.0f * ui);
 		Flush(dev, s_fontTex);
 	}
 
@@ -1711,8 +1747,7 @@ namespace WorldMapGame {
 			Close(true, false);
 		}
 		if (s_cardOpen) {
-			WorldMap::Pad none;
-			memset(&none, 0, sizeof(none));
+			const Dpad none = { false, false, false, false };
 			s_cardFromList = false;
 			CloseCard(false, none);
 		}
