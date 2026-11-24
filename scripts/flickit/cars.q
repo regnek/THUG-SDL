@@ -596,3 +596,50 @@ SCRIPT Flickit_CarGoesBack
 		Flickit_CarBack car = <car>
 	ENDIF
 ENDSCRIPT
+
+// Someone run over by a car. src/drive_game.cpp finds them in the way of his car (or of a car thrown about),
+// throws them and lands them (peds.h); these are the game's own falling down and lying there, as
+// Ped_FallDownState has them (sk4_PedCollision.q), but they do not get up. Run on them: their own script
+// becomes Flickit_PedDown.
+SCRIPT Flickit_PedHit
+	Obj_SwitchScript Flickit_PedDown
+ENDSCRIPT
+
+SCRIPT Flickit_PedDown
+	Obj_GetId
+	TerminateObjectsScripts id = <objId> script_name = ped_walker_hit_dead_end use_proper_version
+	TerminateObjectsScripts id = <objId> script_name = ped_adjust_speed_to_match_anim use_proper_version
+	TerminateObjectsScripts id = <objId> script_name = ped_standing_look_at_skater use_proper_version
+	TerminateObjectsScripts id = <objId> script_name = ped_skater_start_moving use_proper_version
+	TerminateObjectsScripts id = <objId> script_name = ped_standing_idle use_proper_version
+	// the ped logic does nothing in this state, so they are where the DLL puts them
+	Ped_SetLogicState fall
+	Ped_StopMoving
+	// and nothing of the skater near them gets them up again
+	Obj_ClearExceptions
+	Temp_Ped_Fall_Sound
+	ped_play_falldown_anim
+	BEGIN
+		ped_play_layidle_anim
+		Wait 1 GameFrame
+	REPEAT
+ENDSCRIPT
+
+// They hit the ground (on them). From the DLL: vol.
+SCRIPT Flickit_PedLand
+	Obj_PlaySound BailBodyFall01 vol = <vol>
+ENDSCRIPT
+
+// Back on their way, once he is far (src/drive_game.cpp says when): they go, and a moment later they are made
+// again from their node (ped), at the start of their way
+SCRIPT Flickit_PedGone
+	IF IsAlive name = <ped>
+		Kill name = <ped>
+	ENDIF
+ENDSCRIPT
+
+SCRIPT Flickit_PedBack
+	IF NOT IsAlive name = <ped>
+		Create name = <ped>
+	ENDIF
+ENDSCRIPT

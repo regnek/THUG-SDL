@@ -5,6 +5,7 @@
 #include "bigworld.h"
 #include "drive_game.h"
 #include "players_game.h"
+#include "daynight_game.h"
 
 #include <windows.h>
 #include <string.h>
@@ -2914,6 +2915,18 @@ namespace FlickitGame {
 	// The pause menu's script for "Goto Cust Restart": skater : SkipToCustomRestart
 	static const uint32_t kSkipToCustomRestart = 0x3E77D9CA;  // skip_to_custom_restart
 
+	// Script::RunScript runs a script to its end, but what it gives back is no yes or no for a script: the low
+	// byte of the address its CScript had, from the free just before it returns (0x0040FE2C -> 0x0040E370 ->
+	// 0x0057A960), so 0 for about one in 64. Only a missing script gives 0 for sure. So: is it a script, then run it.
+	static bool RunScriptOf(uint32_t name, void* params) {
+		const uint8_t* symbol = (const uint8_t*)LookUpSymbol(name);
+		if (!symbol || symbol[1] != 7) {
+			return false;
+		}
+		RunGameScript(name, params, 0, 0);
+		return true;
+	}
+
 	static const Expect kAutosaveExpect[] = {
 		{ 0x00517428, 18, { 0x8D, 0x46, 0x40, 0x50, 0x8D, 0x8E, 0xC8, 0x02, 0x00, 0x00, 0xC6, 0x86, 0x19, 0x03, 0x00, 0x00, 0x01, 0xE8 }, "SetCustomRestart: the position and the flag" },
 		{ 0x0051743E, 10, { 0x8D, 0x4E, 0x60, 0x51, 0x8D, 0x8E, 0xD8, 0x02, 0x00, 0x00 }, "SetCustomRestart: the matrix" },
@@ -3059,7 +3072,7 @@ namespace FlickitGame {
 		skater[SKATER_CUSTOM_WALK] = 0;
 		skater[SKATER_CUSTOM_SET] = 1;
 		GameStruct none = { 0 };
-		const bool ran = RunGameScript(kSkipToCustomRestart, &none, 0, 0);
+		const bool ran = RunScriptOf(kSkipToCustomRestart, &none);
 		const uint32_t now = (uint32_t)time(0);
 		const unsigned age = spot->saved && now >= spot->saved ? (unsigned)(now - spot->saved) : 0;
 		Log::TypedLog(CHN_SDL, "Autosave: %s (%.1f %.1f %.1f), kept %u min %u s ago\n",
@@ -3158,7 +3171,7 @@ namespace FlickitGame {
 		skater[SKATER_CUSTOM_WALK] = 0;
 		skater[SKATER_CUSTOM_SET] = 1;
 		GameStruct none = { 0 };
-		const bool ran = RunGameScript(kSkipToCustomRestart, &none, 0, 0);
+		const bool ran = RunScriptOf(kSkipToCustomRestart, &none);
 		// (across only: the ground under the spot may set his height)
 		const float* now = (const float*)(skater + OBJECT_POSITION);
 		const bool there = ran && fabsf(now[0] - pos[0]) < 1.0f && fabsf(now[2] - pos[2]) < 1.0f;
@@ -3283,6 +3296,7 @@ namespace FlickitGame {
 		AutosaveFrame(skater, (uint8_t*)core);
 		MapFrame(skater, core);
 		CarsFrame(skater, core, input);
+		DayNightGame::Frame();
 		RailExitFrame(skater, (uint8_t*)core);
 		ShowCrouch(skater);
 		KeepStance(skater);

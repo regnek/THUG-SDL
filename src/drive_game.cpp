@@ -8,6 +8,7 @@
 #include "crash.h"
 #include "drive.h"
 #include "drive_game.h"
+#include "peds.h"
 #include "flickit_cars_qb.h"
 #include "bigworld.h"
 #include "config.h"
@@ -53,6 +54,9 @@ namespace DriveGame {
 	static const StructAddVector_t StructAddVector = (StructAddVector_t)0x004124D0;
 	// CStruct::ContainsFlag: a name in it with no value (CreatedAtStart), in the structures it names too
 	typedef bool(__thiscall* StructFlag_t)(void* s, uint32_t flag);
+	// CStruct::GetInteger
+	typedef bool(__thiscall* StructInteger_t)(void* s, uint32_t name, int* out, int assertIfMissing);
+	static const StructInteger_t StructInteger = (StructInteger_t)0x00410D80;
 	static const StructFlag_t StructFlag = (StructFlag_t)0x004112A0;
 	// A symbol by its name: its type at +1 (7 a script, 10 a structure), its value at +0xC
 	typedef uint8_t* (__cdecl* LookUpSymbol_t)(uint32_t name);
@@ -91,6 +95,7 @@ namespace DriveGame {
 
 	// An object: where it is, its matrix (left, up, the way it faces, a fourth row), the matrix it is drawn with
 	enum {
+		OBJECT_TAGS = 0x20,              // its tags (a structure, as GetTags gives them: 0x0041EFFE)
 		OBJECT_POSITION = 0x40,
 		OBJECT_MATRIX = 0x60,
 		OBJECT_DISPLAY_MATRIX = 0xB0,
@@ -182,6 +187,15 @@ namespace DriveGame {
 		{ 0x0045B4F1, 8, { 0xD9, 0x06, 0xDC, 0x3D, 0xC8, 0x04, 0x63, 0x00 }, "CVehicleComponent: mass as 386.4 over the setup's" },
 		{ 0x0045B530, 6, { 0xD9, 0x87, 0x60, 0x01, 0x00, 0x00 }, "CVehicleComponent: its moment of inertia about up" },
 	};
+	// What running people over uses besides the crashes' (people go through cars, as before, if not as expected)
+	static const Expect kPedExpect[] = {
+		{ 0x00410D80, 12, { 0x56, 0x8D, 0x44, 0x24, 0x08, 0x50, 0x8B, 0xF1, 0x8B, 0x4C, 0x24, 0x0C }, "CStruct::GetInteger" },
+		{ 0x0041EFFE, 5, { 0x8B, 0x76, 0x20, 0x85, 0xF6 }, "CObject: GetTags, its tags" },
+		{ 0x0041F101, 5, { 0x3D, 0xC7, 0x37, 0x49, 0x71 }, "CObject: Obj_SwitchScript" },
+		// CPedLogicComponent::Update: it moves someone only in its states lip_trick, generic and generic_skater, so
+		// in fall, where Flickit_PedDown puts them, they are where Flickit puts them
+		{ 0x0044224E, 16, { 0x8B, 0x46, 0x18, 0x3D, 0x7B, 0x16, 0x67, 0x63, 0x74, 0x22, 0x3D, 0x2C, 0x5E, 0xB0, 0x69, 0x74 }, "CPedLogicComponent::Update: its states" },
+	};
 
 	/******************************************************************/
 	/*                                                                */
@@ -200,6 +214,9 @@ namespace DriveGame {
 		uint32_t knockedScript, fxScript, fxOffScript, boomScript, burntScript, hitSoundScript, onFireScript;
 		uint32_t blowOutScript, blastHimScript, fx, parts, offset, vol, pitch;
 		uint32_t smokeParts[4], fireParts;
+		// people run over
+		uint32_t pedestrian, pedLogic, fallDownAnims, layIdleAnims, goalId, isGoalPed, ped;
+		uint32_t pedHitScript, pedLandScript, pedGoneScript, pedBackScript;
 	};
 	static Names s_n;
 
@@ -332,6 +349,30 @@ namespace DriveGame {
 	static uint8_t* s_feeler = 0;            // the skater's physics' feeler, on this frame
 	static void ResetCrashes();
 
+	// People run over ([Flickit] RunOver, RunOverSpeed): someone in the way of his car, or of a loose car thrown
+	// about, is thrown (peds.h), falls the game's own way and stays down (Flickit_PedHit); once they have lain
+	// there a while and he is far from them and from the start of their way, they are back on it: gone, and made
+	// again from their node (Flickit_PedGone, then Flickit_PedBack a moment later). Not a goal's people, and not
+	// those without the game's falling down (no ped logic: Eric in a cutscene; no FallDownAnims: the animals).
+	enum { kMaxPeds = 256, kPedsAFrame = 3 };
+	enum { kPedThere, kPedFlying, kPedLying, kPedGone };
+	struct Ped {
+		uint32_t name;
+		float start[4];                  // its node's place: where they are made again
+		int state;
+		Peds::Flight flight;
+		uint32_t since;                  // when they went into their state
+		bool told;                       // the log said why they cannot be run over
+	};
+	static Ped s_peds[kMaxPeds];
+	static int s_pedCount = 0;
+	static bool s_runOver = true;
+	static float s_runOverFrom = 60.0f;
+	static int s_pedReady = 0;               // 1: the game is as expected, -1: not
+	static const uint32_t kLieMs = 10000;    // they lie there this long at the least
+	static const float kPedFar = 3000.0f;    // and he is this far from them, and from the start of their way
+	static void FindPeds(void* nodes, uint32_t count);
+
 	/******************************************************************/
 	/*                                                                */
 	/*  Checks                                                        */
@@ -390,6 +431,17 @@ namespace DriveGame {
 		s_n.smokeParts[2] = Flickit::NameChecksum("Flickit_FxSmokeHeavy");
 		s_n.smokeParts[3] = Flickit::NameChecksum("Flickit_FxSmokeBurnt");
 		s_n.fireParts = Flickit::NameChecksum("Flickit_FxFire");
+		s_n.pedestrian = Flickit::NameChecksum("Pedestrian");
+		s_n.pedLogic = Flickit::NameChecksum("pedlogic");
+		s_n.fallDownAnims = Flickit::NameChecksum("FallDownAnims");
+		s_n.layIdleAnims = Flickit::NameChecksum("LayIdleAnims");
+		s_n.goalId = Flickit::NameChecksum("goal_id");
+		s_n.isGoalPed = Flickit::NameChecksum("is_goal_ped");
+		s_n.ped = Flickit::NameChecksum("ped");
+		s_n.pedHitScript = Flickit::NameChecksum("Flickit_PedHit");
+		s_n.pedLandScript = Flickit::NameChecksum("Flickit_PedLand");
+		s_n.pedGoneScript = Flickit::NameChecksum("Flickit_PedGone");
+		s_n.pedBackScript = Flickit::NameChecksum("Flickit_PedBack");
 	}
 
 	static bool Ready() {
@@ -435,6 +487,18 @@ namespace DriveGame {
 			}
 		}
 		return s_parsed > 0;
+	}
+
+	// Script::RunScript runs a script to its end, but what it gives back is no yes or no for a script: the low
+	// byte of the address its CScript had, from the free just before it returns (0x0040FE2C -> 0x0040E370 ->
+	// 0x0057A960), so 0 for about one in 64. Only a missing script gives 0 for sure. So: is it a script, then run it.
+	static bool RunScriptOf(uint32_t name, void* params, void* object) {
+		const uint8_t* symbol = LookUpSymbol(name);
+		if (!symbol || symbol[1] != SYMBOL_SCRIPT) {
+			return false;
+		}
+		RunGameScript(name, params, object, 0);
+		return true;
 	}
 
 	static bool InNet() {
@@ -535,7 +599,7 @@ namespace DriveGame {
 		if (want) {
 			s_promptSeen = now;
 			if (!s_prompt) {
-				s_prompt = RunGameScript(s_n.promptScript, 0, 0, 0);
+				s_prompt = RunScriptOf(s_n.promptScript, 0, 0);
 			}
 		}
 		else if (s_prompt && now - s_promptSeen > kPromptLingerMs) {
@@ -584,6 +648,7 @@ namespace DriveGame {
 			atStart += c.atStart ? 1 : 0;
 			TuneFor(c.model, &c);
 		}
+		FindPeds(nodes, count);
 		for (int k = 0; k < Drive::Parking::kSlots; k++) {
 			Car& c = s_cars[s_levelCars + k];
 			memset(&c, 0, sizeof(c));
@@ -1073,6 +1138,33 @@ namespace DriveGame {
 		float damage;
 	};
 
+	// His car's box, its speeds and its mass, from the game's body
+	static bool HisBody(const uint8_t* his, const uint8_t* vehicle, Crash::Body* out) {
+		if (!his || !vehicle) {
+			return false;
+		}
+		memset(out, 0, sizeof(*out));
+		const float* pos = (const float*)(his + OBJECT_POSITION);
+		const float* m = (const float*)(his + OBJECT_MATRIX);
+		const float* v = (const float*)(vehicle + VEHICLE_VELOCITY);
+		const float* w = (const float*)(vehicle + VEHICLE_SPIN);
+		const float invMass = *(const float*)(vehicle + VEHICLE_INV_MASS);
+		const float invInertia = *(const float*)(vehicle + VEHICLE_INV_INERTIA + 4);
+		const Drive::Box& b = s_driven.box;
+		if (!Finite(pos, 3) || !Finite(m, 12) || !Finite(v, 3) || !Finite(w, 3) || !(invMass > 0.001f && invMass < 10.0f) || !(invInertia > 1.0e-8f && invInertia < 1.0f)
+			|| !Crash::MakeBox(pos, m, m + 8, b.halfWidth, b.rear, b.front, b.height, out)) {
+			return false;
+		}
+		// it turns about its place (the game's body), and its speeds are its place's
+		out->pivot[0] = pos[0];
+		out->pivot[1] = pos[2];
+		memcpy(out->vel, v, sizeof(out->vel));
+		out->spin = w[1];
+		out->invMass = invMass;
+		out->invInertia = invInertia;
+		return true;
+	}
+
 	static void AddParty(const Party& p) {
 		if (s_partyCount < (int)(sizeof(s_parties) / sizeof(s_parties[0]))) {
 			s_parties[s_partyCount] = p;
@@ -1084,31 +1176,14 @@ namespace DriveGame {
 	static void Parties(const uint8_t* his, const uint8_t* vehicle) {
 		s_partyCount = 0;
 		Party p;
-		if (his && vehicle) {
-			memset(&p, 0, sizeof(p));
-			const float* pos = (const float*)(his + OBJECT_POSITION);
-			const float* m = (const float*)(his + OBJECT_MATRIX);
-			const float* v = (const float*)(vehicle + VEHICLE_VELOCITY);
-			const float* w = (const float*)(vehicle + VEHICLE_SPIN);
-			const float invMass = *(const float*)(vehicle + VEHICLE_INV_MASS);
-			const float invInertia = *(const float*)(vehicle + VEHICLE_INV_INERTIA + 4);
-			const Drive::Box& b = s_driven.box;
-			if (Finite(pos, 3) && Finite(m, 12) && Finite(v, 3) && Finite(w, 3) && invMass > 0.001f && invMass < 10.0f && invInertia > 1.0e-8f && invInertia < 1.0f
-				&& Crash::MakeBox(pos, m, m + 8, b.halfWidth, b.rear, b.front, b.height, &p.body)) {
-				// it turns about its place (the game's body), and its speeds are its place's
-				p.body.pivot[0] = pos[0];
-				p.body.pivot[1] = pos[2];
-				memcpy(p.body.vel, v, sizeof(p.body.vel));
-				p.body.spin = w[1];
-				p.body.invMass = invMass;
-				p.body.invInertia = invInertia;
-				p.kind = kHis;
-				p.index = -1;
-				p.invMass = invMass;
-				p.invInertia = invInertia;
-				p.awake = true;
-				AddParty(p);
-			}
+		memset(&p, 0, sizeof(p));
+		if (HisBody(his, vehicle, &p.body)) {
+			p.kind = kHis;
+			p.index = -1;
+			p.invMass = p.body.invMass;
+			p.invInertia = p.body.invInertia;
+			p.awake = true;
+			AddParty(p);
 		}
 		for (int i = 0; i < s_levelCars; i++) {
 			const Car& c = s_cars[i];
@@ -1306,7 +1381,7 @@ namespace DriveGame {
 		p->AddChecksum(s_n.parked, s_n.parkedCar[slot]);
 		p->AddString(s_n.model, c.model);
 		StructAddVector(p, s_n.pos, pos[0], pos[1], pos[2]);
-		const bool ran = RunGameScript(s_n.knockedScript, p, 0, 0);
+		const bool ran = RunScriptOf(s_n.knockedScript, p, 0);
 		Script::LazyStruct::s_free(p);
 		c.track.Reset();
 		ResetLoose(slot);
@@ -1562,7 +1637,7 @@ namespace DriveGame {
 		const float at[3] = { pos[0], pos[1] + 20.0f, pos[2] };
 		Boom(at, s.pos);
 		Blast(at, -1, now, s, 0, 0, false);
-		s_boomPending = RunGameScript(s_n.blowOutScript, 0, s.object, 0);
+		s_boomPending = RunScriptOf(s_n.blowOutScript, 0, s.object);
 		s_boomSlot = -1;
 		s_boomSince = now;
 		Note("Crashes: his car blew up with him in it at (%.0f %.0f %.0f)%s\n", pos[0], pos[1], pos[2],
@@ -1628,6 +1703,242 @@ namespace DriveGame {
 		Effects(s.driving);
 	}
 
+	/******************************************************************/
+	/*                                                                */
+	/*  People run over                                               */
+	/*                                                                */
+	/******************************************************************/
+
+	static bool PedReady() {
+		if (s_pedReady == 0) {
+			s_pedReady = 1;
+			for (size_t i = 0; i < sizeof(kPedExpect) / sizeof(kPedExpect[0]); i++) {
+				if (memcmp((const void*)kPedExpect[i].address, kPedExpect[i].bytes, (size_t)kPedExpect[i].size) != 0) {
+					Note("People: the game's code at %08X (%s) is not what was expected; cars go through people as before\n",
+						kPedExpect[i].address, kPedExpect[i].what);
+					s_pedReady = -1;
+				}
+			}
+			const uint8_t* hit = LookUpSymbol(s_n.pedHitScript);
+			if (s_pedReady > 0 && !(hit && hit[1] == SYMBOL_SCRIPT)) {
+				Note("People: the game does not have Flickit_PedHit; cars go through people as before\n");
+				s_pedReady = -1;
+			}
+		}
+		return s_pedReady > 0;
+	}
+
+	// The level's people: every node of the class Pedestrian
+	static void FindPeds(void* nodes, uint32_t count) {
+		s_pedCount = 0;
+		for (uint32_t i = 0; nodes && i < count && s_pedCount < kMaxPeds; i++) {
+			void* node = ArrayStructure(nodes, i);
+			uint32_t cls = 0, name = 0;
+			if (!node || !StructChecksum(node, s_n.className, &cls, 0) || cls != s_n.pedestrian || !StructChecksum(node, s_n.name, &name, 0) || !name) {
+				continue;
+			}
+			Ped& p = s_peds[s_pedCount++];
+			memset(&p, 0, sizeof(p));
+			p.name = name;
+			p.start[3] = 1.0f;
+			StructVector(node, s_n.pos, p.start, 0);
+		}
+		Log::TypedLog(CHN_SDL, "People: %d in this level (the nodes of the class Pedestrian)%s\n", s_pedCount,
+			s_runOver ? "" : "; cars go through them (RunOver=0)");
+	}
+
+	// Why someone cannot be run over (0: they can): no ped logic, none of the game's falling down, a goal's
+	static const char* NotRunOver(uint8_t* obj) {
+		if (!GetComponent(obj, s_n.pedLogic)) {
+			return "no ped logic";
+		}
+		void* tags = *(void**)(obj + OBJECT_TAGS);
+		Script::LazyArray* anims = 0;
+		if (!tags || !StructArray(tags, s_n.fallDownAnims, &anims, 0) || !anims || !StructArray(tags, s_n.layIdleAnims, &anims, 0) || !anims) {
+			return "none of the game's falling down for them";
+		}
+		uint32_t goal = 0;
+		int goalPed = 0;
+		if (StructChecksum(tags, s_n.goalId, &goal, 0) || (StructInteger(tags, s_n.isGoalPed, &goalPed, 0) && goalPed)) {
+			return "a goal's";
+		}
+		return 0;
+	}
+
+	// Someone where their flight has them, facing the way it says (their matrix and the one they are drawn with)
+	static void PlacePed(uint8_t* obj, const Peds::Flight& f) {
+		if (!Finite(f.pos, 3) || !Finite(f.facing, 2)) {
+			return;
+		}
+		memcpy(obj + OBJECT_POSITION, f.pos, sizeof(f.pos));
+		const float fx = f.facing[0], fz = f.facing[1];
+		const float rows[3][3] = { { fz, 0.0f, -fx }, { 0.0f, 1.0f, 0.0f }, { fx, 0.0f, fz } };
+		float* m = (float*)(obj + OBJECT_MATRIX);
+		float* d = (float*)(obj + OBJECT_DISPLAY_MATRIX);
+		for (int k = 0; k < 3; k++) {
+			for (int i = 0; i < 3; i++) {
+				m[k * 4 + i] = rows[k][i];
+				d[k * 4 + i] = rows[k][i];
+			}
+			m[k * 4 + 3] = 0.0f;
+			d[k * 4 + 3] = 0.0f;
+		}
+	}
+
+	// The level about someone in flight this step: the ground under where they are going (a face that looks up),
+	// and a wall between here and there at the height of their middle
+	static Peds::Level PedLevel(const Peds::Flight& f, float dt) {
+		Peds::Level l;
+		l.ground = false;
+		l.groundY = 0.0f;
+		l.wall = false;
+		const float next[3] = { f.pos[0] + f.vel[0] * dt, f.pos[1] + (f.landed ? 0.0f : f.vel[1] * dt), f.pos[2] + f.vel[2] * dt };
+		const float top = (f.pos[1] > next[1] ? f.pos[1] : next[1]) + 20.0f;
+		const float from[3] = { next[0], top, next[2] };
+		const float to[3] = { next[0], next[1] - 600.0f, next[2] };
+		float point[3], normal[3];
+		if (WorldHit(from, to, point, normal) && normal[1] > 0.5f) {
+			l.ground = true;
+			l.groundY = point[1];
+		}
+		const float a[3] = { f.pos[0], f.pos[1] + 36.0f, f.pos[2] };
+		const float b[3] = { next[0], next[1] + 36.0f, next[2] };
+		if ((a[0] != b[0] || a[2] != b[2]) && WorldHit(a, b, point, normal) && fabsf(normal[1]) < 0.7f) {
+			l.wall = true;
+		}
+		return l;
+	}
+
+	static void RunOver(Ped& p, uint8_t* obj, const Crash::Body& car, const Peds::Strike& st, const DriveGame::Skater& s, uint32_t now) {
+		const float* at = (const float*)(obj + OBJECT_POSITION);
+		const float feet[3] = { at[0], at[1], at[2] };
+		// their own script becomes Flickit_PedDown (PedReady saw that the game has it)
+		RunScriptOf(s_n.pedHitScript, 0, obj);
+		Peds::Settings set = Peds::DefaultSettings();
+		set.from = s_runOverFrom;
+		Peds::Throw(car, feet, st, set, &p.flight);
+		PlacePed(obj, p.flight);
+		HitSound(st.speed * 0.7f, feet, s.pos, now);
+		p.state = kPedFlying;
+		p.since = now;
+		Note("People: %08X run over at %.0f (%.0f %.0f %.0f), thrown at %.0f, %.0f up\n", p.name, st.speed, feet[0], feet[1], feet[2],
+			sqrtf(p.flight.vel[0] * p.flight.vel[0] + p.flight.vel[2] * p.flight.vel[2]), p.flight.vel[1]);
+	}
+
+	// The people of this frame: anyone in the way of his car or of a loose car thrown about, run over; the thrown
+	// in flight; those who have lain there long enough with him far away, back on their way
+	static void PedsFrame(const DriveGame::Skater& s, uint32_t now, float seconds) {
+		if (!s_runOver || s_pedCount == 0 || !CrashReady() || !PedReady()) {
+			return;
+		}
+		uint8_t* core = (uint8_t*)GetComponent(s.object, kSkaterCorePhysics);
+		s_feeler = core ? core + CORE_FEELER : 0;
+		const float dt = seconds > 0.25f ? 0.0f : (seconds > 0.05f ? 0.05f : seconds);
+		Crash::Body hitters[1 + Drive::Parking::kSlots];
+		int count = 0;
+		void* vehicle = 0;
+		uint8_t* his = s.driving && s_driven.set ? PlayerVehicle(&vehicle) : 0;
+		if (HisBody(his, (const uint8_t*)vehicle, &hitters[count])) {
+			count++;
+		}
+		for (int k = 0; s_crashes && k < Drive::Parking::kSlots; k++) {
+			const Loose& l = s_loose[k];
+			if (l.made && !l.body.asleep && Crash::Length3(l.body.vel) > 200.0f && Crash::FootprintOf(l.body, &hitters[count])) {
+				count++;
+			}
+		}
+		Peds::Settings set = Peds::DefaultSettings();
+		set.from = s_runOverFrom;
+		int downed = 0;
+		for (int i = 0; i < s_pedCount; i++) {
+			Ped& p = s_peds[i];
+			if (p.state == kPedThere && (count == 0 || downed >= kPedsAFrame)) {
+				continue;
+			}
+			if (p.state == kPedGone) {
+				// a moment after they went: made again at the start of their way
+				if (now - p.since >= 250) {
+					Script::LazyStruct* params = Script::LazyStruct::s_create();
+					if (params) {
+						params->AddChecksum(s_n.ped, p.name);
+						RunGameScript(s_n.pedBackScript, params, 0, 0);
+						Script::LazyStruct::s_free(params);
+					}
+					p.state = kPedThere;
+					p.since = now;
+					Note("People: %08X back at the start of their way\n", p.name);
+				}
+				continue;
+			}
+			uint8_t* obj = (uint8_t*)ResolveToObject(p.name);
+			if (!obj) {
+				// not there (yet, or any more: the level's own doing)
+				p.state = kPedThere;
+				continue;
+			}
+			if (p.state == kPedThere) {
+				const float* at = (const float*)(obj + OBJECT_POSITION);
+				if (!Finite(at, 3)) {
+					continue;
+				}
+				for (int h = 0; h < count; h++) {
+					const Crash::Body& car = hitters[h];
+					const float dx = at[0] - car.centre[0], dz = at[2] - car.centre[1];
+					const float reach = car.halfX + car.halfZ + Peds::kRadius;
+					Peds::Strike st;
+					if (dx * dx + dz * dz > reach * reach || !Peds::Struck(car, at, &st) || st.speed < s_runOverFrom) {
+						continue;
+					}
+					const char* no = NotRunOver(obj);
+					if (no) {
+						if (!p.told) {
+							Note("People: %08X cannot be run over (%s)\n", p.name, no);
+							p.told = true;
+						}
+						break;
+					}
+					RunOver(p, obj, car, st, s, now);
+					downed++;
+					break;
+				}
+				continue;
+			}
+			if (p.state == kPedFlying) {
+				if (dt <= 0.0f) {
+					continue;
+				}
+				const float fall = -p.flight.vel[1];
+				const Peds::Level level = PedLevel(p.flight, dt);
+				if (Peds::Step(&p.flight, dt, level, set)) {
+					Script::LazyStruct* params = Script::LazyStruct::s_create();
+					if (params) {
+						const float vol = 60.0f + 0.15f * (fall > 0.0f ? fall : 0.0f);
+						params->AddFloat(s_n.vol, (vol > 150.0f ? 150.0f : vol) * Near(p.flight.pos, s.pos));
+						RunGameScript(s_n.pedLandScript, params, obj, 0);
+						Script::LazyStruct::s_free(params);
+					}
+				}
+				PlacePed(obj, p.flight);
+				if (p.flight.still) {
+					p.state = kPedLying;
+					p.since = now;
+				}
+				continue;
+			}
+			// lying there: back on their way once they have lain long enough and he is far away
+			if (Peds::BackOnTheirWay((float)(now - p.since) / 1000.0f, (float)kLieMs / 1000.0f, p.flight.pos, p.start, s.pos, kPedFar)) {
+				Script::LazyStruct* params = Script::LazyStruct::s_create();
+				if (params) {
+					params->AddChecksum(s_n.ped, p.name);
+					RunGameScript(s_n.pedGoneScript, params, 0, 0);
+					Script::LazyStruct::s_free(params);
+				}
+				p.state = kPedGone;
+				p.since = now;
+			}
+		}
+	}
+
 	// A car he left that has stood long enough goes back, one at a time: it goes, and in the same frame the
 	// car of the level it was comes back at the start of its way (unless that car is there again already, or
 	// was a goal's), when he is far from both places
@@ -1656,7 +1967,7 @@ namespace DriveGame {
 			}
 			const uint32_t stood = (now - s_parking.ParkedAt(k)) / 1000;
 			KillFx(k);
-			const bool ran = RunGameScript(s_n.goesBackScript, params, 0, 0);
+			const bool ran = RunScriptOf(s_n.goesBackScript, params, 0);
 			Script::LazyStruct::s_free(params);
 			s_parking.Leave(k);
 			ResetLoose(k);
@@ -1691,7 +2002,7 @@ namespace DriveGame {
 		p->AddChecksum(s_n.tune, c.tune);
 		memset(&s_taken, 0, sizeof(s_taken));
 		s_prompt = false;                    // the steal script takes the prompt away
-		const bool ran = RunGameScript(s_n.stealScript, p, s.object, 0);
+		const bool ran = RunScriptOf(s_n.stealScript, p, s.object);
 		Script::LazyStruct::s_free(p);
 		Log::TypedLog(CHN_SDL, "Cars: %s %s (%08X, %s)%s\n", ran ? "took" : "could not run Flickit_CarSteal for",
 			c.slot >= 0 ? "a car he had left" : "a car of the level", c.name, model,
@@ -1786,6 +2097,7 @@ namespace DriveGame {
 		}
 
 		CrashFrame(s, now, seconds);
+		PedsFrame(s, now, seconds);
 
 		// another player nearer than the car has Circle (players_game.h)
 		s_carAway = best >= 0 ? bestAway : 1.0e9f;
@@ -1807,7 +2119,7 @@ namespace DriveGame {
 				Script::LazyStruct* p = Script::LazyStruct::s_create();
 				if (p) {
 					p->AddChecksum(s_n.car, name);
-					const bool ran = RunGameScript(s_n.backScript, p, 0, 0);
+					const bool ran = RunScriptOf(s_n.backScript, p, 0);
 					Script::LazyStruct::s_free(p);
 					Log::TypedLog(CHN_SDL, "Cars: %s %08X at the start of its way\n", ran ? "put" : "could not run Flickit_CarBack to put", name);
 				}
@@ -2320,6 +2632,10 @@ namespace DriveGame {
 		int launch = (int)GetPrivateProfileIntA(FLICKIT_SECTION, "CarLaunch", 100, configFile);
 		launch = launch < 0 ? 0 : (launch > 300 ? 300 : launch);
 		s_launchScale = (float)launch / 100.0f;
+		s_runOver = GetPrivateProfileIntA(FLICKIT_SECTION, "RunOver", 1, configFile) != 0;
+		int from = (int)GetPrivateProfileIntA(FLICKIT_SECTION, "RunOverSpeed", 60, configFile);
+		from = from < 10 ? 10 : (from > 2000 ? 2000 : from);
+		s_runOverFrom = (float)from;
 		if (!s_crashes) {
 			Log::TypedLog(CHN_SDL, "Crashes: off (CarCrashes=0): the cars go through each other\n");
 		}

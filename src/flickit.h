@@ -65,6 +65,9 @@ namespace Flickit {
 	struct Settings {
 		int enabled;          // master switch
 		int toggleButton;     // SDL_GameControllerButton that switches Flickit on/off in a level, -1 for none
+		int boardButton;      // the pad's button (THUG-SDL's numbers) that gets him off the board and back on, as Skate's
+		                      // Triangle; -1: both bumpers, as before
+		int cameraButton;     // the pad's button that changes the camera's angle in a level (L3); -1: [Gamepad] ViewToggle
 		int reloadKey;        // SDL_Scancode that reloads this section while the game runs, 0 for none
 		int debug;            // 1: log every recognized gesture
 

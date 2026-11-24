@@ -14,6 +14,7 @@
 #include "worldmap_game.h"
 #include "drive_game.h"
 #include "players_game.h"
+#include "daynight_game.h"
 #include "guard_game.h"
 #include "flickit_pose.h"
 #include <QB/LazyStruct.h>
@@ -402,6 +403,8 @@ void loadFlickitSettings() {
 
 	s.enabled = (int)GetPrivateProfileInt(FLICKIT_SECTION, "Enabled", s.enabled, configFile);
 	s.toggleButton = (int)GetPrivateProfileInt(FLICKIT_SECTION, "ToggleButton", s.toggleButton, configFile);
+	s.boardButton = (int)GetPrivateProfileInt(FLICKIT_SECTION, "BoardButton", s.boardButton, configFile);
+	s.cameraButton = (int)GetPrivateProfileInt(FLICKIT_SECTION, "CameraButton", s.cameraButton, configFile);
 	s.reloadKey = (int)GetPrivateProfileInt(FLICKIT_SECTION, "ReloadKey", s.reloadKey, configFile);
 	{
 		const bool watch = GetPrivateProfileInt(FLICKIT_SECTION, "Watchdog", 1, configFile) != 0;
@@ -488,6 +491,7 @@ void loadFlickitSettings() {
 	WorldMapGame::Configure(configFile);
 	DriveGame::Configure(configFile);
 	PlayersGame::Configure(configFile);
+	DayNightGame::Configure(configFile);
 
 	loadFlickitPatterns(configFile, s.enabled && s.patterns);
 
@@ -852,6 +856,15 @@ static void flickitLogGame(const FlickitGame::Skater& sk, uint32_t now) {
 }
 
 // Reads the camera stick and the triggers and asks the recognizer which buttons to hold on this frame.
+// The button that changes the camera's angle in a level: Flickit's (L3), or the game's own binding (Back) with
+// Flickit off or CameraButton=-1. Back is then the map's alone, a press of it (worldmap_game.h).
+static controllerButton flickitCameraButton() {
+	if (flickitSettings.enabled && flickitSettings.cameraButton >= 0) {
+		return (controllerButton)flickitSettings.cameraButton;
+	}
+	return padbinds.cameraToggle;
+}
+
 // Answers FLICKIT_ON when Flickit drives this controller on this frame, FLICKIT_PAUSED when it would but
 // the skater is off the board, FLICKIT_OFF otherwise.
 int flickitPoll(device* dev, SDL_GameController* controller, Flickit::Output* out) {
@@ -1398,19 +1411,36 @@ void pollController(device* dev, SDL_GameController* controller) {
 					flickitMode = flickitPoll(dev, controller, &flickitOut);
 					flickit = (flickitMode == FLICKIT_ON);
 
+					// The board button (Triangle, as in Skate) gets him off the board and back on, through the game's
+					// own button for that (Black: the PC's SwitchControl_Trigger). Not in a car: there it stays the
+					// game's (Triangle held stops the car and gets him out), as it does with Flickit off.
+					int boardButton = -1;
+					if (dev->port == 0 && flickitMode != FLICKIT_OFF && flickitSettings.boardButton >= 0) {
+						FlickitGame::Whereabouts where;
+						if (!(FlickitGame::SkaterWhereabouts(where) && where.driving)) {
+							boardButton = flickitSettings.boardButton;
+						}
+					}
+					if (boardButton >= 0 && getButton(controller, (controllerButton)boardButton)) {
+						dev->controlData[20] |= 0x01 << 0;
+					}
+					const controllerButton cameraButton = flickitCameraButton();
+
 					// Buttons
 					if (getButton(controller, padbinds.menu)) {
 						dev->controlData[2] |= 0x01 << 3;
 					}
-					// Held, the camera button may open the map instead (worldmap_game.h)
-					if (WorldMapGame::CameraButton(dev->port, getButton(controller, padbinds.cameraToggle) != 0, (int)padbinds.cameraToggle, mapSeesMenu())) {
+					// The camera's angle; held, the same button may open the map instead (worldmap_game.h), when the
+					// map is on that button
+					if ((int)cameraButton != boardButton && WorldMapGame::CameraButton(dev->port, getButton(controller, cameraButton) != 0, (int)cameraButton, mapSeesMenu())) {
 						dev->controlData[2] |= 0x01 << 0;
 					}
 					// The Flickit on/off button is not passed on as swivel lock
-					if (getButton(controller, padbinds.cameraSwivelLock) && !(flickitSettings.enabled && (int)padbinds.cameraSwivelLock == flickitSettings.toggleButton)) {
+					if (getButton(controller, padbinds.cameraSwivelLock) && !(flickitSettings.enabled && (int)padbinds.cameraSwivelLock == flickitSettings.toggleButton)
+						&& (int)padbinds.cameraSwivelLock != boardButton) {
 						dev->controlData[2] |= 0x01 << 2;
 					}
-					if (getButton(controller, padbinds.grind)) {
+					if (getButton(controller, padbinds.grind) && (int)padbinds.grind != boardButton) {
 						dev->controlData[3] |= 0x01 << 4;
 						dev->controlData[12] = 0xff;
 					}
@@ -1452,7 +1482,7 @@ void pollController(device* dev, SDL_GameController* controller) {
 							dev->controlData[3] |= 0x01 << 1;
 							dev->controlData[19] = 0xff;
 						}
-						if (leftBumper && rightBumper) {
+						if (leftBumper && rightBumper && flickitSettings.boardButton < 0) {
 							dev->controlData[20] |= 0x01 << 0;
 						}
 					}
@@ -1499,8 +1529,8 @@ void pollController(device* dev, SDL_GameController* controller) {
 							dev->controlData[20] |= 0x01 << 0;
 						}
 						// Off the board Flickit stands down and the triggers are the game's again, but
-						// what got the skater off the board gets him back on: both bumpers
-						if (flickitMode == FLICKIT_PAUSED && flickitSettings.triggerGrabs
+						// what got the skater off the board gets him back on: both bumpers (with no board button)
+						if (flickitMode == FLICKIT_PAUSED && flickitSettings.triggerGrabs && flickitSettings.boardButton < 0
 							&& SDL_GameControllerGetButton(controller, SDL_CONTROLLER_BUTTON_LEFTSHOULDER)
 							&& SDL_GameControllerGetButton(controller, SDL_CONTROLLER_BUTTON_RIGHTSHOULDER)) {
 							dev->controlData[20] |= 0x01 << 0;
@@ -1988,6 +2018,10 @@ void handleInputEvent(SDL_Event* e) {
 		if (PlayersGame::RunKey() > 0 && (int)e->key.keysym.scancode == PlayersGame::RunKey() && !e->key.repeat) {
 			PlayersGame::RunKeyPressed();
 		}
+		// The day and night's clock two hours on
+		if (DayNightGame::Key() > 0 && (int)e->key.keysym.scancode == DayNightGame::Key() && !e->key.repeat) {
+			DayNightGame::KeyPressed();
+		}
 		setUsingKeyboard(1);
 		do_key_input((SDL_KeyCode)e->key.keysym.sym);
 		return;
@@ -2127,7 +2161,7 @@ void __cdecl processController(device* dev) {
 		DriveGame::GrabMade(flickitGrabMade);
 		// The map: its controls, and the game sees nothing while it is up
 		SDL_GameController* mapPad = players[0].controller && !players[0].lockedOut ? players[0].controller : nullptr;
-		WorldMapGame::AfterPoll(dev->controlData, mapPad, (int)padbinds.cameraToggle, mapSeesMenu(), mapMenuUp());
+		WorldMapGame::AfterPoll(dev->controlData, mapPad, (int)flickitCameraButton(), mapSeesMenu(), mapMenuUp());
 		doPauseBuffer(dev);
 	}
 

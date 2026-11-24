@@ -289,6 +289,18 @@ namespace PlayersGame {
 		return s_parsed > 0;
 	}
 
+	// Script::RunScript runs a script to its end, but what it gives back is no yes or no for a script: the low
+	// byte of the address its CScript had, from the free just before it returns (0x0040FE2C -> 0x0040E370 ->
+	// 0x0057A960), so 0 for about one in 64. Only a missing script gives 0 for sure. So: is it a script, then run it.
+	static bool RunScriptOf(uint32_t name, void* params, void* object) {
+		const uint8_t* symbol = LookUpSymbol(name);
+		if (!symbol || symbol[1] != SYMBOL_SCRIPT) {
+			return false;
+		}
+		RunGameScript(name, params, object, 0);
+		return true;
+	}
+
 	static bool InNet() {
 		void* net = *kNetManager;
 		return net && InNetGame(net);
@@ -604,7 +616,7 @@ namespace PlayersGame {
 		params->AddChecksum(s_n.label, p.label);
 		params->AddString(s_n.name, p.who.name);
 		StructAddVector(params, s_n.pos, pos[0], pos[1], pos[2]);
-		const bool ran = RunGameScript(s_n.spawnScript, params, 0, 0);
+		const bool ran = RunScriptOf(s_n.spawnScript, params, 0);
 		Script::LazyStruct::s_free(params);
 		if (p.made <= 3 || !ran) {
 			Note("Players: %s made (object %08X) at (%.0f %.0f %.0f)%s", p.who.name, p.id, pos[0], pos[1], pos[2],

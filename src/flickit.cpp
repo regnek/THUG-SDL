@@ -65,6 +65,8 @@ namespace Flickit {
 	void SetDefaults(Settings& s) {
 		s.enabled = 1;
 		s.toggleButton = 8;      // SDL_CONTROLLER_BUTTON_RIGHTSTICK
+		s.boardButton = 3;       // Triangle (Y)
+		s.cameraButton = 7;      // L3
 		s.reloadKey = 66;        // SDL_SCANCODE_F9
 		s.debug = 1;
 
@@ -129,6 +131,8 @@ namespace Flickit {
 
 	void Sanitize(Settings& s) {
 		s.enabled = s.enabled ? 1 : 0;
+		s.boardButton = s.boardButton < 0 ? -1 : Clamp(s.boardButton, 0, 22);
+		s.cameraButton = s.cameraButton < 0 ? -1 : Clamp(s.cameraButton, 0, 22);
 		s.debug = s.debug ? 1 : 0;
 		s.kickflipSide = s.kickflipSide ? 1 : 0;
 		s.flicksByFeet = s.flicksByFeet ? 1 : 0;

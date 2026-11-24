@@ -1,6 +1,7 @@
 #include "script.h"
 #include "drive_game.h"
 #include "players_game.h"
+#include "daynight_game.h"
 #include "flickit_game.h"
 
 /*
@@ -100,6 +101,7 @@ void initScriptPatch() {
 	setLadderGrabKeys();
 	DriveGame::AtScriptsLoaded();   /* Flickit's car scripts */
 	PlayersGame::AtScriptsLoaded(); /* and its player scripts */
+	DayNightGame::AtScriptsLoaded(); /* and its day and night */
 }
 
 
