@@ -19,11 +19,15 @@ import pefile
 
 RUNTIME_DLLS = ("msvcp140", "vcruntime140")
 
-# Plain C functions that vcruntime140.dll has exported since its first version (Visual Studio 2015).
-# Whether the compiler calls them or expands them inline depends on the optimization level.
+# Functions that vcruntime140.dll has exported since its first version (Visual Studio 2015). The plain C
+# ones: whether the compiler calls them or expands them inline depends on the optimization level. The
+# current exception and its context: the C++ exception handling the compiler makes for a catch block
+# asks them (in the export list of the first vcruntime140.dll, which Wine copied in October 2015, and
+# msvcp140.dll's own exception_ptr uses them).
 RUNTIME_BASELINE = frozenset((
     "memchr", "memcmp", "memcpy", "memmove", "memset",
     "strchr", "strrchr", "strstr", "wcschr", "wcsrchr", "wcsstr",
+    "__current_exception", "__current_exception_context",
 ))
 
 
