@@ -269,8 +269,9 @@ namespace Drive {
 		return true;
 	}
 
-	// The cars of the level's traffic that were taken, to be put back at the start of their way: not before
-	// a while has gone by, and only when he is far from there (so that no car appears before his eyes).
+	// Cars of the level that went (a car he left that had to make room for another, a car he drove that went
+	// with a restart), to be put back at the start of their way: not before a while has gone by (if there is
+	// a wait), and only when he is far from there, so that no car appears before his eyes.
 	class Comeback {
 	public:
 		enum { kMax = 32 };
@@ -346,8 +347,26 @@ namespace Drive {
 		int m_count;
 	};
 
+	// Two places at least farAway apart
+	inline bool FarApart(const float a[3], const float b[3], float farAway) {
+		const float dx = a[0] - b[0], dy = a[1] - b[1], dz = a[2] - b[2];
+		return dx * dx + dy * dy + dz * dz >= farAway * farAway;
+	}
+
+	// Whether a car he left goes back now: it has stood standMs since he got out (0: it stays), he is farAway
+	// from it, and from start too when a car is to appear there (the car it was, at the start of its way; 0
+	// for none), so that no car goes or comes before his eyes. The level then has the cars it had.
+	inline bool GoesBack(uint32_t now, uint32_t parkedAt, uint32_t standMs, const float parked[3], const float at[3],
+		const float* start, float farAway) {
+		if (standMs == 0 || now - parkedAt < standMs) {
+			return false;
+		}
+		return FarApart(parked, at, farAway) && (!start || FarApart(start, at, farAway));
+	}
+
 	// The cars he got out of, under names of their own (Flickit_ParkedCar0 ...): a free name if there is
-	// one, otherwise the one left longest ago (that car goes).
+	// one, otherwise the one left longest ago (that car goes). Each keeps the car of the level it was (its
+	// origin: taken again and left again, still that one) and when he got out of it.
 	class Parking {
 	public:
 		enum { kSlots = 4, kModel = 128 };
@@ -371,7 +390,7 @@ namespace Drive {
 			}
 			return oldest;
 		}
-		void Park(int slot, const char* model, const Box& box) {
+		void Park(int slot, const char* model, const Box& box, uint32_t origin = 0, uint32_t now = 0) {
 			if (slot < 0 || slot >= kSlots) {
 				return;
 			}
@@ -379,6 +398,8 @@ namespace Drive {
 			s.used = true;
 			s.stamp = ++m_stamp;
 			s.box = box;
+			s.origin = origin;
+			s.parkedAt = now;
 			strncpy(s.model, model ? model : "", kModel - 1);
 			s.model[kModel - 1] = 0;
 		}
@@ -396,12 +417,20 @@ namespace Drive {
 		const Box* BoxOf(int slot) const {
 			return Used(slot) ? &m_slots[slot].box : 0;
 		}
+		uint32_t Origin(int slot) const {
+			return Used(slot) ? m_slots[slot].origin : 0;
+		}
+		uint32_t ParkedAt(int slot) const {
+			return Used(slot) ? m_slots[slot].parkedAt : 0;
+		}
 
 	private:
 		struct Slot {
 			bool used;
 			uint32_t stamp;
 			Box box;
+			uint32_t origin;
+			uint32_t parkedAt;
 			char model[kModel];
 		};
 		Slot m_slots[kSlots];

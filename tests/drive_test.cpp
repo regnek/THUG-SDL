@@ -204,6 +204,37 @@ static void TestParking() {
 	p.Park(1, longName, box);
 	Check(std::strlen(p.Model(1)) == Drive::Parking::kModel - 1, "a long model name cut to fit");
 	Check(p.Model(7) == 0 && !p.Used(-1), "no such slot");
+
+	// The car of the level each was, and when he got out of it
+	p.Park(3, "veh\\veh_custom\\veh_custom.mdl", box, 0xABCD, 50000);
+	Check(p.Origin(3) == 0xABCD && p.ParkedAt(3) == 50000, "the car it was and when, kept");
+	p.Park(3, "veh\\veh_custom\\veh_custom.mdl", box, 0xABCD, 90000);
+	Check(p.ParkedAt(3) == 90000, "left again: the time from then");
+	p.Leave(3);
+	Check(p.Origin(3) == 0 && p.ParkedAt(3) == 0, "taken again: not kept with the slot");
+	Check(p.Origin(-1) == 0 && p.ParkedAt(9) == 0, "no such slot, no car");
+}
+
+static void TestGoesBack() {
+	const float parked[3] = { 1000, 0, 0 };
+	const float start[3] = { -3000, 0, 0 };
+	const float near[3] = { 1200, 0, 0 };
+	const float farFromBoth[3] = { 4000, 0, 3000 };
+	const float nearStart[3] = { -2900, 0, 0 };
+	const uint32_t two = 120000;
+	Check(!Drive::GoesBack(100000, 0, two, parked, farFromBoth, start, 2500), "not before two minutes");
+	Check(Drive::GoesBack(120000, 0, two, parked, farFromBoth, start, 2500), "after two minutes, far from both");
+	Check(!Drive::GoesBack(500000, 0, two, parked, near, start, 2500), "not while he is near it");
+	Check(!Drive::GoesBack(500000, 0, two, parked, nearStart, start, 2500), "nor near where the car it was comes back");
+	Check(Drive::GoesBack(500000, 0, two, parked, nearStart, 0, 2500), "near there is fine when nothing comes back there");
+	Check(!Drive::GoesBack(500000, 0, 0, parked, farFromBoth, start, 2500), "a stand of 0: it stays");
+	// up and down count too
+	const float above[3] = { 1000, 2000, 0 };
+	Check(!Drive::GoesBack(500000, 0, two, parked, above, 0, 2500), "2000 above it is near");
+	// GetTickCount turns over after 49 days
+	Check(!Drive::GoesBack(0x00001000u, 0xFFFFF000u, two, parked, farFromBoth, start, 2500), "across the turn, too soon");
+	Check(Drive::GoesBack(0x0001F000u, 0xFFFFF000u, two, parked, farFromBoth, start, 2500), "across the turn, in time");
+	Check(Drive::FarApart(parked, start, 4000) && !Drive::FarApart(parked, start, 4001), "4000 apart");
 }
 
 static void TestGround() {
@@ -276,6 +307,7 @@ int main() {
 	TestTuneName();
 	TestComeback();
 	TestParking();
+	TestGoesBack();
 	TestGround();
 	std::printf("%d checks, %d failed\n", s_checks, s_failed);
 	return s_failed == 0 ? 0 : 1;

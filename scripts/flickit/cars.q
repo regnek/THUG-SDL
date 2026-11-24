@@ -1,5 +1,6 @@
 // Flickit's cars: any car in the level can be taken, a moving one too, by walking or skating up to it and
-// pressing Circle (the button the game gets into its own drivable cars with), and it stays where he gets out.
+// pressing Circle (the button the game gets into its own drivable cars with), and it stays where he gets out,
+// for two minutes (CarParkedTime): then it goes back, and the car it was is at the start of its way again.
 //
 // src/drive_game.cpp finds the car in reach, starts Flickit_CarSteal, and answers the Flickit_Car... commands
 // below (the car's place and speed, the place to get out at). These scripts do the rest the game's own way:
@@ -137,11 +138,6 @@ SCRIPT Flickit_CarSteal
 	IF NOT Flickit_CarTake car = <car>
 		RETURN
 	ENDIF
-	// a car of the level's traffic comes back later, at the start of its way
-	Flickit_CarIsTraffic car = <car>
-	IF ( <traffic> = 1 )
-		Flickit_CarComesBack car = <car>
-	ENDIF
 	// a car of the level's own to drive ("Press ... to drive") leaves its box on the screen otherwise, and so
 	// would Flickit's own
 	IF ObjectExists id = goal_start_dialog
@@ -198,15 +194,6 @@ SCRIPT Flickit_CarPromptOff
 	ENDIF
 ENDSCRIPT
 
-// The tags Car_Generic01 gives every car of the traffic
-SCRIPT Flickit_CarIsTraffic
-	<car> : GetTags
-	IF GotParam Tag_TurnDist
-		RETURN traffic = 1
-	ENDIF
-	RETURN traffic = 0
-ENDSCRIPT
-
 // Holding Triangle stops the car and gets him out once it is slow (the game's own), but not with a press
 // he was already holding when he got in: that has to be let go first.
 SCRIPT Flickit_CarWaitForExit
@@ -255,9 +242,21 @@ SCRIPT Flickit_CarExit
 	Flickit_CarParked
 ENDSCRIPT
 
-// A car of the traffic, back at the start of its way (when he is far from there)
+// A car of the level, back at the start of its way (when he is far from there)
 SCRIPT Flickit_CarBack
 	IF NOT IsAlive name = <car>
 		Create name = <car>
+	ENDIF
+ENDSCRIPT
+
+// A car he left goes back (src/drive_game.cpp says when: it has stood long enough, and he is far from it and
+// from the start of the car's way): it goes, and the car of the level it was (car, if it is to come back) is
+// at the start of its way again, in the same frame, so that the level has the cars it had
+SCRIPT Flickit_CarGoesBack
+	IF ObjectExists id = <parked>
+		<parked> : Die
+	ENDIF
+	IF GotParam car
+		Flickit_CarBack car = <car>
 	ENDIF
 ENDSCRIPT

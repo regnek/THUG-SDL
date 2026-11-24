@@ -48,6 +48,9 @@ namespace DriveGame {
 	static const StructArray_t StructArray = (StructArray_t)0x00410FC0;
 	typedef void(__thiscall* StructAddVector_t)(void* s, uint32_t name, float x, float y, float z);
 	static const StructAddVector_t StructAddVector = (StructAddVector_t)0x004124D0;
+	// CStruct::ContainsFlag: a name in it with no value (CreatedAtStart), in the structures it names too
+	typedef bool(__thiscall* StructFlag_t)(void* s, uint32_t flag);
+	static const StructFlag_t StructFlag = (StructFlag_t)0x004112A0;
 	// A symbol by its name: its type at +1 (7 a script, 10 a structure), its value at +0xC
 	typedef uint8_t* (__cdecl* LookUpSymbol_t)(uint32_t name);
 	static const LookUpSymbol_t LookUpSymbol = (LookUpSymbol_t)0x004133A0;
@@ -103,6 +106,7 @@ namespace DriveGame {
 		{ 0x004116A0, 12, { 0x56, 0x8D, 0x44, 0x24, 0x08, 0x50, 0x8B, 0xF1, 0x8B, 0x4C, 0x24, 0x0C }, "CStruct::GetVector" },
 		{ 0x00410FC0, 12, { 0x56, 0x8D, 0x44, 0x24, 0x08, 0x50, 0x8B, 0xF1, 0x8B, 0x4C, 0x24, 0x0C }, "CStruct::GetArray" },
 		{ 0x004124D0, 12, { 0x6A, 0xFF, 0x68, 0xD6, 0x19, 0x62, 0x00, 0x64, 0xA1, 0x00, 0x00, 0x00 }, "CStruct::AddVector" },
+		{ 0x004112A0, 12, { 0x56, 0x8B, 0x31, 0x85, 0xF6, 0x57, 0x74, 0x41, 0x8B, 0x7C, 0x24, 0x0C }, "CStruct::ContainsFlag" },
 		{ 0x004133A0, 12, { 0x8B, 0x4C, 0x24, 0x04, 0x8B, 0xC1, 0x25, 0xFF, 0x0F, 0x00, 0x00, 0x56 }, "Script::LookUpSymbol" },
 		{ 0x0045BEC0, 12, { 0x6A, 0xFF, 0x68, 0x5B, 0x35, 0x62, 0x00, 0x64, 0xA1, 0x00, 0x00, 0x00 }, "CVehicleComponent::MoveToNode" },
 		{ 0x0045E467, 14, { 0x8B, 0x4E, 0x0C, 0x68, 0x28, 0xCD, 0xD7, 0x27, 0xE8, 0x4C, 0xD9, 0xFB, 0xFF, 0x8B }, "CVehicleComponent::Finalize: its input component" },
@@ -125,7 +129,7 @@ namespace DriveGame {
 	struct Names {
 		uint32_t nodeArray, className, vehicle, skeletonName, car, model, name, pos, angles;
 		uint32_t carPhysics, staticVehicle, vehicleComponent, playerVehicle, colliders, setup, tune, speed, parked;
-		uint32_t stealScript, backScript, defaultTune, promptScript, promptOffScript;
+		uint32_t stealScript, backScript, goesBackScript, defaultTune, promptScript, promptOffScript, createdAtStart;
 		uint32_t parkedCar[Drive::Parking::kSlots];
 	};
 	static Names s_n;
@@ -151,8 +155,11 @@ namespace DriveGame {
 	static const uint32_t SKATE_LEVEL = 0x398;
 
 	enum { kMaxCars = 256, kModelSize = 128 };
-	static const uint32_t kComeBackMs = 15000;     // a car of the traffic is away at least this long
-	static const float kComeBackFar = 2500.0f;     // and comes back only when he is this far from its start
+	// A car he got out of stands this long, then goes back: it goes, and the car of the level it was comes
+	// back at the start of its way, both only when he is kFar from there ([Flickit] CarParkedTime, seconds;
+	// 0: it stays). So the level always has the cars it had: the one he drives or left is one of them.
+	static uint32_t s_standMs = 120000;
+	static const float kFar = 2500.0f;
 
 	struct Car {
 		uint32_t name;
@@ -161,6 +168,7 @@ namespace DriveGame {
 		uint32_t setup;          // the setup of the game's drivable car it gets
 		Drive::Box box;
 		float start[4];          // its node's place, where it comes back
+		bool atStart;            // there from the level's start (CreatedAtStart): it comes back; not a goal's car
 		Drive::Track track;
 		int slot;                // -1 for a car of the level, else its parking slot
 	};
@@ -174,6 +182,7 @@ namespace DriveGame {
 	struct Taken {
 		bool set;
 		uint32_t name;
+		uint32_t origin;         // the car of the level it is (itself, or the one a parked car was)
 		int slot;
 		char model[kModelSize];
 		Drive::Box box;
@@ -184,12 +193,14 @@ namespace DriveGame {
 	static Taken s_taken;
 	struct Driven {
 		bool set;
+		uint32_t origin;
 		char model[kModelSize];
 		Drive::Box box;
 	};
 	static Driven s_driven;
 	struct Leaving {
 		bool set;
+		uint32_t origin;
 		int slot;
 		char model[kModelSize];
 		Drive::Box box;
@@ -210,6 +221,7 @@ namespace DriveGame {
 	static bool s_released = true;           // let go since a car was taken
 	static LARGE_INTEGER s_lastFrame;        // zero: no frame yet
 	static uint32_t s_lastComeBack = 0;
+	static uint32_t s_lastGoesBack = 0;
 
 	/******************************************************************/
 	/*                                                                */
@@ -238,6 +250,8 @@ namespace DriveGame {
 		s_n.parked = Flickit::NameChecksum("parked");
 		s_n.stealScript = Flickit::NameChecksum("Flickit_CarSteal");
 		s_n.backScript = Flickit::NameChecksum("Flickit_CarBack");
+		s_n.goesBackScript = Flickit::NameChecksum("Flickit_CarGoesBack");
+		s_n.createdAtStart = Flickit::NameChecksum("CreatedAtStart");
 		s_n.defaultTune = Flickit::NameChecksum("Flickit_Car_Default");
 		s_n.promptScript = Flickit::NameChecksum("Flickit_CarPrompt");
 		s_n.promptOffScript = Flickit::NameChecksum("Flickit_CarPromptOff");
@@ -282,8 +296,8 @@ namespace DriveGame {
 			const uint8_t* tune = LookUpSymbol(s_n.defaultTune);
 			if (steal && steal[1] == SYMBOL_SCRIPT && tune && tune[1] == SYMBOL_STRUCTURE) {
 				s_parsed = 1;
-				Log::TypedLog(CHN_SDL, "Cars: on; Circle near a car takes it (reach %.0f), the game has Flickit's car scripts (%u bytes)\n",
-					s_reach, (unsigned)sizeof(data));
+				Log::TypedLog(CHN_SDL, "Cars: on; Circle near a car takes it (reach %.0f); a car he left goes back after %u s (0: it stays); the game has Flickit's car scripts (%u bytes)\n",
+					s_reach, s_standMs / 1000, (unsigned)sizeof(data));
 			}
 			else {
 				s_parsed = -1;
@@ -415,7 +429,7 @@ namespace DriveGame {
 		memset(&s_leaving, 0, sizeof(s_leaving));
 		void* nodes = GetGlobalArray(s_n.nodeArray, 0);
 		const uint32_t count = nodes ? *(const uint32_t*)((const uint8_t*)nodes + 8) : 0;
-		int skipped = 0;
+		int skipped = 0, atStart = 0;
 		for (uint32_t i = 0; i < count && s_levelCars < kMaxCars; i++) {
 			void* node = ArrayStructure(nodes, i);
 			uint32_t cls = 0, name = 0, skeleton = s_n.car;
@@ -435,6 +449,8 @@ namespace DriveGame {
 			c.slot = -1;
 			c.start[3] = 1.0f;
 			StructVector(node, s_n.pos, c.start, 0);
+			c.atStart = StructFlag(node, s_n.createdAtStart);
+			atStart += c.atStart ? 1 : 0;
 			TuneFor(c.model, &c);
 		}
 		for (int k = 0; k < Drive::Parking::kSlots; k++) {
@@ -443,8 +459,8 @@ namespace DriveGame {
 			c.name = s_n.parkedCar[k];
 			c.slot = k;
 		}
-		Log::TypedLog(CHN_SDL, "Cars: %d cars in this level to take%s\n", s_levelCars,
-			skipped ? " (and some vehicles that are not cars: buses, trams, boats)" : "");
+		Log::TypedLog(CHN_SDL, "Cars: %d cars in this level to take, %d of them there from its start%s\n", s_levelCars,
+			atStart, skipped ? "; and some vehicles that are not cars: buses, trams, boats" : "");
 	}
 
 	static Car* CarNamed(uint32_t name) {
@@ -483,6 +499,68 @@ namespace DriveGame {
 	/*  The frame                                                     */
 	/*                                                                */
 	/******************************************************************/
+
+	// A car of the level that is gone for good (nothing of it in the level now: the car he drove went with a
+	// restart, the car he left made room for another): back at the start of its way once he is far from
+	// there, if it was there from the level's start
+	static void ComeBackLater(uint32_t origin, uint32_t now, const char* why) {
+		const Car* o = origin ? CarNamed(origin) : 0;
+		if (!o || o->slot >= 0 || !o->atStart) {
+			return;
+		}
+		if (s_back.Add(origin, o->start, now)) {
+			Log::TypedLog(CHN_SDL, "Cars: %08X comes back at the start of its way when he is away from there (%s)\n", origin, why);
+		}
+	}
+
+	// A car he left that has stood long enough goes back, one at a time: it goes, and in the same frame the
+	// car of the level it was comes back at the start of its way (unless that car is there again already, or
+	// was a goal's), when he is far from both places
+	static void GoBack(const DriveGame::Skater& s, uint32_t now) {
+		for (int k = 0; k < Drive::Parking::kSlots; k++) {
+			Car& p = s_cars[s_levelCars + k];
+			const uint8_t* obj = CarObject(p);
+			if (!obj) {
+				continue;
+			}
+			const uint32_t origin = s_parking.Origin(k);
+			const Car* o = origin ? CarNamed(origin) : 0;
+			const bool appears = o && o->slot < 0 && o->atStart && !ResolveToObject(origin);
+			float at[3];
+			memcpy(at, obj + OBJECT_POSITION, sizeof(at));
+			if (!Drive::GoesBack(now, s_parking.ParkedAt(k), s_standMs, at, s.pos, appears ? o->start : 0, kFar)) {
+				continue;
+			}
+			Script::LazyStruct* params = Script::LazyStruct::s_create();
+			if (!params) {
+				return;
+			}
+			params->AddChecksum(s_n.parked, p.name);
+			if (appears) {
+				params->AddChecksum(s_n.car, origin);
+			}
+			const uint32_t stood = (now - s_parking.ParkedAt(k)) / 1000;
+			const bool ran = RunGameScript(s_n.goesBackScript, params, 0, 0);
+			Script::LazyStruct::s_free(params);
+			s_parking.Leave(k);
+			p.track.Reset();
+			if (appears) {
+				s_back.Remove(origin);
+			}
+			if (!ran) {
+				Log::TypedLog(CHN_SDL, "Cars: could not run Flickit_CarGoesBack for the car he left at (%.0f %.0f %.0f)\n", at[0], at[1], at[2]);
+			}
+			else if (appears) {
+				Log::TypedLog(CHN_SDL, "Cars: the car he left at (%.0f %.0f %.0f) %u s ago went back: %08X is at the start of its way again\n",
+					at[0], at[1], at[2], stood, origin);
+			}
+			else {
+				Log::TypedLog(CHN_SDL, "Cars: the car he left at (%.0f %.0f %.0f) %u s ago went (%s)\n", at[0], at[1], at[2], stood,
+					!o ? "a car of no known origin" : o->atStart ? "the car it was is there again" : "it was a goal's car");
+			}
+			return;
+		}
+	}
 
 	static void Steal(Car& c, const DriveGame::Skater& s) {
 		Script::LazyStruct* p = Script::LazyStruct::s_create();
@@ -531,9 +609,18 @@ namespace DriveGame {
 			return;
 		}
 		const uint32_t now = GetTickCount();
-		if (!s.driving && s_driven.set) {
+		if (s_taken.set && !s.driving) {
+			// taken on a frame before, and nothing to drive came of it (Flickit_CarPlace did not run): a car of
+			// the level that went in the taking comes back
+			s_taken.set = false;
+			if (s_taken.slot < 0 && !ResolveToObject(s_taken.name)) {
+				ComeBackLater(s_taken.origin, now, "it was taken, but there was no car to drive");
+			}
+		}
+		if (!s.driving && s_driven.set && !s_leaving.set) {
 			// out of the car some other way (a restart, the end of a goal): it went with PlayerVehicle
 			s_driven.set = false;
+			ComeBackLater(s_driven.origin, now, "the car he drove went with a restart");
 		}
 
 		// where each car is and how fast it goes, and the nearest in reach
@@ -545,7 +632,9 @@ namespace DriveGame {
 			if (!obj) {
 				c.track.Reset();
 				if (c.slot >= 0 && s_parking.Used(c.slot) && !ResolveToObject(c.name)) {
-					s_parking.Leave(c.slot);     // gone (a restart of the level's objects)
+					// gone (a restart of the level's objects)
+					ComeBackLater(s_parking.Origin(c.slot), now, "the car he left went with a restart");
+					s_parking.Leave(c.slot);
 				}
 				continue;
 			}
@@ -567,10 +656,16 @@ namespace DriveGame {
 			}
 		}
 
-		// a car of the traffic back at the start of its way, once a second at most
+		// a car he left long enough ago back where it came from, once a second at most
+		if (s_standMs && now - s_lastGoesBack > 1000) {
+			s_lastGoesBack = now;
+			GoBack(s, now);
+		}
+
+		// a car of the level that went for good back at the start of its way, once a second at most
 		if (s_back.Count() > 0 && now - s_lastComeBack > 1000) {
 			s_lastComeBack = now;
-			const uint32_t name = s_back.Due(now, s.pos, kComeBackMs, kComeBackFar);
+			const uint32_t name = s_back.Due(now, s.pos, 0, kFar);
 			if (name) {
 				Script::LazyStruct* p = Script::LazyStruct::s_create();
 				if (p) {
@@ -615,6 +710,7 @@ namespace DriveGame {
 		const float* m = (const float*)(obj + OBJECT_MATRIX);
 		memset(&s_taken, 0, sizeof(s_taken));
 		s_taken.name = name;
+		s_taken.origin = c->slot >= 0 ? s_parking.Origin(c->slot) : name;
 		s_taken.slot = c->slot;
 		strncpy_s(s_taken.model, sizeof(s_taken.model), c->slot >= 0 ? ParkedModel(c->slot) : c->model, _TRUNCATE);
 		s_taken.box = c->slot >= 0 && s_parking.BoxOf(c->slot) ? *s_parking.BoxOf(c->slot) : c->box;
@@ -627,13 +723,6 @@ namespace DriveGame {
 			back->AddFloat(s_n.speed, s_taken.speed);
 		}
 		return true;
-	}
-
-	// Flickit_CarComesBack car = <car>: a car of the traffic, to be put back later
-	static bool CFunc_CarComesBack(Script::LazyStruct* params, DummyScript*) {
-		uint32_t name = 0;
-		Car* c = params && params->GetChecksum(s_n.car, &name, false) ? CarNamed(name) : 0;
-		return c && c->slot < 0 && s_back.Add(name, c->start, GetTickCount());
 	}
 
 	// Flickit_CarPlace: PlayerVehicle where the car taken was, the way it faced
@@ -654,6 +743,7 @@ namespace DriveGame {
 			s_parking.Leave(s_taken.slot);
 		}
 		s_driven.set = true;
+		s_driven.origin = s_taken.origin;
 		strncpy_s(s_driven.model, sizeof(s_driven.model), s_taken.model, _TRUNCATE);
 		s_driven.box = s_taken.box;
 		Log::TypedLog(CHN_SDL, "Cars: driving it from (%.1f %.1f %.1f), facing %.0f degrees, at %.0f units/s\n",
@@ -775,6 +865,7 @@ namespace DriveGame {
 			return false;
 		}
 		memset(&s_leaving, 0, sizeof(s_leaving));
+		s_leaving.origin = s_driven.origin;
 		memcpy(s_leaving.pos, obj + OBJECT_POSITION, sizeof(s_leaving.pos));
 		memcpy(s_leaving.matrix, obj + OBJECT_MATRIX, sizeof(s_leaving.matrix));
 		s_leaving.heading = Drive::Heading(s_leaving.matrix);
@@ -809,6 +900,10 @@ namespace DriveGame {
 			inUse[k] = ResolveToObject(s_n.parkedCar[k]) != 0;
 		}
 		s_leaving.slot = s_parking.Pick(inUse);
+		if (inUse[s_leaving.slot]) {
+			// the one left longest ago goes (Flickit_CarExit), to make room
+			ComeBackLater(s_parking.Origin(s_leaving.slot), GetTickCount(), "the car he left made room for another");
+		}
 		s_parking.Leave(s_leaving.slot);
 		s_leaving.set = true;
 		Script::LazyStruct* back = Returned(script);
@@ -845,12 +940,13 @@ namespace DriveGame {
 		uint8_t* obj = (uint8_t*)ResolveToObject(s_n.parkedCar[s_leaving.slot]);
 		if (!obj || !GetComponent(obj, s_n.staticVehicle)) {
 			Log::TypedLog(CHN_SDL, "Cars: the car he got out of was not made again\n");
+			ComeBackLater(s_leaving.origin, GetTickCount(), "the car he got out of was not made again");
 			return false;
 		}
 		memcpy(obj + OBJECT_POSITION, s_leaving.parkPos, sizeof(s_leaving.parkPos));
 		memcpy(obj + OBJECT_MATRIX, s_leaving.parkMatrix, sizeof(s_leaving.parkMatrix));
 		memcpy(obj + OBJECT_DISPLAY_MATRIX, s_leaving.parkMatrix, sizeof(s_leaving.parkMatrix));
-		s_parking.Park(s_leaving.slot, s_leaving.model, s_leaving.box);
+		s_parking.Park(s_leaving.slot, s_leaving.model, s_leaving.box, s_leaving.origin, GetTickCount());
 		Car* c = CarNamed(s_n.parkedCar[s_leaving.slot]);
 		if (c) {
 			c->track.Reset();
@@ -876,7 +972,6 @@ namespace DriveGame {
 			return;
 		}
 		CFuncs::AddFunction("Flickit_CarTake", (void*)CFunc_CarTake);
-		CFuncs::AddFunction("Flickit_CarComesBack", (void*)CFunc_CarComesBack);
 		CFuncs::AddFunction("Flickit_CarPlace", (void*)CFunc_CarPlace);
 		CFuncs::AddFunction("Flickit_CarButtonUp", (void*)CFunc_CarButtonUp);
 		CFuncs::AddFunction("Flickit_CarLeave", (void*)CFunc_CarLeave);
@@ -890,6 +985,9 @@ namespace DriveGame {
 		int reach = (int)GetPrivateProfileIntA(FLICKIT_SECTION, "CarReach", 45, configFile);
 		reach = reach < 10 ? 10 : (reach > 200 ? 200 : reach);
 		s_reach = (float)reach;
+		int stand = (int)GetPrivateProfileIntA(FLICKIT_SECTION, "CarParkedTime", 120, configFile);
+		stand = stand <= 0 ? 0 : (stand < 10 ? 10 : (stand > 3600 ? 3600 : stand));
+		s_standMs = (uint32_t)stand * 1000u;
 		if (!s_on) {
 			Log::TypedLog(CHN_SDL, "Cars: off\n");
 		}

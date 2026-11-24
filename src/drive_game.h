@@ -24,7 +24,8 @@ namespace DriveGame {
 		bool driving;
 	};
 
-	// [Flickit] Cars (1 on), CarReach (how close to a car's body, in game units: 45 by default)
+	// [Flickit] Cars (1 on), CarReach (how close to a car's body, in game units: 45 by default), CarParkedTime
+	// (seconds a car he left stands before it goes back: 120 by default, 0 for always)
 	void Configure(const char* configFile);
 
 	// The script commands the car scripts use. Before the game makes its table of them (InitPatch).
