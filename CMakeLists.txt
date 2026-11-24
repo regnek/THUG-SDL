@@ -111,6 +111,12 @@ target_include_directories(${PROJECT_NAME_VAR} PUBLIC
 
 set_source_files_properties(exports.def PROPERTIES HEADER_FILE_ONLY TRUE)
 
+# The commit it was built from (the CI passes -DFLICKIT_BUILD=<sha>): written at the head of each run in
+# flickit_watchdog.txt, so that a report says which build it came from
+if(DEFINED FLICKIT_BUILD AND NOT FLICKIT_BUILD STREQUAL "")
+	target_compile_definitions(${PROJECT_NAME_VAR} PRIVATE FLICKIT_BUILD="${FLICKIT_BUILD}")
+endif()
+
 set_target_properties(
     ${PROJECT_NAME_VAR} 
     PROPERTIES 

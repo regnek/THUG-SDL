@@ -84,6 +84,7 @@ jobs:
           cmake -S . -B build-default -A Win32
           -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
           -DVCPKG_TARGET_TRIPLET=x86-windows
+          -DFLICKIT_BUILD=${{ github.sha }}
 
       - name: Build, default Release flags
         run: cmake --build build-default --config Release --target THUG_SDL
@@ -93,6 +94,7 @@ jobs:
           cmake -S . -B build-unoptimized -A Win32
           -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
           -DVCPKG_TARGET_TRIPLET=x86-windows
+          -DFLICKIT_BUILD=${{ github.sha }}
           "-DCMAKE_CXX_FLAGS_RELEASE=/MD /Od /DNDEBUG"
           "-DCMAKE_C_FLAGS_RELEASE=/MD /Od /DNDEBUG"
 

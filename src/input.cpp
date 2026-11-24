@@ -1424,6 +1424,21 @@ void pollController(device* dev, SDL_GameController* controller) {
 					if (boardButton >= 0 && getButton(controller, (controllerButton)boardButton)) {
 						dev->controlData[20] |= 0x01 << 0;
 					}
+					// What the board button did, for the first presses of a run (flickit_watchdog.txt)
+					if (dev->port == 0 && flickitSettings.boardButton >= 0) {
+						static bool s_boardWas = false;
+						static int s_boardTold = 0;
+						const bool down = getButton(controller, (controllerButton)flickitSettings.boardButton) != 0;
+						if (down && !s_boardWas && s_boardTold < 20) {
+							s_boardTold++;
+							char text[160];
+							sprintf_s(text, sizeof(text), "Buttons: the board button (%d) down: %s\n", flickitSettings.boardButton,
+								boardButton >= 0 ? (flickitMode == FLICKIT_ON ? "Black to the game, on the board" : "Black to the game, off the board")
+								: flickitMode == FLICKIT_OFF ? "left to the game (Flickit is off)" : "left to the game (in a car)");
+							FlickitGame::WatchNote(text);
+						}
+						s_boardWas = down;
+					}
 					const controllerButton cameraButton = flickitCameraButton();
 
 					// Buttons

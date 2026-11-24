@@ -1,5 +1,6 @@
 #include <windows.h>
 #include <math.h>
+#include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -9,6 +10,7 @@
 #include "flickit_daynight_qb.h"
 #include "bigworld.h"
 #include "flickit.h"
+#include "flickit_game.h"
 #include "QB/LazyStruct.h"
 #include "Logger/Logger.h"
 
@@ -86,6 +88,17 @@ namespace DayNightGame {
 	};
 	static Names s_n;
 
+	// A line for the log and flickit_watchdog.txt (the log is only written with the console on)
+	static void Note(const char* format, ...) {
+		char text[400];
+		va_list args;
+		va_start(args, format);
+		vsnprintf(text, sizeof(text), format, args);
+		va_end(args);
+		text[sizeof(text) - 1] = 0;
+		FlickitGame::WatchNote(text);
+	}
+
 	static void InitNames() {
 		s_n.lookScript = Flickit::NameChecksum("Flickit_DayNightLook");
 		s_n.lightsScript = Flickit::NameChecksum("Flickit_DayNightLights");
@@ -124,7 +137,7 @@ namespace DayNightGame {
 			s_ready = 1;
 			for (size_t i = 0; i < sizeof(kExpect) / sizeof(kExpect[0]); i++) {
 				if (memcmp((const void*)kExpect[i].address, kExpect[i].bytes, (size_t)kExpect[i].size) != 0) {
-					Log::TypedLog(CHN_SDL, "Day and night: the game's code at %08X (%s) is not what was expected; no day and night\n",
+					Note("Day and night: the game's code at %08X (%s) is not what was expected; no day and night\n",
 						kExpect[i].address, kExpect[i].what);
 					s_ready = -1;
 				}
@@ -142,11 +155,11 @@ namespace DayNightGame {
 			const uint8_t* look = LookUpSymbol(s_n.lookScript);
 			if (look && look[1] == SYMBOL_SCRIPT) {
 				s_parsed = 1;
-				Log::TypedLog(CHN_SDL, "Day and night: the game has Flickit's day and night scripts (%u bytes)\n", (unsigned)sizeof(data));
+				Note("Day and night: the game has Flickit's day and night scripts (%u bytes)\n", (unsigned)sizeof(data));
 			}
 			else {
 				s_parsed = -1;
-				Log::TypedLog(CHN_SDL, "Day and night: the game did not take Flickit's day and night scripts; no day and night\n");
+				Note("Day and night: the game did not take Flickit's day and night scripts; no day and night\n");
 			}
 		}
 		return s_parsed > 0;
@@ -241,7 +254,7 @@ namespace DayNightGame {
 		RunGameScript(s_n.headlightsOff, 0, 0, 0);
 		s_night = s_evening = s_headlights = -1;
 		s_sinceLook = 1.0e9f;
-		Log::TypedLog(CHN_SDL, "Day and night: off; the level as at midday\n");
+		Note("Day and night: off; the level as at midday\n");
 	}
 
 	void Frame() {
@@ -264,7 +277,7 @@ namespace DayNightGame {
 		if (skips > 0) {
 			s_clock.SetHour(s_clock.Hour() + 2.0f * (float)skips);
 			s_sinceLook = 1.0e9f;
-			Log::TypedLog(CHN_SDL, "Day and night: the clock put on to %02d:%02d\n", (int)s_clock.Hour(),
+			Note("Day and night: the clock put on to %02d:%02d\n", (int)s_clock.Hour(),
 				(int)(fmodf(s_clock.Hour(), 1.0f) * 60.0f));
 		}
 		// a new level: everything told again, at once
@@ -302,7 +315,7 @@ namespace DayNightGame {
 		const char* part = PartOfDay(hour);
 		if (part != s_loggedPart || lightsChange) {
 			s_loggedPart = part;
-			Log::TypedLog(CHN_SDL, "Day and night: %02d:%02d, %s%s%s%s\n", (int)hour, (int)(fmodf(hour, 1.0f) * 60.0f), part,
+			Note("Day and night: %02d:%02d, %s%s%s%s\n", (int)hour, (int)(fmodf(hour, 1.0f) * 60.0f), part,
 				night ? "; night lights on" : "", evening ? "; evening lights on" : "", headlights ? "; headlights on" : "");
 		}
 	}
@@ -344,11 +357,11 @@ namespace DayNightGame {
 			s_sinceLook = 1.0e9f;
 		}
 		if (s_on) {
-			Log::TypedLog(CHN_SDL, "Day and night: on; a day goes by in %d minutes of play (0: the clock stands still), from %02d:00; key %d puts it two hours on\n",
+			Note("Day and night: on; a day goes by in %d minutes of play (0: the clock stands still), from %02d:00; key %d puts it two hours on\n",
 				minutes, start, s_key);
 		}
 		else {
-			Log::TypedLog(CHN_SDL, "Day and night: off ([Flickit] DayNight=0)\n");
+			Note("Day and night: off ([Flickit] DayNight=0)\n");
 		}
 	}
 }

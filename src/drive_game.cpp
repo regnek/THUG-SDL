@@ -348,6 +348,7 @@ namespace DriveGame {
 	static uint32_t s_lastSound = 0;
 	static uint8_t* s_feeler = 0;            // the skater's physics' feeler, on this frame
 	static void ResetCrashes();
+	static void Note(const char* format, ...);   // a line for the log and flickit_watchdog.txt
 
 	// People run over ([Flickit] RunOver, RunOverSpeed): someone in the way of his car, or of a loose car thrown
 	// about, is thrown (peds.h), falls the game's own way and stays down (Flickit_PedHit); once they have lain
@@ -478,7 +479,7 @@ namespace DriveGame {
 			const uint8_t* tune = LookUpSymbol(s_n.defaultTune);
 			if (steal && steal[1] == SYMBOL_SCRIPT && tune && tune[1] == SYMBOL_STRUCTURE) {
 				s_parsed = 1;
-				Log::TypedLog(CHN_SDL, "Cars: on; Circle near a car takes it (reach %.0f); a car he left goes back after %u s (0: it stays); the game has Flickit's car scripts (%u bytes)\n",
+				Note("Cars: on; Circle near a car takes it (reach %.0f); a car he left goes back after %u s (0: it stays); the game has Flickit's car scripts (%u bytes)\n",
 					s_reach, s_standMs / 1000, (unsigned)sizeof(data));
 			}
 			else {
@@ -1129,6 +1130,12 @@ namespace DriveGame {
 	};
 	static Party s_parties[kMaxCars + Drive::Parking::kSlots + 1];
 	static int s_partyCount = 0;
+	// What the crashes saw, for the watchdog file: his car's box once each time he drives, his first touches,
+	// and now and then while he drives, what is around him
+	static bool s_hisTold = false;
+	static int s_touchesTold = 0;
+	static int s_aroundTold = 0;
+	static uint32_t s_aroundAt = 0;
 
 	struct Knock {
 		int car;
@@ -1289,6 +1296,13 @@ namespace DriveGame {
 					continue;
 				}
 				const float at[3] = { c.point[0], 0.5f * ((A.body.low > B.body.low ? A.body.low : B.body.low) + (A.body.high < B.body.high ? A.body.high : B.body.high)), c.point[1] };
+				if ((A.kind == kHis || B.kind == kHis) && s_touchesTold < 30) {
+					const Party& O = A.kind == kHis ? B : A;
+					s_touchesTold++;
+					Note("Crashes: his car touched %s (%08X) at %.0f a second, at (%.0f %.0f %.0f)\n",
+						O.kind == kTraffic ? "a car of the traffic" : "a loose car", O.kind == kTraffic ? s_cars[O.index].name : s_n.parkedCar[O.index],
+						r.approach, at[0], at[1], at[2]);
+				}
 				if (r.approach >= kSoundFrom) {
 					HitSound(r.approach, at, s.pos, now);
 				}
@@ -1692,6 +1706,46 @@ namespace DriveGame {
 			s_drivenHaveVel = false;
 		}
 		Parties(his, (const uint8_t*)vehicle);
+		if (s.driving && !s_hisTold) {
+			s_hisTold = true;
+			const bool body = s_partyCount > 0 && s_parties[0].kind == kHis;
+			if (body) {
+				const Crash::Body& b = s_parties[0].body;
+				Note("Crashes: his car (%s) is in the crashes: a box %.0f wide, %.0f long, from %.0f to %.0f high; 1/mass %.4f, 1/turning %.7f\n",
+					s_driven.model, 2.0f * b.halfX, 2.0f * b.halfZ, b.low, b.high, b.invMass, b.invInertia);
+			}
+			else if (!his) {
+				Note("Crashes: he drives, but not a car of Flickit's (%s): his car is not in the crashes\n", s_driven.set ? "PlayerVehicle not found" : "not taken with Circle");
+			}
+			else {
+				const float* v = (const float*)((const uint8_t*)vehicle + VEHICLE_VELOCITY);
+				Note("Crashes: his car (%s) has no box: 1/mass %.4f, 1/turning %.7f, speed (%.0f %.0f %.0f), box %.0f / %.0f to %.0f / %.0f\n",
+					s_driven.model, *(const float*)((const uint8_t*)vehicle + VEHICLE_INV_MASS), *(const float*)((const uint8_t*)vehicle + VEHICLE_INV_INERTIA + 4),
+					v[0], v[1], v[2], s_driven.box.halfWidth, s_driven.box.rear, s_driven.box.front, s_driven.box.height);
+			}
+		}
+		else if (!s.driving) {
+			s_hisTold = false;
+		}
+		if (s.driving && s_aroundTold < 8 && now - s_aroundAt > 15000) {
+			s_aroundAt = now;
+			s_aroundTold++;
+			int traffic = 0, loose = 0;
+			float nearest = 1.0e9f;
+			const Party* me = s_partyCount > 0 && s_parties[0].kind == kHis ? &s_parties[0] : 0;
+			for (int i = 0; i < s_partyCount; i++) {
+				const Party& p = s_parties[i];
+				traffic += p.kind == kTraffic ? 1 : 0;
+				loose += p.kind == kLoose ? 1 : 0;
+				if (me && p.kind != kHis) {
+					const float dx = p.body.centre[0] - me->body.centre[0], dz = p.body.centre[1] - me->body.centre[1];
+					const float d = sqrtf(dx * dx + dz * dz);
+					nearest = d < nearest ? d : nearest;
+				}
+			}
+			Note("Crashes: he drives%s; %d cars of the traffic and %d loose cars in the crashes%s%.0f\n", me ? "" : " (his car not in the crashes)",
+				traffic, loose, me ? ", the nearest's middle " : "", me && nearest < 1.0e9f ? nearest : 0.0f);
+		}
 		Knock knocks[kKnocksAFrame];
 		const int count = Touch(his, (uint8_t*)vehicle, s, now, knocks);
 		for (int i = 0; i < count; i++) {
@@ -1743,7 +1797,7 @@ namespace DriveGame {
 			p.start[3] = 1.0f;
 			StructVector(node, s_n.pos, p.start, 0);
 		}
-		Log::TypedLog(CHN_SDL, "People: %d in this level (the nodes of the class Pedestrian)%s\n", s_pedCount,
+		Note("People: %d in this level (the nodes of the class Pedestrian)%s\n", s_pedCount,
 			s_runOver ? "" : "; cars go through them (RunOver=0)");
 	}
 
@@ -2004,7 +2058,7 @@ namespace DriveGame {
 		s_prompt = false;                    // the steal script takes the prompt away
 		const bool ran = RunScriptOf(s_n.stealScript, p, s.object);
 		Script::LazyStruct::s_free(p);
-		Log::TypedLog(CHN_SDL, "Cars: %s %s (%08X, %s)%s\n", ran ? "took" : "could not run Flickit_CarSteal for",
+		Note("Cars: %s %s (%08X, %s)%s\n", ran ? "took" : "could not run Flickit_CarSteal for",
 			c.slot >= 0 ? "a car he had left" : "a car of the level", c.name, model,
 			ran && !s.driving && !s_driven.set ? ", but he is not driving it" : "");
 	}
@@ -2637,7 +2691,7 @@ namespace DriveGame {
 		from = from < 10 ? 10 : (from > 2000 ? 2000 : from);
 		s_runOverFrom = (float)from;
 		if (!s_crashes) {
-			Log::TypedLog(CHN_SDL, "Crashes: off (CarCrashes=0): the cars go through each other\n");
+			Note("Crashes: off (CarCrashes=0): the cars go through each other\n");
 		}
 		if (!s_on) {
 			Log::TypedLog(CHN_SDL, "Cars: off\n");

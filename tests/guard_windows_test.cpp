@@ -18,6 +18,7 @@
 #endif
 
 volatile uint32_t g_guardTestWord = 0;
+volatile uint32_t g_guardTestWord2 = 0;
 const uint8_t* const g_guardTestScript = 0;
 
 static std::vector<std::string> s_lines;
@@ -45,6 +46,7 @@ struct Fake {
 static Fake s_manager = { 0x7AB1E000, { 1, 2, 3 } };
 static Fake s_other = { 0x7AB1E000, { 4, 5, 6 } };
 static Fake s_notOne = { 0x12345678, { 7, 8, 9 } };
+static Fake s_manager2 = { 0x7AB1E004, { 10, 11, 12 } };     // the second word's kind
 
 static int s_checks = 0;
 static int s_failed = 0;
@@ -72,6 +74,10 @@ static uint32_t Address(const void* p) {
 
 NOINLINE static void WriteWord(uint32_t v) {
 	g_guardTestWord = v;
+}
+
+NOINLINE static void WriteWord2(uint32_t v) {
+	g_guardTestWord2 = v;
 }
 
 NOINLINE static void WriteHalf(uint16_t v) {
@@ -124,6 +130,8 @@ int main() {
 	setvbuf(stdout, NULL, _IONBF, 0);
 	g_guardTestWord = Address(&s_manager);
 	const uint32_t manager = Address(&s_manager);
+	g_guardTestWord2 = Address(&s_manager2);
+	const uint32_t manager2 = Address(&s_manager2);
 
 	// A thread from before the guard starts
 	Job early = { CreateEventA(NULL, TRUE, FALSE, NULL), 0x003B003A, false };
@@ -207,6 +215,18 @@ int main() {
 	}
 	GuardGame::Frame();
 	Check(s_lines.size() == lines, "reading it is not caught");
+
+	// The second word has a breakpoint of its own (DR1): put back, and written down with its name
+	WriteWord2(0x003B003A);
+	Check(g_guardTestWord2 == manager2, "a write over the second word is put back at once");
+	Check(g_guardTestWord == other, "and the first is as it was");
+	GuardGame::Frame();
+	Check(Logged("0x003B003A written over the game's component manager pointer (the test's)"), "and written down with its name");
+	const uint32_t another2 = Address(&s_manager2) + 0;
+	WriteWord2(another2);
+	Check(g_guardTestWord2 == manager2, "the same manager written over it is left");
+	WriteWord2(Address(&s_manager));
+	Check(g_guardTestWord2 == manager2, "a manager of the first word's kind is not one of the second's: put back");
 
 #ifdef _MSC_VER
 	Check(AccessViolationReachesItsHandler(), "an access violation in a __try still reaches its __except");

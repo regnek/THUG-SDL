@@ -2424,8 +2424,13 @@ namespace FlickitGame {
 				}
 				SYSTEMTIME t;
 				GetLocalTime(&t);
-				char head[96];
-				sprintf_s(head, sizeof(head), "\r\n=== %04u-%02u-%02u: the first note of this run of the game ===\r\n", t.wYear, t.wMonth, t.wDay);
+				char head[160];
+#ifdef FLICKIT_BUILD
+				const char* build = FLICKIT_BUILD;
+#else
+				const char* build = "a local build";
+#endif
+				sprintf_s(head, sizeof(head), "\r\n=== %04u-%02u-%02u: the first note of this run of the game (Flickit %.12s) ===\r\n", t.wYear, t.wMonth, t.wDay, build);
 				s_watchFile = 1;
 				WatchAppend(head);
 			}

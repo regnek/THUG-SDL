@@ -121,6 +121,14 @@ static void TestDebugBits() {
 	Check(Guard::WithBreakpoint(rw) == 0x000D0001, "and becomes ours");
 	Check(!Guard::HasBreakpoint(a + 4, Guard::WithBreakpoint(0), a), "nor one at another address");
 	Check(!Guard::HasBreakpoint(a, 0x000D0000, a), "nor one that is not on");
+	// Breakpoint 1 (DR1): bit 2, and bits 20-23
+	Check(Guard::WithBreakpoint(0, 1) == 0x00D00004, "breakpoint 1 on a 4-byte write");
+	Check(Guard::WithBreakpoint(Guard::WithBreakpoint(0, 0), 1) == 0x00DD0005, "breakpoints 0 and 1 together");
+	Check(Guard::HasBreakpoint(a, Guard::WithBreakpoint(Guard::WithBreakpoint(0, 0), 1), a, 1)
+		&& Guard::HasBreakpoint(a, Guard::WithBreakpoint(Guard::WithBreakpoint(0, 0), 1), a, 0), "each is there with the other");
+	Check(Guard::WithBreakpoint(Guard::WithBreakpoint(0, 1), 0) == Guard::WithBreakpoint(Guard::WithBreakpoint(0, 0), 1), "in either order");
+	Check(!Guard::HasBreakpoint(a, Guard::WithBreakpoint(0, 0), a, 1), "breakpoint 0 is not breakpoint 1");
+	Check(Guard::Dr7Mask(0) == Guard::kDr7Mask && Guard::Dr7Bits(0) == Guard::kDr7Bits, "breakpoint 0's bits as before");
 }
 
 int main() {

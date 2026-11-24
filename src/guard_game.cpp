@@ -14,38 +14,58 @@
 #ifndef GUARD_TEST
 #include "Logger/Logger.h"
 #else
-// tests/guard_windows_test.cpp: this same code, watching a word of that program's instead of the game's
+// tests/guard_windows_test.cpp: this same code, watching words of that program's instead of the game's
 extern volatile uint32_t g_guardTestWord;
+extern volatile uint32_t g_guardTestWord2;
 extern const uint8_t* const g_guardTestScript;
 void GuardTestLog(const char* text);
 #endif
 
 namespace GuardGame {
+	// A word watched: where it is, what the object it points to has first (its table of functions), the game's
+	// own writes to it (by the instruction after each: a write breakpoint stops after the write), its name
+	struct Word {
+		volatile uint32_t* address;
+		uint32_t table;
+		const uint32_t* gamesOwn;
+		int ownCount;
+		const char* name;
+	};
 #ifndef GUARD_TEST
-	// The pointer, and what it points to: an object whose table of functions is at 0x0062E8F8 (its constructor,
-	// 0x00420560, puts it there)
-	static volatile uint32_t* const kManager = (volatile uint32_t*)0x0069B6C0;
-	static const uint32_t kManagerTable = 0x0062E8F8;
-	// The game's own writes to it, by the instruction after each (a write breakpoint stops after the write): the
-	// two where it is made (0x00420EB1, 0x00420EB9) and the one where it goes (0x0041F955)
-	static const uint32_t kGamesOwn[] = { 0x00420EB6, 0x00420EBE, 0x0041F95F };
+	// The object manager pointer (its constructor, 0x00420560, puts the table 0x0062E8F8 there): made at
+	// 0x00420EB1 / 0x00420EB9, gone at 0x0041F955. And 8 bytes before it the component manager pointer (its
+	// constructor 0x0041CFF0, table 0x0062E668): made at 0x0041D781 / 0x0041D789 (Instance, 0x0041D750), never
+	// gone. The same two 16-bit numbers (58, 59) have been written over the one (the crash at 0x0041FBB3) and over
+	// the other (at 0x0041CBC0, from 0x004515E2). The refcounts after each (+4) change at every Instance(): not
+	// watched.
+	static const uint32_t kObjectsOwn[] = { 0x00420EB6, 0x00420EBE, 0x0041F95F };
+	static const uint32_t kComponentsOwn[] = { 0x0041D786, 0x0041D78E };
+	static const Word kWords[] = {
+		{ (volatile uint32_t*)0x0069B6C0, 0x0062E8F8, kObjectsOwn, 3, "object manager pointer (0x0069B6C0)" },
+		{ (volatile uint32_t*)0x0069B6B8, 0x0062E668, kComponentsOwn, 2, "component manager pointer (0x0069B6B8)" },
+	};
 	// The game's code
 	static const uint32_t kCodeStart = 0x00401000;
 	static const uint32_t kCodeEnd = 0x0062C3EF;
 	// The script running (the crash box shows it too): its name at +0xBC, its caller's at +0x60
 	static const uint8_t* const* const kScript = (const uint8_t* const*)0x0069842C;
 #else
-	static volatile uint32_t* const kManager = &g_guardTestWord;
-	static const uint32_t kManagerTable = 0x7AB1E000;
-	static const uint32_t kGamesOwn[] = { 0 };
+	static const uint32_t kNoneOwn[] = { 0 };
+	static const Word kWords[] = {
+		{ &g_guardTestWord, 0x7AB1E000, kNoneOwn, 1, "object manager pointer (the test's)" },
+		{ &g_guardTestWord2, 0x7AB1E004, kNoneOwn, 1, "component manager pointer (the test's)" },
+	};
 	static const uint32_t kCodeStart = 0;
 	static const uint32_t kCodeEnd = 0;
 	static const uint8_t* const* const kScript = &g_guardTestScript;
 #endif
 
+	enum { kWords_ = sizeof(kWords) / sizeof(kWords[0]) };
+	static volatile uint32_t* const kManager = kWords[0].address;     // the first: the guard starts once it is there
+
 	enum State { kOff, kWaiting, kOn, kBroken };
 	static State s_state = kOff;
-	static volatile uint32_t s_good = 0;        // what the pointer should be
+	static volatile uint32_t s_good[kWords_];   // what each word should be
 	static PVOID s_handler = 0;
 	static uint32_t s_dllStart = 0, s_dllEnd = 0;
 	static bool s_works = false;                // the test write was caught
@@ -66,6 +86,7 @@ namespace GuardGame {
 	// What the breakpoint caught, for the next frame to write down
 	struct Note {
 		volatile LONG seq;      // which note this is, once it is filled in (-1 while it is being)
+		int word;               // which word (kWords)
 		int action;             // Guard::Action
 		bool gamesOwn;
 		bool full;              // with the registers, the code and the stack
@@ -121,8 +142,8 @@ namespace GuardGame {
 		return true;
 	}
 
-	static bool IsManager(uint32_t v) {
-		return v && !(v & 3) && Readable(v, 4) && *(const uint32_t*)(uintptr_t)v == kManagerTable;
+	static bool IsManager(int word, uint32_t v) {
+		return v && !(v & 3) && Readable(v, 4) && *(const uint32_t*)(uintptr_t)v == kWords[word].table;
 	}
 
 	static bool InGameCode(uint32_t a) {
@@ -161,10 +182,11 @@ namespace GuardGame {
 	/*  The breakpoint going off                                      */
 	/******************************************************************/
 
-	static void TakeNote(const CONTEXT* c, Guard::Action action, bool own, uint32_t now, uint32_t before) {
+	static void TakeNote(int word, const CONTEXT* c, Guard::Action action, bool own, uint32_t now, uint32_t before) {
 		const LONG n = InterlockedIncrement(&s_taken) - 1;
 		Note& note = s_notes[n % kNotes];
 		note.seq = -1;
+		note.word = word;
 		note.action = (int)action;
 		note.gamesOwn = own;
 		note.eip = c->Eip;
@@ -212,15 +234,50 @@ namespace GuardGame {
 		InterlockedExchange(&note.seq, n);
 	}
 
+	// A write to one of the words, caught: the game's own, another manager, or something else (put back)
+	static void Caught(int i, const CONTEXT* c, uint32_t now) {
+		bool own = false;
+		for (int k = 0; k < kWords[i].ownCount; k++) {
+			own = own || c->Eip == kWords[i].gamesOwn[k];
+		}
+		const uint32_t before = s_good[i];
+		Guard::Write w;
+		w.seen = true;
+		w.gamesOwn = own;
+		w.now = now;
+		w.before = before;
+		w.nowIsManager = !own && IsManager(i, now);
+		w.beforeIsManager = !own && IsManager(i, before);
+		const Guard::Action action = Guard::Decide(w);
+		if (action == Guard::kAccept) {
+			s_good[i] = now;
+		}
+		else if (action == Guard::kPutBack) {
+			s_puttingBack = GetCurrentThreadId();
+			*kWords[i].address = before;
+			s_puttingBack = 0;
+			InterlockedIncrement(&s_putBacks);
+		}
+		TakeNote(i, c, action, own, now, before);
+	}
+
 	static LONG CALLBACK OnException(EXCEPTION_POINTERS* info) {
 		const DWORD code = info->ExceptionRecord->ExceptionCode;
 		if (code != EXCEPTION_SINGLE_STEP && code != 0x4000001E) {     // and STATUS_WX86_SINGLE_STEP, to be safe
 			return EXCEPTION_CONTINUE_SEARCH;
 		}
 		CONTEXT* c = info->ContextRecord;
-		const uint32_t now = *kManager;
-		const bool ours = Guard::HasBreakpoint(c->Dr0, c->Dr7, (uint32_t)(uintptr_t)kManager);
-		if (!(c->Dr6 & 1) && !(ours && now != s_good)) {
+		const DWORD dr[4] = { c->Dr0, c->Dr1, c->Dr2, c->Dr3 };
+		bool fired[kWords_];
+		uint32_t now[kWords_];
+		bool any = false;
+		for (int i = 0; i < kWords_; i++) {
+			now[i] = *kWords[i].address;
+			const bool ours = Guard::HasBreakpoint(dr[i], c->Dr7, (uint32_t)(uintptr_t)kWords[i].address, i);
+			fired[i] = (c->Dr6 & (1u << i)) != 0 || (ours && now[i] != s_good[i]);
+			any = any || fired[i];
+		}
+		if (!any) {
 			return EXCEPTION_CONTINUE_SEARCH;
 		}
 		c->Dr6 &= ~0x0000400Fu;                 // breakpoints 0-3 and the single step: seen
@@ -232,29 +289,11 @@ namespace GuardGame {
 		if (s_puttingBack == me) {
 			return EXCEPTION_CONTINUE_EXECUTION;
 		}
-		bool own = false;
-		for (size_t k = 0; k < sizeof(kGamesOwn) / sizeof(kGamesOwn[0]); k++) {
-			own = own || c->Eip == kGamesOwn[k];
+		for (int i = 0; i < kWords_; i++) {
+			if (fired[i]) {
+				Caught(i, c, now[i]);
+			}
 		}
-		const uint32_t before = s_good;
-		Guard::Write w;
-		w.seen = true;
-		w.gamesOwn = own;
-		w.now = now;
-		w.before = before;
-		w.nowIsManager = !own && IsManager(now);
-		w.beforeIsManager = !own && IsManager(before);
-		const Guard::Action action = Guard::Decide(w);
-		if (action == Guard::kAccept) {
-			s_good = now;
-		}
-		else if (action == Guard::kPutBack) {
-			s_puttingBack = me;
-			*kManager = before;
-			s_puttingBack = 0;
-			InterlockedIncrement(&s_putBacks);
-		}
-		TakeNote(c, action, own, now, before);
 		return EXCEPTION_CONTINUE_EXECUTION;
 	}
 
@@ -281,7 +320,6 @@ namespace GuardGame {
 		memset(&p, 0, sizeof(p));
 		const DWORD me = GetCurrentThreadId();
 		const DWORD process = GetCurrentProcessId();
-		const DWORD address = (DWORD)(uintptr_t)kManager;
 		HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
 		if (snap == INVALID_HANDLE_VALUE) {
 			p.error = GetLastError();
@@ -313,13 +351,19 @@ namespace GuardGame {
 			memset(&c, 0, sizeof(c));
 			c.ContextFlags = CONTEXT_DEBUG_REGISTERS;
 			bool ok = GetThreadContext(h, &c) != 0;
-			if (ok && Guard::HasBreakpoint(c.Dr0, c.Dr7, address)) {
+			const DWORD a0 = (DWORD)(uintptr_t)kWords[0].address;
+			const DWORD a1 = kWords_ > 1 ? (DWORD)(uintptr_t)kWords[1].address : 0;
+			if (ok && Guard::HasBreakpoint(c.Dr0, c.Dr7, a0, 0) && (kWords_ < 2 || Guard::HasBreakpoint(c.Dr1, c.Dr7, a1, 1))) {
 				p.had++;
 			}
 			else if (ok) {
 				c.ContextFlags = CONTEXT_DEBUG_REGISTERS;
-				c.Dr0 = address;
-				c.Dr7 = Guard::WithBreakpoint(c.Dr7);
+				c.Dr0 = a0;
+				c.Dr7 = Guard::WithBreakpoint(c.Dr7, 0);
+				if (kWords_ > 1) {
+					c.Dr1 = a1;
+					c.Dr7 = Guard::WithBreakpoint(c.Dr7, 1);
+				}
 				ok = SetThreadContext(h, &c) != 0;
 				if (ok) {
 					p.added++;
@@ -403,24 +447,25 @@ namespace GuardGame {
 	static void Report(const Note& n) {
 		char where[MAX_PATH + 32];
 		Where(n.eip, where, sizeof(where));
+		const char* name = kWords[n.word].name;
 		if (n.gamesOwn) {
 			if (n.now) {
-				Line("Guard: the game made its object manager (0x%08X)\n", n.now);
+				Line("Guard: the game set its %s to 0x%08X\n", name, n.now);
 			}
 			else {
-				Line("Guard: the game's object manager went (it was 0x%08X)\n", n.before);
+				Line("Guard: the game cleared its %s (it was 0x%08X)\n", name, n.before);
 			}
 			return;
 		}
 		const LONG count = (LONG)s_reports + 1;
 		if (s_reports >= kReports || !n.full) {
 			if (s_reports == kReports) {
-				Line("Guard: more writes over the object manager pointer: from here on only one in a hundred is written down\n");
+				Line("Guard: more writes over the watched pointers: from here on only one in a hundred is written down\n");
 				s_reports++;
 			}
 			static LONG s_more = 0;
 			if (s_more++ % 100 == 0) {
-				Line("Guard: written over again with 0x%08X, before %s (%ld put back in all)\n", n.now, where, s_putBacks);
+				Line("Guard: the %s written over again with 0x%08X, before %s (%ld put back in all)\n", name, n.now, where, s_putBacks);
 			}
 			return;
 		}
@@ -428,8 +473,8 @@ namespace GuardGame {
 		const char* done = n.action == Guard::kPutBack ? "put back"
 			: n.action == Guard::kAccept ? "it points to an object manager, so it is taken as the one now"
 			: n.now == n.before ? "it is what it was" : "there was nothing to put back";
-		Line("Guard: CAUGHT (%ld): 0x%08X written over the game's object manager pointer (0x%08X) by the instruction before %s, in thread %u; %s\n",
-			count, n.now, n.before, where, n.thread, done);
+		Line("Guard: CAUGHT (%ld): 0x%08X written over the game's %s (0x%08X) by the instruction before %s, in thread %u; %s\n",
+			count, n.now, name, n.before, where, n.thread, done);
 		Line("Guard:   %s; script %08X from %08X\n", Skater(), n.script, n.caller);
 		Line("Guard:   eax %08X ebx %08X ecx %08X edx %08X esi %08X edi %08X ebp %08X esp %08X\n",
 			n.regs[0], n.regs[1], n.regs[2], n.regs[3], n.regs[4], n.regs[5], n.regs[6], n.regs[7]);
@@ -511,7 +556,10 @@ namespace GuardGame {
 	}
 
 	static void Start(uint32_t now) {
-		s_good = now;
+		for (int i = 0; i < kWords_; i++) {
+			s_good[i] = *kWords[i].address;
+		}
+		s_good[0] = now;
 		HMODULE self = 0;
 		if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCSTR)&Frame, &self) && self) {
 			const IMAGE_DOS_HEADER* dos = (const IMAGE_DOS_HEADER*)self;
@@ -529,30 +577,39 @@ namespace GuardGame {
 		}
 		s_state = kOn;
 		if (!StartPass(true) || !s_passDone) {
-			Line("Guard: the pass that puts the breakpoint on the game's threads did not finish; the pointer is only looked at once a frame from here on\n");
+			Line("Guard: the pass that puts the breakpoints on the game's threads did not finish; the pointers are only looked at once a frame from here on\n");
 			s_state = kBroken;
 			return;
 		}
 		Tell(true);
-		// A test: the pointer written with what it is. The breakpoint should go off for it, here.
-		s_testing = GetCurrentThreadId();
-		*kManager = now;
-		s_testing = 0;
-		s_works = s_testSeen != 0;
+		// A test for each word: written with what it is. Its breakpoint should go off for it, here.
+		int caught = 0;
+		for (int i = 0; i < kWords_; i++) {
+			s_testSeen = 0;
+			s_testing = GetCurrentThreadId();
+			*kWords[i].address = s_good[i];
+			s_testing = 0;
+			caught += s_testSeen ? 1 : 0;
+			if (!s_testSeen) {
+				Line("Guard: the breakpoint on the %s did not go off for a test write\n", kWords[i].name);
+			}
+		}
+		s_works = caught == kWords_;
 		if (s_works) {
-			Line("Guard: on: the game's object manager pointer (0x0069B6C0, now 0x%08X) has a write breakpoint; a test write was caught. "
-				"A write from anywhere but the game's own places is written down here and put back\n", now);
+			Line("Guard: on: the game's object manager pointer (0x0069B6C0, now 0x%08X) and component manager pointer (0x0069B6B8, now 0x%08X) "
+				"have write breakpoints; a test write to each was caught. A write from anywhere but the game's own places is written down here and put back\n",
+				s_good[0], kWords_ > 1 ? s_good[1] : 0);
 		}
 		else {
-			Line("Guard: the breakpoint did not go off for a test write: this system does not give the game its breakpoints. "
-				"The pointer (0x%08X) is still looked at once a frame and put back if it has become something else\n", now);
+			Line("Guard: the breakpoints did not go off for every test write: this system does not give the game all its breakpoints. "
+				"The pointers are still looked at once a frame and put back if they have become something else\n");
 		}
 	}
 
 	void AtStartup(const char* configFile) {
 		const bool on = GetPrivateProfileIntA(FLICKIT_SECTION, "Guard", 1, configFile) != 0;
 		s_state = on ? kWaiting : kOff;
-		const char* text = on ? "Guard: on (the game's object manager pointer gets a write breakpoint once the game has made it; its notes also go to flickit_watchdog.txt)\n"
+		const char* text = on ? "Guard: on (the game's object manager and component manager pointers get write breakpoints once the game has made them; its notes also go to flickit_watchdog.txt)\n"
 			: "Guard: off\n";
 #ifndef GUARD_TEST
 		Log::TypedLog(CHN_SDL, "%s", text);
@@ -572,37 +629,41 @@ namespace GuardGame {
 			return;
 		}
 		WriteNotes();
-		const uint32_t now = *kManager;
 		if (s_state == kWaiting) {
-			if (IsManager(now)) {
-				Start(now);
+			const uint32_t first = *kManager;
+			if (IsManager(0, first)) {
+				Start(first);
 			}
 			return;
 		}
-		if (now != s_good) {
+		for (int i = 0; i < kWords_; i++) {
+			const uint32_t now = *kWords[i].address;
+			if (now == s_good[i]) {
+				continue;
+			}
 			// Changed, and the breakpoint did not see it
-			const uint32_t before = s_good;
+			const uint32_t before = s_good[i];
 			Guard::Write w;
 			w.seen = false;
 			w.gamesOwn = false;
 			w.now = now;
 			w.before = before;
-			w.nowIsManager = IsManager(now);
-			w.beforeIsManager = IsManager(before);
+			w.nowIsManager = IsManager(i, now);
+			w.beforeIsManager = IsManager(i, before);
 			const Guard::Action action = Guard::Decide(w);
 			if (action == Guard::kPutBack) {
 				s_puttingBack = GetCurrentThreadId();
-				*kManager = before;
+				*kWords[i].address = before;
 				s_puttingBack = 0;
 				InterlockedIncrement(&s_putBacks);
 			}
 			else {
-				s_good = now;   // taken, or nothing to go back to
+				s_good[i] = now;    // taken, or nothing to go back to
 			}
 			static int s_unseen = 0;
 			if (s_unseen++ < kReports) {
-				Line("Guard: the object manager pointer was 0x%08X at the look once a frame, not 0x%08X, and the breakpoint did not see it written%s; %s. %s\n",
-					now, before, s_works ? " (a thread it is not on, or the system)" : "",
+				Line("Guard: the %s was 0x%08X at the look once a frame, not 0x%08X, and the breakpoint did not see it written%s; %s. %s\n",
+					kWords[i].name, now, before, s_works ? " (a thread it is not on, or the system)" : "",
 					action == Guard::kPutBack ? "put back" : action == Guard::kAccept ? "taken as the one now" : "nothing to put back", Skater());
 			}
 		}

@@ -1,7 +1,8 @@
 #pragma once
 // The guard: the parts that need neither Windows nor the game, tested by tests/guard_test.cpp.
 //
-// The game keeps a pointer to its object manager at 0x0069B6C0. Every look-up of an object by its name goes
+// The game keeps a pointer to its object manager at 0x0069B6C0 (and, 8 bytes before it, one to its component
+// manager, the second word the guard watches: see guard_game.cpp). Every look-up of an object by its name goes
 // through it: the scripts' ObjectExists, Obj::ResolveToObject, the score's. It is made once, when the game
 // starts (0x00420E80, from 0x004BFA20), and only goes when the game ends (0x0041F930). Those are the game's
 // only writes to it: its code reads it in 51 places and writes it in 3.
@@ -81,17 +82,25 @@ namespace Guard {
 		return false;
 	}
 
-	// The processor's debug control (DR7) for breakpoint 0 on a write of the 4 bytes at its address: on in
-	// this thread (bit 0), on a write (bits 16-17: 01), 4 bytes long (bits 18-19: 11). kDr7Mask is all of
-	// breakpoint 0's bits, so that the others' are left as they are.
-	static const uint32_t kDr7Mask = 0x000F0003;
+	// The processor's debug control (DR7) for breakpoint i (0 to 3; its address in DR0 to DR3) on a write of the
+	// 4 bytes at its address: on in this thread (bit 2i), on a write (bits 16+4i, 17+4i: 01), 4 bytes long (bits
+	// 18+4i, 19+4i: 11). The mask is all of breakpoint i's bits, so that the others' are left as they are.
+	static const uint32_t kDr7Mask = 0x000F0003;     // breakpoint 0's
 	static const uint32_t kDr7Bits = 0x000D0001;
 
-	inline uint32_t WithBreakpoint(uint32_t dr7) {
-		return (dr7 & ~kDr7Mask) | kDr7Bits;
+	inline uint32_t Dr7Mask(int i) {
+		return (3u << (2 * i)) | (0xFu << (16 + 4 * i));
 	}
 
-	inline bool HasBreakpoint(uint32_t dr0, uint32_t dr7, uint32_t address) {
-		return dr0 == address && (dr7 & kDr7Mask) == kDr7Bits;
+	inline uint32_t Dr7Bits(int i) {
+		return (1u << (2 * i)) | (0xDu << (16 + 4 * i));
+	}
+
+	inline uint32_t WithBreakpoint(uint32_t dr7, int i = 0) {
+		return (dr7 & ~Dr7Mask(i)) | Dr7Bits(i);
+	}
+
+	inline bool HasBreakpoint(uint32_t drAddress, uint32_t dr7, uint32_t address, int i = 0) {
+		return drAddress == address && (dr7 & Dr7Mask(i)) == Dr7Bits(i);
 	}
 }
