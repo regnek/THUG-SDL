@@ -1,6 +1,7 @@
 // Flickit's players in the game (see players_game.h).
 #include <windows.h>
 #include <math.h>
+#include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -69,6 +70,9 @@ namespace PlayersGame {
 		OBJECT_POSITION = 0x40,
 		OBJECT_MATRIX = 0x60,
 		OBJECT_DISPLAY_MATRIX = 0xB0,
+		// its flags (bit 0: dead) and a composite object's (bit 0: not updated, 1: paused, 2: suspended)
+		OBJECT_FLAGS = 0x08,
+		COMPOSITE_FLAGS = 0xF4,
 		// CAnimationComponent: its first blend channel (the animation it is in; with none, the head of the
 		// list itself), its flags (Obj_Flip turns bit 29 over). Bit 29 mirrors the animations started after
 		// it is set: PlayAnim gives it to the new channel (0x004322CE), which keeps it; the channels before
@@ -113,9 +117,6 @@ namespace PlayersGame {
 		{ 0x00470484, 3, { 0xD9, 0x59, 0x1C }, "the blend channel: to" },
 		{ 0x004704A8, 17, { 0x89, 0x41, 0x24, 0x8B, 0x44, 0x24, 0x10, 0x89, 0x41, 0x28, 0xC6, 0x41, 0x2C, 0x00, 0x89, 0x51, 0x30 }, "the blend channel: backwards, its loop, its name" },
 		{ 0x00470410, 10, { 0x51, 0xD9, 0x41, 0x20, 0xDC, 0x0D, 0xA8, 0xEE, 0x62, 0x00 }, "the blend channel: its speed" },
-		{ 0x0041D5D1, 8, { 0xC7, 0x44, 0xC6, 0x48, 0x21, 0x16, 0xDA, 0xEA }, "the FloatingLabel component, for the game's objects" },
-		{ 0x004370BB, 6, { 0x56, 0x68, 0x52, 0x95, 0x7F, 0x72 }, "FloatingLabel: its screen element" },
-		{ 0x0043727F, 5, { 0x68, 0x00, 0x19, 0x49, 0x4B }, "FloatingLabel: the label where the object is" },
 	};
 
 	/******************************************************************/
@@ -128,15 +129,17 @@ namespace PlayersGame {
 
 	struct Names {
 		uint32_t nodeArray, animation;
-		uint32_t makeScript, killScript, labelScript, promptScript, promptOffScript, sayScript, wordsScript, recScript, recOffScript;
+		uint32_t spawnScript, killScript, labelAtScript, labelScript, promptScript, promptOffScript, sayScript, wordsScript, recScript, recOffScript;
 		uint32_t id, label, name, pos, show, text, time;
-		uint32_t player[kMaxPlayers];
 	};
 	static Names s_n;
 
 	static const uint32_t kMinRunMs = 3000;          // a run shorter than this is not kept
+	static const uint32_t kFindMs = 3000;            // a player made is looked for this long, then made again
+	static const int kMostMisses = 3;                // and given up on after this many that were not found
 	static const uint32_t kRemakeMs = 2000;          // a player gone (a restart of the level's objects) comes back after this
 	static const int kMostMakes = 20;                // and no more often than this in one level
+	static const float kLabelUp = 108.0f;            // his name this high over his feet
 	static const uint32_t kPromptLingerMs = 400;
 	static const float kBlend = 0.15f;               // seconds: a new animation of his blends in over this
 	static const float kLabelFar = 1500.0f;          // a player farther than this has no name on the screen
@@ -175,15 +178,21 @@ namespace PlayersGame {
 	static bool s_recFlipped = false;
 
 	// The players
+	enum { kNotMade, kSpawned, kLive, kGaveUp };
 	struct Player {
 		bool used;
 		std::string file;                    // the run's file, in flickit_runs
 		Players::Run run;
 		Players::Identity who;
-		uint32_t id;                         // the name of his object
-		uint32_t label;                      // the name of his label (another each time he is made)
-		uint32_t made;                       // how many times he was made
+		int state;                           // kNotMade, kSpawned (his script is to make him), kLive, kGaveUp
+		uint32_t id;                         // the name of his object (another each time he is made)
+		uint32_t label;                      // the name of his label
+		uint32_t made;                       // how many times he was made in this level
 		uint32_t madeAt;                     // GetTickCount() then
+		int misses;                          // times he was made and not found
+		uint32_t liveAt;                     // when he was found
+		bool reported;                       // how he is, written down once a while after he was found
+		int plays, noAnims;                  // animations started on him, and ones he has not
 		uint32_t t;                          // ms into his run
 		size_t applied;                      // the frame of the run whose animation he plays (kNoFrame: none yet)
 		bool labelShown;
@@ -198,7 +207,7 @@ namespace PlayersGame {
 	static bool s_down = false;              // Circle on this frame, before the cars (his own press)
 	static bool s_downWas = false;
 	static bool s_released = true;           // let go since it opened a card
-	static uint32_t s_labels = 0;            // labels made: each has a name of its own
+	static uint32_t s_names = 0;             // names given to players and labels: each one new
 	static LARGE_INTEGER s_lastFrame;        // zero: no frame yet
 
 	/******************************************************************/
@@ -210,8 +219,9 @@ namespace PlayersGame {
 	static void InitNames() {
 		s_n.nodeArray = Flickit::NameChecksum("NodeArray");
 		s_n.animation = Flickit::NameChecksum("Animation");
-		s_n.makeScript = Flickit::NameChecksum("Flickit_PlayerMake");
+		s_n.spawnScript = Flickit::NameChecksum("Flickit_PlayerSpawn");
 		s_n.killScript = Flickit::NameChecksum("Flickit_PlayerKill");
+		s_n.labelAtScript = Flickit::NameChecksum("Flickit_PlayerLabelAt");
 		s_n.labelScript = Flickit::NameChecksum("Flickit_PlayerLabelShow");
 		s_n.promptScript = Flickit::NameChecksum("Flickit_PlayerPrompt");
 		s_n.promptOffScript = Flickit::NameChecksum("Flickit_PlayerPromptOff");
@@ -226,11 +236,6 @@ namespace PlayersGame {
 		s_n.show = Flickit::NameChecksum("show");
 		s_n.text = Flickit::NameChecksum("text");
 		s_n.time = Flickit::NameChecksum("time");
-		for (int i = 0; i < kMaxPlayers; i++) {
-			char name[32];
-			sprintf_s(name, sizeof(name), "Flickit_Player%d", i);
-			s_n.player[i] = Flickit::NameChecksum(name);
-		}
 	}
 
 	static bool Ready() {
@@ -258,7 +263,7 @@ namespace PlayersGame {
 			static uint8_t data[sizeof(flickit_players_qb)];
 			memcpy(data, flickit_players_qb, sizeof(data));
 			ParseQBFromMemory("scripts\\flickit\\players.qb", data, 1);
-			const uint8_t* make = LookUpSymbol(s_n.makeScript);
+			const uint8_t* make = LookUpSymbol(s_n.spawnScript);
 			const uint8_t* rec = LookUpSymbol(s_n.recScript);
 			if (make && make[1] == SYMBOL_SCRIPT && rec && rec[1] == SYMBOL_SCRIPT) {
 				s_parsed = 1;
@@ -289,6 +294,18 @@ namespace PlayersGame {
 		}
 		s_lastFrame = now;
 		return ms < 0.0 ? 0 : (ms > 100.0 ? 100 : (uint32_t)(ms + 0.5));
+	}
+
+	// A line for the log and for flickit_watchdog.txt (which is written whatever the log settings)
+	static void Note(const char* format, ...) {
+		char text[320];
+		va_list args;
+		va_start(args, format);
+		vsnprintf(text, sizeof(text), format, args);
+		va_end(args);
+		text[sizeof(text) - 1] = 0;
+		Log::TypedLog(CHN_SDL, "%s\n", text);
+		FlickitGame::WatchNote(text);
 	}
 
 	static const char* KeyName() {
@@ -400,22 +417,32 @@ namespace PlayersGame {
 	/*                                                                */
 	/******************************************************************/
 
-	// A name of its own for each label made: the label of a player who goes is taken away with him at the end
-	// of the frame, by its name, and must not be his successor's
-	static uint32_t NewLabelId() {
+	// A name of its own for each player made and each label: a name is never used twice, so a player going
+	// (the game takes an object away at the end of the frame) is never his successor
+	static uint32_t NewName(const char* kind, int i) {
 		char name[48];
-		sprintf_s(name, sizeof(name), "Flickit_PlayerLabel%u", ++s_labels);
+		sprintf_s(name, sizeof(name), "Flickit_%s%d_%u", kind, i, ++s_names);
 		return Flickit::NameChecksum(name);
 	}
 
+	// His object and his label away (whether they are there or not: the script looks)
+	static void Unmake(Player& p) {
+		if (p.state == kNotMade || p.state == kGaveUp || !p.id) {
+			return;
+		}
+		Script::LazyStruct* params = Script::LazyStruct::s_create();
+		if (params) {
+			params->AddChecksum(s_n.id, p.id);
+			params->AddChecksum(s_n.label, p.label);
+			RunGameScript(s_n.killScript, params, 0, 0);
+			Script::LazyStruct::s_free(params);
+		}
+		p.state = kNotMade;
+	}
+
 	static void Kill(Player& p) {
-		if (p.used && ResolveToObject(p.id)) {
-			Script::LazyStruct* params = Script::LazyStruct::s_create();
-			if (params) {
-				params->AddChecksum(s_n.id, p.id);
-				RunGameScript(s_n.killScript, params, 0, 0);
-				Script::LazyStruct::s_free(params);
-			}
+		if (p.used) {
+			Unmake(p);
 		}
 		p.used = false;
 		p.run.frames.clear();
@@ -447,10 +474,16 @@ namespace PlayersGame {
 				break;
 			}
 		}
-		p.id = s_n.player[i];
+		p.state = kNotMade;
+		p.id = 0;
 		p.label = 0;
 		p.made = 0;
 		p.madeAt = 0;
+		p.misses = 0;
+		p.liveAt = 0;
+		p.reported = false;
+		p.plays = 0;
+		p.noAnims = 0;
 		p.t = 0;
 		p.applied = kNoFrame;
 		p.labelShown = true;
@@ -532,14 +565,19 @@ namespace PlayersGame {
 		return slot;
 	}
 
-	// Him made, at where his run is
+	// Him made, at where his run is: his script is spawned, and makes him with the game's other scripts
 	static void Make(int i, const float pos[3], uint32_t now) {
 		Player& p = s_players[i];
 		p.made++;
 		p.madeAt = now;
-		p.label = NewLabelId();
+		p.state = kSpawned;
+		p.id = NewName("Player", i);
+		p.label = NewName("PlayerLabel", i);
 		p.applied = kNoFrame;
 		p.labelShown = true;
+		p.reported = false;
+		p.plays = 0;
+		p.noAnims = 0;
 		Script::LazyStruct* params = Script::LazyStruct::s_create();
 		if (!params) {
 			return;
@@ -548,13 +586,11 @@ namespace PlayersGame {
 		params->AddChecksum(s_n.label, p.label);
 		params->AddString(s_n.name, p.who.name);
 		StructAddVector(params, s_n.pos, pos[0], pos[1], pos[2]);
-		const bool ran = RunGameScript(s_n.makeScript, params, 0, 0);
+		const bool ran = RunGameScript(s_n.spawnScript, params, 0, 0);
 		Script::LazyStruct::s_free(params);
-		const bool there = ResolveToObject(p.id) != 0;
-		if (p.made == 1 || !there) {
-			Log::TypedLog(CHN_SDL, "Players: %s %s at (%.0f %.0f %.0f)%s\n", p.who.name,
-				!ran ? "could not be made (Flickit_PlayerMake did not run)" : there ? "is in the level" : "was not made",
-				pos[0], pos[1], pos[2], p.made > 1 ? " again" : "");
+		if (p.made <= 3 || !ran) {
+			Note("Players: %s made (object %08X) at (%.0f %.0f %.0f)%s", p.who.name, p.id, pos[0], pos[1], pos[2],
+				!ran ? ": Flickit_PlayerSpawn did not run" : p.made > 1 ? ", again" : "");
 		}
 	}
 
@@ -595,10 +631,14 @@ namespace PlayersGame {
 					uint32_t* flags = (uint32_t*)(anim + ANIM_FLAGS);
 					*flags = (f.flags & Players::kFlipped) ? (*flags | ANIM_FLIPPED) : (*flags & ~ANIM_FLIPPED);
 					PlayAnimCore(anim, f.anim, 0, f.animFrom, f.animTo, Players::LoopOf(f.flags), fresh ? 0.0f : kBlend, f.animSpeed);
+					p.plays++;
 				}
-				else if (f.anim && !p.missingSaid) {
-					p.missingSaid = true;
-					Log::TypedLog(CHN_SDL, "Players: %s has no animation %08X (of the skater's); he stays in the one before\n", p.who.name, f.anim);
+				else if (f.anim) {
+					p.noAnims++;
+					if (!p.missingSaid) {
+						p.missingSaid = true;
+						Note("Players: %s has no animation %08X (of the skater's); he stays in the one before", p.who.name, f.anim);
+					}
 				}
 			}
 			p.applied = smp.frame;
@@ -628,7 +668,33 @@ namespace PlayersGame {
 		return sqrtf(dx * dx + dy * dy + dz * dz);
 	}
 
-	// Each player on along his run, made if he is not there (one a frame), and the nearest in reach
+	static void LabelAt(const Player& p) {
+		Script::LazyStruct* params = Script::LazyStruct::s_create();
+		if (!params) {
+			return;
+		}
+		params->AddChecksum(s_n.label, p.label);
+		StructAddVector(params, s_n.pos, p.pos[0], p.pos[1] + kLabelUp, p.pos[2]);
+		RunGameScript(s_n.labelAtScript, params, 0, 0);
+		Script::LazyStruct::s_free(params);
+	}
+
+	// How he is, once, a few seconds after he was found: for the watchdog's file
+	static void Report(Player& p, const uint8_t* obj) {
+		p.reported = true;
+		const float* at = (const float*)(obj + OBJECT_POSITION);
+		const uint8_t* anim = (const uint8_t*)GetComponent((void*)obj, s_n.animation);
+		const uint8_t* channel = anim ? *(const uint8_t* const*)(anim + ANIM_FIRST) : 0;
+		const bool playing = channel && *(const int32_t*)(channel + CHANNEL_SELF) != -1;
+		Note("Players: %s at (%.0f %.0f %.0f), %u ms into his run; animation %08X at %.2f s; %d animations started on him, %d he has not; flags %X/%X; label %s",
+			p.who.name, at[0], at[1], at[2], p.t % (p.run.Length() ? p.run.Length() : 1),
+			playing ? *(const uint32_t*)(channel + CHANNEL_NAME) : 0, playing ? *(const float*)(channel + CHANNEL_TIME) : 0.0f,
+			p.plays, p.noAnims, *(const uint32_t*)(obj + OBJECT_FLAGS), *(const uint32_t*)(obj + COMPOSITE_FLAGS),
+			ResolveToObject(p.label) ? "there" : "missing");
+	}
+
+	// Each player on along his run: made if he is not there (one a frame), looked for once his script has run,
+	// moved and his animation played once he is there; and the nearest in reach
 	static void PlayFrame(const DriveGame::Skater& s, uint32_t ms, uint32_t now) {
 		bool madeOne = false;
 		for (int i = 0; i < kMaxPlayers; i++) {
@@ -641,25 +707,58 @@ namespace PlayersGame {
 			if (!Players::SampleRun(p.run, p.t, &smp)) {
 				continue;
 			}
-			uint8_t* obj = (uint8_t*)ResolveToObject(p.id);
-			if (!obj) {
-				if (madeOne || (p.madeAt && now - p.madeAt < kRemakeMs) || p.made >= (uint32_t)kMostMakes) {
-					continue;
+			uint8_t* obj = 0;
+			if (p.state == kNotMade) {
+				if (!madeOne && p.made < (uint32_t)kMostMakes && (!p.madeAt || now - p.madeAt >= kRemakeMs)) {
+					madeOne = true;
+					Make(i, smp.pos, now);
 				}
-				madeOne = true;
-				Make(i, smp.pos, now);
-				obj = (uint8_t*)ResolveToObject(p.id);
+				continue;
+			}
+			if (p.state == kGaveUp) {
+				continue;
+			}
+			obj = (uint8_t*)ResolveToObject(p.id);
+			if (p.state == kSpawned) {
 				if (!obj) {
+					if (now - p.madeAt > kFindMs) {
+						p.misses++;
+						// his label is made by the same script, after him: whether it ran
+						Note("Players: %s (object %08X) was not there %u ms after he was made (%d of %d); his label %s", p.who.name, p.id,
+							now - p.madeAt, p.misses, kMostMisses, ResolveToObject(p.label) ? "was (his script ran)" : "was not either");
+						Unmake(p);
+						p.madeAt = now - kRemakeMs;      // made again on the next frame, under a new name
+						if (p.misses >= kMostMisses) {
+							p.state = kGaveUp;
+							Note("Players: %s is given up on in this level", p.who.name);
+						}
+					}
 					continue;
 				}
+				p.state = kLive;
+				p.liveAt = now;
+				Note("Players: %s is there (object %08X), %u ms after he was made", p.who.name, p.id, now - p.madeAt);
+			}
+			if (!obj) {
+				// gone (a restart of the level's objects): made again a moment later
+				Note("Players: %s (object %08X) went", p.who.name, p.id);
+				Unmake(p);
+				p.madeAt = now;
+				continue;
 			}
 			Place(obj, smp);
 			Animate(p, obj, smp);
 			memcpy(p.pos, smp.pos, sizeof(p.pos));
+			if (!p.reported && now - p.liveAt > 3000) {
+				Report(p, obj);
+			}
 			const float away = Away(p.pos, s.pos);
 			const bool show = p.labelShown ? away < kLabelFar + 200.0f : away < kLabelFar;
 			if (show != p.labelShown) {
 				ShowLabel(p, show);
+			}
+			if (show) {
+				LabelAt(p);
 			}
 			if (s.free && !s.driving && away < s_reach && fabsf(p.pos[1] - s.pos[1]) < 120.0f) {
 				const float edge = away > kBody ? away - kBody : 0.0f;

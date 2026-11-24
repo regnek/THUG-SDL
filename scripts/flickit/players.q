@@ -6,17 +6,32 @@
 // them and put the words on the screen the game's own way. Compiled into src/flickit_players_qb.h by
 // scripts/flickit/qbc.py; the game reads it once, in the first level.
 
-// A player, made: a pedestrian of the level on a board (Ped_Skateboard_a, profile_ped.q: his head, body and
-// legs picked by the game from the level's own), with the skater's skeleton and animations, the way the goal
-// editor makes its people (goal_editor.q), and his name over his head the way a net game has a skater's (its
-// FloatingLabel, which moves the label with him every frame and takes it away with him). From
-// src/players_game.cpp: id, label (the name of the label's screen element), name, pos.
+// A player, made: one of the level's people on a board (Ped_Skateboard_a, profile_ped.q: his head, body and legs
+// picked by the game from the level's own), with the skater's skeleton and animations, made the way the goal editor
+// makes its people (goal_editor.q: its components, the model from a profile, Obj_SetPosition), but for its motion
+// component (the DLL moves him; setdisplaymatrix draws him turned the way the DLL turns him), idling until the DLL
+// takes him on. src/players_game.cpp spawns it, so that it runs with the game's other scripts and not in the middle
+// of the skater's update. From the DLL: id (a name of his own, another each time he is made), label (the name of
+// his label's screen element), name, pos.
+SCRIPT Flickit_PlayerSpawn
+	SpawnScript Flickit_PlayerMake params = { <...> }
+ENDSCRIPT
+
 SCRIPT Flickit_PlayerMake
-	IF ObjectExists id = <id>
-		<id> : Die
-	ENDIF
-	// the label made here first, in Flickit's colours: the FloatingLabel only makes one (net.q's, yellow)
-	// if there is none
+	CreateCompositeObject {
+		components = [
+			{ component = suspend NeverSuspend }
+			{ component = skeleton skeletonName = THPS5_human }
+			{ component = setdisplaymatrix }
+			{ component = model }
+			{ component = animation AnimName = animload_THPS5_human }
+		]
+		params = { name = <id> pos = <pos> }
+	}
+	<id> : Obj_SetPosition Position = <pos>
+	<id> : Obj_InitModelFromProfile struct = Ped_Skateboard_a use_asset_manager = 1 texDictOffset = 0
+	<id> : Obj_PlayAnim Anim = Idle Cycle
+	// his name over his head, moved with him by the DLL (Flickit_PlayerLabelAt)
 	IF ObjectExists id = <label>
 		DestroyScreenElement id = <label>
 	ENDIF
@@ -26,34 +41,31 @@ SCRIPT Flickit_PlayerMake
 		parent = root_window
 		id = <label>
 		font = small
-		text = ""
+		text = <name>
 		scale = 0.85
 		pos3D = <pos>
 		rgba = [ 128 128 128 108 ]
 		z_priority = -10
 	}
-	CreateCompositeObject {
-		components = [
-			{ component = suspend NeverSuspend }
-			{ component = skeleton skeletonName = THPS5_human }
-			{ component = model }
-			{ component = animation AnimName = animload_THPS5_human }
-			{ component = shadow ShadowType = simple }
-			{ component = FloatingLabel string = <name> color = 0 y_offset = 108 screen_element_id = <label> }
-		]
-		params = { name = <id> pos = <pos> }
-	}
-	<id> : Obj_InitModelFromProfile struct = Ped_Skateboard_a use_asset_manager = 1 buildscript = create_ped_model_from_appearance
 ENDSCRIPT
 
-// A player gone (his label goes with him)
+// A player gone, and his label
 SCRIPT Flickit_PlayerKill
 	IF ObjectExists id = <id>
 		<id> : Die
 	ENDIF
+	IF ObjectExists id = <label>
+		DestroyScreenElement id = <label>
+	ENDIF
 ENDSCRIPT
 
-// His label shown or not: far players have none on the screen
+// His label where he is (pos3D: the game puts it on the screen there), or shown or not: far players have none
+SCRIPT Flickit_PlayerLabelAt
+	IF ObjectExists id = <label>
+		SetScreenElementProps id = <label> pos3D = <pos>
+	ENDIF
+ENDSCRIPT
+
 SCRIPT Flickit_PlayerLabelShow
 	IF ObjectExists id = <label>
 		IF GotParam show
