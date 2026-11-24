@@ -153,9 +153,13 @@ SCRIPT Flickit_CarSteal
 	IF NOT ObjectExists id = PlayerVehicle
 		RETURN
 	ENDIF
-	// where the car was, the way it faced
-	Flickit_CarPlace
-	PlayerVehicleCamera : VehicleCamera_Reset
+	// where the car was, the way it faced; the camera higher and farther back for a big car (the game's own is
+	// for a car of the usual size, and a box truck hides the road ahead)
+	IF Flickit_CarPlace
+		PlayerVehicleCamera : VehicleCamera_Reset offset_height = <camera_height> offset_distance = <camera_distance>
+	ELSE
+		PlayerVehicleCamera : VehicleCamera_Reset
+	ENDIF
 	SetActiveCamera id = PlayerVehicleCamera
 	IF ( <speed> > 5 )
 		PlayerVehicle : Vehicle_Kick linear = ( VECTOR(0, 0, 1) * <speed> ) angular = VECTOR(0, 0, 0)
@@ -227,6 +231,9 @@ SCRIPT Flickit_CarExit
 	// him beside the car through the game's own restart, standing, as he is after a goal's car
 	Flickit_CarOut
 	MakeSkaterGoto HandBrake
+	// the car the game's way for a car of the level, but standing: its model's own nodes (the gap triggers on
+	// its roof look there: without them the game looked in the level's nodes, found none and crashed) and the
+	// rails on its roof, as the game gives a car of the level (its car factory, 0x00506099)
 	CreateCompositeObject {
 		components = [
 			{ component = staticvehicle }
@@ -234,6 +241,8 @@ SCRIPT Flickit_CarExit
 			{ component = setdisplaymatrix }
 			{ component = model model = <model> UseModelLights }
 			{ component = collision CollisionMode = geometry }
+			{ component = nodearray model = <model> }
+			{ component = railmanager }
 			{ component = modellightupdate }
 		]
 		params = { name = <parked> pos = <pos> }

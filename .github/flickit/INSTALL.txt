@@ -33,9 +33,30 @@ Flip or Ollie, on the ground   push (tap = a little, hold = a lot)
 Right stick click          Flickit off / on (for looking around)
 Circle by a car            take it (hold Triangle in it to stop and get out)
 
-New in this build: a car you leave goes back after two minutes
----------------------------------------------------------------
-The level keeps the cars it has. The car you take is one of them, not
+New in this build: three car fixes, and cars go back after two minutes
+-----------------------------------------------------------------------
+The three things from your last screenshots:
+  - The crash on top of a car you had parked (at 0x004110B3): a parked
+    cab has gap triggers on its roof, and the game looks for their
+    nodes in the car's own model file. A parked car did not have that
+    part, so the game looked in the level's nodes, found nothing, and
+    crashed. A parked car now gets it, and the rails on its roof with
+    it, the way the game sets up its own traffic cars: you can grind a
+    parked car's roof and get its gaps.
+  - The NY police car's body off its wheels: the game's drivable car
+    takes the body's side-to-side place the wrong way round. It never
+    showed on the game's own drivable cars, whose bodies sit in the
+    middle. The NY police car's model puts its body's centre point 34
+    units to the side, so it was drawn about 69 units off. Every car's
+    body is now put back where its model has it.
+  - The camera for big cars: it goes higher and farther back for a
+    taller car, so you can see over a box truck's roof (the DC truck:
+    about 170 up and 400 back instead of 55 and 240), and a little
+    farther back for a longer one. Cars of the usual size keep the
+    game's camera.
+
+And the build before this one (you had not installed it yet): the
+level keeps the cars it has. The car you take is one of them, not
 one more: while you drive it and while it stands where you left it,
 the level has one car fewer in its traffic.
   - A car you got out of stands for two minutes. Then, once you are

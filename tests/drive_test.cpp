@@ -215,6 +215,25 @@ static void TestParking() {
 	Check(p.Origin(-1) == 0 && p.ParkedAt(9) == 0, "no such slot, no car");
 }
 
+static void TestCamera() {
+	const Drive::CameraPlace usual = Drive::CameraFor(Drive::UsualBox());
+	Check(usual.height == 55.0f && usual.distance == 240.0f, "a car of the usual size: the game's own camera");
+	Drive::Box small = Drive::UsualBox();
+	small.height = 40.0f;
+	small.front = 100.0f;
+	const Drive::CameraPlace s = Drive::CameraFor(small);
+	Check(s.height == 55.0f && s.distance == 240.0f, "a smaller one: the same");
+	// the DC truck: colliders up to 142 (a box of 150), from -64 to 205
+	Drive::Box truck;
+	truck.halfWidth = 50.0f;
+	truck.rear = -64.0f;
+	truck.front = 205.0f;
+	truck.height = 150.0f;
+	const Drive::CameraPlace t = Drive::CameraFor(truck);
+	Check(t.height > truck.height && t.height < truck.height + 40.0f, "the truck: the camera above its roof");
+	Check(t.distance > 350.0f && t.distance < 450.0f, "and farther back");
+}
+
 static void TestGoesBack() {
 	const float parked[3] = { 1000, 0, 0 };
 	const float start[3] = { -3000, 0, 0 };
@@ -308,6 +327,7 @@ int main() {
 	TestComeback();
 	TestParking();
 	TestGoesBack();
+	TestCamera();
 	TestGround();
 	std::printf("%d checks, %d failed\n", s_checks, s_failed);
 	return s_failed == 0 ? 0 : 1;

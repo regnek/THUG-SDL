@@ -58,6 +58,10 @@ namespace DriveGame {
 	// below the node's Pos, turned to its Angles, its wheels settled, still
 	typedef void(__thiscall* MoveToNode_t)(void* vehicle, void* node);
 	static const MoveToNode_t MoveToNode = (MoveToNode_t)0x0045BEC0;
+	// A model's hierarchy (the matrices of its parts, 80 bytes a part, the matrix at +0x10 of each), from the
+	// model component's [+0x208], as CVehicleComponent::Finalize gets it
+	typedef const uint8_t* (__thiscall* ModelHierarchy_t)(void* modelData);
+	static const ModelHierarchy_t ModelHierarchy = (ModelHierarchy_t)0x0047DB60;
 	// Script::ParseQB for a file in memory, as the game reads a cutscene's scripts
 	typedef void(__cdecl* ParseQBFromMemory_t)(const char* name, uint8_t* data, int flag);
 	static const ParseQBFromMemory_t ParseQBFromMemory = (ParseQBFromMemory_t)0x00409F90;
@@ -79,6 +83,9 @@ namespace DriveGame {
 	// its wheels (0x1C8 bytes each, the place of each at +0xA0, from the model's bones: 0x0045E4E1)
 	enum {
 		VEHICLE_INPUT = 0x1314,
+		VEHICLE_BODY_PLACE = 0x2BC,  // where the body is drawn: x y z w, from the centre of mass (Finalize)
+		MODEL_DATA = 0x208,          // the model component's model, for its hierarchy
+		HIERARCHY_BODY_X = 0x90,     // part 1 (the body): its matrix at +0x60, the x of its place at +0x30 of that
 		VEHICLE_WHEEL_COUNT = 0x190,
 		VEHICLE_WHEELS = 0x2D0,
 		WHEEL_SIZE = 0x1C8,
@@ -109,6 +116,11 @@ namespace DriveGame {
 		{ 0x004112A0, 12, { 0x56, 0x8B, 0x31, 0x85, 0xF6, 0x57, 0x74, 0x41, 0x8B, 0x7C, 0x24, 0x0C }, "CStruct::ContainsFlag" },
 		{ 0x004133A0, 12, { 0x8B, 0x4C, 0x24, 0x04, 0x8B, 0xC1, 0x25, 0xFF, 0x0F, 0x00, 0x00, 0x56 }, "Script::LookUpSymbol" },
 		{ 0x0045BEC0, 12, { 0x6A, 0xFF, 0x68, 0x5B, 0x35, 0x62, 0x00, 0x64, 0xA1, 0x00, 0x00, 0x00 }, "CVehicleComponent::MoveToNode" },
+		{ 0x0047DB60, 12, { 0x66, 0x83, 0xB9, 0xAA, 0x01, 0x00, 0x00, 0x01, 0x75, 0x1C, 0x8B, 0x89 }, "CModel: its hierarchy" },
+		{ 0x0045E49A, 11, { 0x8B, 0x88, 0x08, 0x02, 0x00, 0x00, 0xE8, 0xBB, 0xF6, 0x01, 0x00 }, "CVehicleComponent::Finalize: the model's hierarchy" },
+		{ 0x0045E509, 9, { 0x8D, 0x47, 0x60, 0x50, 0x8D, 0x4C, 0x24, 0x2C, 0xE8 }, "CVehicleComponent::Finalize: the body's part" },
+		{ 0x0045E516, 6, { 0xD9, 0x44, 0x24, 0x58, 0xD9, 0xE0 }, "CVehicleComponent::Finalize: the body's x, the other way round" },
+		{ 0x0045A6E9, 12, { 0xD9, 0x85, 0xBC, 0x02, 0x00, 0x00, 0xD9, 0x5E, 0x30, 0xD9, 0x85, 0xC0 }, "CVehicleComponent: the body drawn at its place" },
 		{ 0x0045E467, 14, { 0x8B, 0x4E, 0x0C, 0x68, 0x28, 0xCD, 0xD7, 0x27, 0xE8, 0x4C, 0xD9, 0xFB, 0xFF, 0x8B }, "CVehicleComponent::Finalize: its input component" },
 		{ 0x0045E4B4, 16, { 0xD9, 0x41, 0xA8, 0x8B, 0x86, 0xD0, 0x02, 0x00, 0x00, 0xD9, 0x5C, 0x24, 0x50, 0x83, 0xE9, 0x50 }, "CVehicleComponent::Finalize: its wheels" },
 		{ 0x0045A3D0, 16, { 0x51, 0x53, 0x56, 0x8B, 0xF1, 0x8B, 0x8E, 0x14, 0x13, 0x00, 0x00, 0xD9, 0x81, 0x38, 0x02, 0x00 }, "CVehicleComponent: its controls" },
@@ -130,6 +142,7 @@ namespace DriveGame {
 		uint32_t nodeArray, className, vehicle, skeletonName, car, model, name, pos, angles;
 		uint32_t carPhysics, staticVehicle, vehicleComponent, playerVehicle, colliders, setup, tune, speed, parked;
 		uint32_t stealScript, backScript, goesBackScript, defaultTune, promptScript, promptOffScript, createdAtStart;
+		uint32_t cameraHeight, cameraDistance;
 		uint32_t parkedCar[Drive::Parking::kSlots];
 	};
 	static Names s_n;
@@ -252,6 +265,8 @@ namespace DriveGame {
 		s_n.backScript = Flickit::NameChecksum("Flickit_CarBack");
 		s_n.goesBackScript = Flickit::NameChecksum("Flickit_CarGoesBack");
 		s_n.createdAtStart = Flickit::NameChecksum("CreatedAtStart");
+		s_n.cameraHeight = Flickit::NameChecksum("camera_height");
+		s_n.cameraDistance = Flickit::NameChecksum("camera_distance");
 		s_n.defaultTune = Flickit::NameChecksum("Flickit_Car_Default");
 		s_n.promptScript = Flickit::NameChecksum("Flickit_CarPrompt");
 		s_n.promptOffScript = Flickit::NameChecksum("Flickit_CarPromptOff");
@@ -725,10 +740,34 @@ namespace DriveGame {
 		return true;
 	}
 
-	// Flickit_CarPlace: PlayerVehicle where the car taken was, the way it faced
-	static bool CFunc_CarPlace(Script::LazyStruct*, DummyScript*) {
+	// The body drawn on its wheels. CVehicleComponent::Finalize takes the place of the body from the model's
+	// hierarchy as (-x, z, -y) (0x0045E516), and the drawing puts the body there turned from the model's axes
+	// with x as it is (0x0045A6E9): x the other way round. The body of each of THUG's own drivable cars sits at
+	// x = 0 and it did not show; the NY police car's has its place 34 units to the side, and was drawn twice
+	// that far off its wheels. The place is only drawn with (the colliders are the setup's), so x is put right
+	// here: -x from the centre of mass becomes x from it, 2x along. Returns that x.
+	static float BodyOnItsWheels(const uint8_t* obj, void* vehicle) {
+		const uint8_t* model = (const uint8_t*)GetComponent((void*)obj, s_n.model);
+		void* data = model ? *(void* const*)(model + MODEL_DATA) : 0;
+		const uint8_t* hierarchy = data ? ModelHierarchy(data) : 0;
+		if (!hierarchy) {
+			return 0.0f;
+		}
+		const float x = *(const float*)(hierarchy + HIERARCHY_BODY_X);
+		if (!(x > -500.0f && x < 500.0f)) {
+			return 0.0f;
+		}
+		float* place = (float*)((uint8_t*)vehicle + VEHICLE_BODY_PLACE);
+		place[0] += 2.0f * x;
+		return x;
+	}
+
+	// Flickit_CarPlace: PlayerVehicle where the car taken was, the way it faced, its body on its wheels;
+	// camera_height and camera_distance back, for the camera to suit its size
+	static bool CFunc_CarPlace(Script::LazyStruct*, DummyScript* script) {
 		void* vehicle = 0;
-		if (!s_taken.set || !PlayerVehicle(&vehicle)) {
+		const uint8_t* obj = s_taken.set ? PlayerVehicle(&vehicle) : 0;
+		if (!obj) {
 			return false;
 		}
 		Script::LazyStruct* node = Script::LazyStruct::s_create();
@@ -739,6 +778,13 @@ namespace DriveGame {
 		StructAddVector(node, s_n.angles, 0.0f, s_taken.heading, 0.0f);
 		MoveToNode(vehicle, node);
 		Script::LazyStruct::s_free(node);
+		const float bodyX = BodyOnItsWheels(obj, vehicle);
+		const Drive::CameraPlace camera = Drive::CameraFor(s_taken.box);
+		Script::LazyStruct* back = Returned(script);
+		if (back) {
+			back->AddFloat(s_n.cameraHeight, camera.height);
+			back->AddFloat(s_n.cameraDistance, camera.distance);
+		}
 		if (s_taken.slot >= 0) {
 			s_parking.Leave(s_taken.slot);
 		}
@@ -746,8 +792,8 @@ namespace DriveGame {
 		s_driven.origin = s_taken.origin;
 		strncpy_s(s_driven.model, sizeof(s_driven.model), s_taken.model, _TRUNCATE);
 		s_driven.box = s_taken.box;
-		Log::TypedLog(CHN_SDL, "Cars: driving it from (%.1f %.1f %.1f), facing %.0f degrees, at %.0f units/s\n",
-			s_taken.pos[0], s_taken.pos[1], s_taken.pos[2], s_taken.heading * 57.29578f, s_taken.speed);
+		Log::TypedLog(CHN_SDL, "Cars: driving it from (%.1f %.1f %.1f), facing %.0f degrees, at %.0f units/s; its body's place %.1f to the side; the camera %.0f up, %.0f back\n",
+			s_taken.pos[0], s_taken.pos[1], s_taken.pos[2], s_taken.heading * 57.29578f, s_taken.speed, bodyX, camera.height, camera.distance);
 		s_taken.set = false;
 		return true;
 	}

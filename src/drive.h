@@ -31,6 +31,23 @@ namespace Drive {
 		return b;
 	}
 
+	// The camera of the game's drivable car for a car of this box: the game's own (55 up, 240 behind) for a car
+	// of the usual size, higher and farther back for a taller one (a box truck: the road ahead shows over its
+	// roof) and a little farther back for a longer one
+	struct CameraPlace {
+		float height;
+		float distance;
+	};
+	inline CameraPlace CameraFor(const Box& b) {
+		const Box usual = UsualBox();
+		const float taller = b.height > usual.height ? b.height - usual.height : 0.0f;
+		const float longer = (b.front - b.rear) > (usual.front - usual.rear) ? (b.front - b.rear) - (usual.front - usual.rear) : 0.0f;
+		CameraPlace c;
+		c.height = 55.0f + 1.3f * taller;
+		c.distance = 240.0f + 1.5f * taller + 0.5f * longer;
+		return c;
+	}
+
 	// The box from the base of the game's colliders for a car (the first of them: three corners of the body's
 	// base, two at the front and one at the back on the left), and the height of the highest corner of any
 	inline bool BoxFromColliders(const float front[3], const float frontOther[3], const float back[3], float top, Box* out) {
