@@ -55,6 +55,7 @@ set(HEADER_FILES
 	"${SRC}/drive_game.h"
 	"${SRC}/flickit_cars_qb.h"
 	"${SRC}/players.h"
+	"${SRC}/gamefiles.h"
 	"${SRC}/players_game.h"
 	"${SRC}/flickit_players_qb.h"
 	"${SRC}/nodenames.h"

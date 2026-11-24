@@ -129,8 +129,8 @@ namespace PlayersGame {
 
 	struct Names {
 		uint32_t nodeArray, animation;
-		uint32_t spawnScript, killScript, labelAtScript, labelScript, promptScript, promptOffScript, sayScript, wordsScript, recScript, recOffScript;
-		uint32_t id, label, name, pos, show, text, time;
+		uint32_t spawnScript, killScript, labelAtScript, labelScript, labelPickScript, promptScript, promptOffScript, sayScript, wordsScript, recScript, recOffScript;
+		uint32_t id, label, name, pos, show, picked, text, time;
 	};
 	static Names s_n;
 
@@ -148,7 +148,9 @@ namespace PlayersGame {
 	static const size_t kNoFrame = (size_t)-1;
 
 	static bool s_on = true;                 // [Flickit] FakePlayers
-	static float s_reach = 90.0f;            // [Flickit] PlayerReach
+	// [Flickit] PlayerReach (anywhere around him, from the player's edge), PlayerAimReach (in front, where the
+	// camera looks), PlayerLockMs (the one picked stays picked this long once he has gone past)
+	static Players::AimSettings s_aimSet = { 150.0f, 600.0f, 0.7f, 300.0f, 20.0f, 4000 };
 	static int s_runKey = 63;                // [Flickit] RunKey (SDL_SCANCODE_F6)
 	static int s_ready = 0;                  // 1: the game is as expected, -1: not
 	static int s_parsed = 0;                 // 1: the scripts are the game's, -1: they could not be
@@ -200,8 +202,14 @@ namespace PlayersGame {
 		float pos[3];
 	};
 	static Player s_players[kMaxPlayers];
-	static int s_nearIndex = -1;             // the player in reach, the nearest, on this frame
-	static float s_nearAway = kNone;
+	static Players::AimState s_aim = { -1, 0 };
+	static int s_target = -1;                // who Circle is for on this frame (-1: nobody)
+	static float s_targetAway = kNone;       // how far he is, from his edge
+	static int s_lit = -1;                   // whose name is lit (the one picked)
+	static uint32_t s_litLabel = 0;
+	static float s_skater[3] = { 0, 0, 0 };  // where the skater is, on this frame
+	static float s_lookX = 0.0f, s_lookZ = 0.0f;     // where the camera looks along the ground (a unit; 0: not known)
+	static float s_rightX = 0.0f, s_rightZ = 0.0f;   // and its right
 	static int s_promptFor = -1;             // the player the prompt is up for
 	static uint32_t s_promptSeen = 0;
 	static bool s_down = false;              // Circle on this frame, before the cars (his own press)
@@ -223,6 +231,7 @@ namespace PlayersGame {
 		s_n.killScript = Flickit::NameChecksum("Flickit_PlayerKill");
 		s_n.labelAtScript = Flickit::NameChecksum("Flickit_PlayerLabelAt");
 		s_n.labelScript = Flickit::NameChecksum("Flickit_PlayerLabelShow");
+		s_n.labelPickScript = Flickit::NameChecksum("Flickit_PlayerLabelPick");
 		s_n.promptScript = Flickit::NameChecksum("Flickit_PlayerPrompt");
 		s_n.promptOffScript = Flickit::NameChecksum("Flickit_PlayerPromptOff");
 		s_n.sayScript = Flickit::NameChecksum("Flickit_PlayersSay");
@@ -234,6 +243,7 @@ namespace PlayersGame {
 		s_n.name = Flickit::NameChecksum("name");
 		s_n.pos = Flickit::NameChecksum("pos");
 		s_n.show = Flickit::NameChecksum("show");
+		s_n.picked = Flickit::NameChecksum("picked");
 		s_n.text = Flickit::NameChecksum("text");
 		s_n.time = Flickit::NameChecksum("time");
 	}
@@ -267,8 +277,9 @@ namespace PlayersGame {
 			const uint8_t* rec = LookUpSymbol(s_n.recScript);
 			if (make && make[1] == SYMBOL_SCRIPT && rec && rec[1] == SYMBOL_SCRIPT) {
 				s_parsed = 1;
-				Log::TypedLog(CHN_SDL, "Players: on; %s records a run, each run of the level is a player (the last %d); Circle within %.0f shows his card; the game has Flickit's player scripts (%u bytes)\n",
-					s_runKey > 0 ? SDL_GetScancodeName((SDL_Scancode)s_runKey) : "no key", kMaxPlayers, s_reach, (unsigned)sizeof(data));
+				Log::TypedLog(CHN_SDL, "Players: on; %s records a run, each run of the level is a player (the last %d); Circle shows the card of the one he looks at within %.0f, or of one within %.0f of him (picked for %u ms after); the game has Flickit's player scripts (%u bytes)\n",
+					s_runKey > 0 ? SDL_GetScancodeName((SDL_Scancode)s_runKey) : "no key", kMaxPlayers, s_aimSet.aimReach, s_aimSet.reach,
+					s_aimSet.lockMs, (unsigned)sizeof(data));
 			}
 			else {
 				s_parsed = -1;
@@ -427,6 +438,9 @@ namespace PlayersGame {
 
 	// His object and his label away (whether they are there or not: the script looks)
 	static void Unmake(Player& p) {
+		if (s_lit >= 0 && &s_players[s_lit] == &p) {
+			s_lit = -1;
+		}
 		if (p.state == kNotMade || p.state == kGaveUp || !p.id) {
 			return;
 		}
@@ -444,6 +458,9 @@ namespace PlayersGame {
 		if (p.used) {
 			Unmake(p);
 		}
+		if (s_aim.target >= 0 && &s_players[s_aim.target] == &p) {
+			s_aim.target = -1;
+		}
 		p.used = false;
 		p.run.frames.clear();
 	}
@@ -453,8 +470,9 @@ namespace PlayersGame {
 		for (int i = 0; i < kMaxPlayers; i++) {
 			Kill(s_players[i]);
 		}
-		s_nearIndex = -1;
-		s_nearAway = kNone;
+		s_target = -1;
+		s_targetAway = kNone;
+		s_aim.target = -1;
 	}
 
 	static void Use(int i, const std::string& file, const Players::Run& run) {
@@ -760,14 +778,71 @@ namespace PlayersGame {
 			if (show) {
 				LabelAt(p);
 			}
-			if (s.free && !s.driving && away < s_reach && fabsf(p.pos[1] - s.pos[1]) < 120.0f) {
-				const float edge = away > kBody ? away - kBody : 0.0f;
-				if (edge < s_nearAway) {
-					s_nearIndex = i;
-					s_nearAway = edge;
-				}
+		}
+	}
+
+	// Where the camera looks along the ground: from its eye to the skater, and its right from its view; without
+	// it, the way he faces (and his right as the camera has it: +x to the right of +z)
+	static void Look(const DriveGame::Skater& s) {
+		float eye[3], view[16], rx, rz;
+		if (FlickitGame::CameraView(eye, view)) {
+			const float dx = s.pos[0] - eye[0], dz = s.pos[2] - eye[2];
+			const float len = sqrtf(dx * dx + dz * dz);
+			if (len > 1.0f && Players::CameraRight(eye, view, &rx, &rz)) {
+				s_lookX = dx / len;
+				s_lookZ = dz / len;
+				s_rightX = rx;
+				s_rightZ = rz;
+				return;
 			}
 		}
+		FlickitGame::Whereabouts w;
+		if (FlickitGame::SkaterWhereabouts(w)) {
+			s_lookX = sinf(w.heading);
+			s_lookZ = cosf(w.heading);
+			s_rightX = cosf(w.heading);
+			s_rightZ = -sinf(w.heading);
+			return;
+		}
+		s_lookX = s_lookZ = s_rightX = s_rightZ = 0.0f;
+	}
+
+	// The name of the one picked lit, the one before's as the others again
+	static void Light(int i) {
+		const uint32_t label = i >= 0 ? s_players[i].label : 0;
+		if (i == s_lit && label == s_litLabel) {
+			return;
+		}
+		Script::LazyStruct* params;
+		if (s_lit >= 0 && s_players[s_lit].used && s_players[s_lit].label == s_litLabel && (params = Script::LazyStruct::s_create()) != NULL) {
+			params->AddChecksum(s_n.label, s_litLabel);
+			RunGameScript(s_n.labelPickScript, params, 0, 0);
+			Script::LazyStruct::s_free(params);
+		}
+		s_lit = i;
+		s_litLabel = label;
+		if (i >= 0 && (params = Script::LazyStruct::s_create()) != NULL) {
+			params->AddChecksum(s_n.label, label);
+			params->AddInteger(s_n.picked, 1);
+			RunGameScript(s_n.labelPickScript, params, 0, 0);
+			Script::LazyStruct::s_free(params);
+		}
+	}
+
+	// Who Circle is for: the one he is looking at, or right by him, or the one picked a moment ago
+	static void Pick(const DriveGame::Skater& s, uint32_t now) {
+		Players::AimPlayer around[kMaxPlayers];
+		for (int i = 0; i < kMaxPlayers; i++) {
+			const Player& p = s_players[i];
+			around[i].present = p.used && p.state == kLive && !s.driving;
+			around[i].dx = p.pos[0] - s.pos[0];
+			around[i].dy = p.pos[1] - s.pos[1];
+			around[i].dz = p.pos[2] - s.pos[2];
+		}
+		float edge = kNone;
+		s_target = Players::Aim(around, kMaxPlayers, s_lookX, s_lookZ, now, s_aimSet, &s_aim, &edge);
+		s_targetAway = s_target >= 0 ? edge : kNone;
+		Light(s_target);
 	}
 
 	/******************************************************************/
@@ -925,8 +1000,8 @@ namespace PlayersGame {
 	}
 
 	void Frame(const DriveGame::Skater& s) {
-		s_nearIndex = -1;
-		s_nearAway = kNone;
+		s_target = -1;
+		s_targetAway = kNone;
 		s_down = false;
 		if (!s_on) {
 			// switched off while there were players (the reload key)
@@ -985,11 +1060,36 @@ namespace PlayersGame {
 			RecordFrame(s, ms);
 		}
 		PlayFrame(s, ms, now);
+		memcpy(s_skater, s.pos, sizeof(s_skater));
+		Look(s);
+		Pick(s, now);
 		s_down = s.take && *s.take != 0 && !DriveGame::FlickitGrab();
 	}
 
 	float NearestAway() {
-		return s_nearIndex >= 0 ? s_nearAway : kNone;
+		return s_target >= 0 ? s_targetAway : kNone;
+	}
+
+	void ListPlayers(std::vector<Listed>& out) {
+		out.clear();
+		if (!s_on || s_ready <= 0 || s_parsed <= 0) {
+			return;
+		}
+		for (int i = 0; i < kMaxPlayers; i++) {
+			const Player& p = s_players[i];
+			if (!p.used || p.state != kLive) {
+				continue;
+			}
+			Listed l;
+			l.slot = i;
+			l.who = p.who;
+			const float dx = p.pos[0] - s_skater[0], dz = p.pos[2] - s_skater[2];
+			l.away = Away(p.pos, s_skater);
+			l.bearing = (s_lookX != 0.0f || s_lookZ != 0.0f) ? Players::Bearing(s_lookX, s_lookZ, s_rightX, s_rightZ, dx, dz) : 0.0f;
+			l.picked = i == s_target;
+			out.push_back(l);
+		}
+		std::sort(out.begin(), out.end(), [](const Listed& a, const Listed& b) { return a.away < b.away; });
 	}
 
 	void AfterCars(const DriveGame::Skater& s, float carAway) {
@@ -997,12 +1097,12 @@ namespace PlayersGame {
 			return;
 		}
 		const uint32_t now = GetTickCount();
-		const bool chosen = s_nearIndex >= 0 && s.free && !s.driving && s_nearAway < carAway && !WorldMapGame::CardOpen();
+		const bool chosen = s_target >= 0 && !s.driving && s_targetAway < carAway && !WorldMapGame::CardOpen();
 		if (chosen) {
 			s_promptSeen = now;
-			if (s_promptFor != s_nearIndex) {
+			if (s_promptFor != s_target) {
 				PromptOff();
-				Prompt(s_nearIndex);
+				Prompt(s_target);
 			}
 		}
 		else if (s_promptFor >= 0 && (now - s_promptSeen > kPromptLingerMs || !s_players[s_promptFor].used)) {
@@ -1013,11 +1113,12 @@ namespace PlayersGame {
 		if (!s_down) {
 			s_released = true;
 		}
-		if (pressed && s_released && chosen) {
+		// on the ground: Circle in the air is the game's (a grab)
+		if (pressed && s_released && chosen && s.free) {
 			s_released = false;
 			*s.take = 0;                         // the game does not see the press that opens a card
 			PromptOff();
-			const Player& p = s_players[s_nearIndex];
+			const Player& p = s_players[s_target];
 			if (WorldMapGame::AskCard(p.who)) {
 				Log::TypedLog(CHN_SDL, "Players: Circle by %s: his card\n", p.who.name);
 			}
@@ -1050,9 +1151,15 @@ namespace PlayersGame {
 
 	void Configure(const char* configFile) {
 		s_on = GetPrivateProfileIntA(FLICKIT_SECTION, "FakePlayers", 1, configFile) != 0;
-		int reach = (int)GetPrivateProfileIntA(FLICKIT_SECTION, "PlayerReach", 90, configFile);
+		int reach = (int)GetPrivateProfileIntA(FLICKIT_SECTION, "PlayerReach", 150, configFile);
 		reach = reach < 20 ? 20 : (reach > 400 ? 400 : reach);
-		s_reach = (float)reach;
+		s_aimSet.reach = (float)reach;
+		int aim = (int)GetPrivateProfileIntA(FLICKIT_SECTION, "PlayerAimReach", 600, configFile);
+		aim = aim < 100 ? 100 : (aim > 3000 ? 3000 : aim);
+		s_aimSet.aimReach = (float)aim;
+		int lock = (int)GetPrivateProfileIntA(FLICKIT_SECTION, "PlayerLockMs", 4000, configFile);
+		lock = lock < 0 ? 0 : (lock > 15000 ? 15000 : lock);
+		s_aimSet.lockMs = (uint32_t)lock;
 		int key = (int)GetPrivateProfileIntA(FLICKIT_SECTION, "RunKey", 63, configFile);
 		s_runKey = key > 0 && key < SDL_NUM_SCANCODES ? key : 0;
 		if (!s_dir[0]) {

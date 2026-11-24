@@ -275,6 +275,10 @@ namespace FlickitGame {
 		bool settled;           // autosave has no spot still to put him back at in this level
 	};
 	bool SkaterWhereabouts(Whereabouts& out);
+	// The renderer's camera as it last made a view of the level: its eye and its view matrix (only read; for
+	// which player the skater is looking at, players_game.h). False when the game's code for it is not as
+	// expected or they are not numbers.
+	bool CameraView(float eye[3], float view[16]);
 	// At his next pad update the local skater goes to pos, facing heading, through the game's custom restart
 	// (as autosave does); his own custom restart, the pause menu's, is kept. False when the game's code for it
 	// is not as expected.

@@ -76,6 +76,17 @@ SCRIPT Flickit_PlayerLabelShow
 	ENDIF
 ENDSCRIPT
 
+// The name of the player Circle is for, lit; without picked, as the others
+SCRIPT Flickit_PlayerLabelPick
+	IF ObjectExists id = <label>
+		IF GotParam picked
+			SetScreenElementProps id = <label> rgba = [ 128 100 30 128 ]
+		ELSE
+			SetScreenElementProps id = <label> rgba = [ 128 128 128 108 ]
+		ENDIF
+	ENDIF
+ENDSCRIPT
+
 // The prompt while a player is in reach (src/players_game.cpp says when, and for whom), in the box of the
 // game's own prompts ("Press Circle to drive."). Only the box: the DLL reads Circle itself.
 SCRIPT Flickit_PlayerPrompt

@@ -67,15 +67,48 @@ namespace Players {
 		return i >= 0 && i < kStoryLevels ? levels[i] : "";
 	}
 
+	// The logo of a company on a player's card: the picture the game puts on a shirt for it (cas_logos.q, its
+	// front logos), an entry of skaterparts.pre; NULL for a company the game has no logo of. Any case.
+	inline const char* LogoOf(const char* company) {
+		static const char* const logos[][2] = {
+			{ "Birdhouse", "textures\\logos\\Sht_birdhouse01.img.xbx" },
+			{ "Element", "textures\\logos\\Sht_element01.img.xbx" },
+			{ "Flip", "textures\\logos\\Sht_flip01.img.xbx" },
+			{ "Girl", "textures\\logos\\Sht_girl01.img.xbx" },
+			{ "Zero", "textures\\logos\\Sht_zero01.img.xbx" },
+			{ "Hawk Shoes", "textures\\logos\\Sht_hawks01.img.xbx" },
+			{ "Vans", "textures\\logos\\Sht_vans01.img.xbx" },
+			{ "DC Shoes", "textures\\logos\\Sht_DCShoes01.img.xbx" },
+			{ "eS", "textures\\logos\\Sht_es01.img.xbx" },
+			{ "Adio", "textures\\logos\\Sht_Adio01.img.xbx" },
+			{ "Globe", "textures\\logos\\Sht_globe01.img.xbx" },
+			{ "Circa", "textures\\logos\\Sht_circa01.img.xbx" },
+			{ "Emerica", "textures\\logos\\Sht_emerica01.img.xbx" },
+			{ "Etnies", "textures\\logos\\Sht_etnies01.img.xbx" },
+		};
+		for (size_t i = 0; i < sizeof(logos) / sizeof(logos[0]); i++) {
+			const char* a = logos[i][0];
+			const char* b = company;
+			while (*a && *b && (*a | 0x20) == (*b | 0x20)) {
+				a++;
+				b++;
+			}
+			if (!*a && !*b) {
+				return logos[i][1];
+			}
+		}
+		return NULL;
+	}
+
 	// A made-up player for a run: the same seed always has the same one. The names are made up (online names,
 	// as a player has); the board companies are the story's sponsors (select_sponsor.q), the shoe companies the
-	// pros' (skater_profile.q).
+	// pros' (skater_profile.q) that the game has a logo of, and DC Shoes in the place of Axion, which it has not.
 	inline Identity FakeIdentity(uint32_t seed) {
 		static const char* const names[] = { "DexRivera", "kaia_b", "milo.vance", "RosaDelgado", "teo_lq", "junpark",
 			"AvaMercer", "nico_r", "samoduya", "LenaFox", "ozzyk", "ivy.tran", "RafeMoreno", "cleo_b", "kwame_a",
 			"TessHollis" };
 		static const char* const boards[] = { "Birdhouse", "Element", "Flip", "Girl", "Zero" };
-		static const char* const shoes[] = { "Hawk Shoes", "Vans", "Axion", "eS", "Adio", "Globe", "Circa", "Emerica",
+		static const char* const shoes[] = { "Hawk Shoes", "Vans", "DC Shoes", "eS", "Adio", "Globe", "Circa", "Emerica",
 			"Etnies" };
 		Dice d(seed * 2654435761u + 1u);
 		Identity id;
@@ -399,5 +432,134 @@ namespace Players {
 		}
 		const Frame& last = r.frames.back();
 		return f.t > last.t && (f.t - last.t >= kGapMs || AnimRestarted(last, f));
+	}
+
+	/******************************************************************/
+	/*  Which player Circle is for                                    */
+	/******************************************************************/
+
+	// The camera's right along the ground (x and z, a unit long), from the renderer's view matrix: the
+	// matrix is taken whichever way round it is kept (the one that takes the eye to the middle of the view).
+	// False when it has no right along the ground (the camera looks straight down) or is not numbers.
+	inline bool CameraRight(const float eye[3], const float view[16], float* rx, float* rz) {
+		for (int i = 0; i < 16; i++) {
+			if (!Finite(view[i])) {
+				return false;
+			}
+		}
+		const float* v = view;
+		const float rowsOff = fabsf(eye[0] * v[0] + eye[1] * v[4] + eye[2] * v[8] + v[12])
+			+ fabsf(eye[0] * v[1] + eye[1] * v[5] + eye[2] * v[9] + v[13])
+			+ fabsf(eye[0] * v[2] + eye[1] * v[6] + eye[2] * v[10] + v[14]);
+		const float colsOff = fabsf(v[0] * eye[0] + v[1] * eye[1] + v[2] * eye[2] + v[3])
+			+ fabsf(v[4] * eye[0] + v[5] * eye[1] + v[6] * eye[2] + v[7])
+			+ fabsf(v[8] * eye[0] + v[9] * eye[1] + v[10] * eye[2] + v[11]);
+		// a point times the matrix (D3D's way): the view's x is the first column (0, 4, 8); the matrix times a
+		// point: its first row (0, 1, 2)
+		const float x = v[0];
+		const float z = rowsOff <= colsOff ? v[8] : v[2];
+		const float len = sqrtf(x * x + z * z);
+		if (!(len > 0.1f) || !Finite(len)) {
+			return false;
+		}
+		*rx = x / len;
+		*rz = z / len;
+		return true;
+	}
+
+	// The way to someone from where one looks: 0 straight ahead, to the right positive, in radians.
+	// (fx, fz) the way one looks and (rx, rz) one's right, along the ground; (dx, dz) the way to him.
+	inline float Bearing(float fx, float fz, float rx, float rz, float dx, float dz) {
+		return atan2f(dx * rx + dz * rz, dx * fx + dz * fz);
+	}
+
+	struct AimSettings {
+		float reach;            // this near (from the edge of him), he can be anywhere around
+		float aimReach;         // this near, he is in front, where the camera looks
+		float cone;             // radians either side of where the camera looks
+		float height;           // and no farther up or down than this
+		float body;             // from his middle to his edge
+		uint32_t lockMs;        // the one picked stays picked this long once nobody is in front
+	};
+
+	struct AimState {
+		int target;             // -1: nobody
+		uint32_t seenAt;        // when he was last one Circle could be for
+	};
+
+	// From the skater to a player (dx, dy, dz); present: the player is there
+	struct AimPlayer {
+		float dx, dy, dz;
+		bool present;
+	};
+
+	inline bool AimCandidate(const AimPlayer& p, float fx, float fz, const AimSettings& s, float* edge, float* score) {
+		if (!p.present || fabsf(p.dy) > s.height) {
+			return false;
+		}
+		const float flat = sqrtf(p.dx * p.dx + p.dz * p.dz);
+		const float away = sqrtf(flat * flat + p.dy * p.dy);
+		*edge = away > s.body ? away - s.body : 0.0f;
+		float angle = 0.0f;
+		if (flat > 1.0f && (fx != 0.0f || fz != 0.0f)) {
+			float c = (p.dx * fx + p.dz * fz) / flat;
+			c = c > 1.0f ? 1.0f : c < -1.0f ? -1.0f : c;
+			angle = acosf(c);
+		}
+		const bool ahead = angle <= s.cone && away <= s.aimReach;
+		if (!ahead && *edge > s.reach) {
+			return false;
+		}
+		const float k = s.cone > 0.0f ? angle / s.cone : 0.0f;
+		*score = (*edge + 1.0f) * (1.0f + 2.0f * k * k);
+		return true;
+	}
+
+	// Who Circle is for now: the best of those in front of the skater where the camera looks (fx, fz: a unit
+	// along the ground) or right by him, the nearer and the straighter ahead the better; the one picked
+	// before stays while he is nearly as good, and once nobody is there, for lockMs, while he is no farther
+	// than twice aimReach. Returns his index, or -1; edge: how far he is from the skater (from his edge).
+	inline int Aim(const AimPlayer* players, int n, float fx, float fz, uint32_t now, const AimSettings& s, AimState* st, float* edge) {
+		int best = -1;
+		float bestScore = 0.0f, bestEdge = 0.0f, oldScore = 0.0f, oldEdge = 0.0f;
+		bool oldThere = false;
+		for (int i = 0; i < n; i++) {
+			float e, sc;
+			if (!AimCandidate(players[i], fx, fz, s, &e, &sc)) {
+				continue;
+			}
+			if (i == st->target) {
+				oldThere = true;
+				oldScore = sc;
+				oldEdge = e;
+			}
+			if (best < 0 || sc < bestScore) {
+				best = i;
+				bestScore = sc;
+				bestEdge = e;
+			}
+		}
+		if (best >= 0) {
+			if (oldThere && oldScore <= bestScore * 1.3f) {
+				best = st->target;
+				bestEdge = oldEdge;
+			}
+			st->target = best;
+			st->seenAt = now;
+			*edge = bestEdge;
+			return best;
+		}
+		const int t = st->target;
+		if (t >= 0 && t < n && players[t].present && now - st->seenAt <= s.lockMs) {
+			const AimPlayer& p = players[t];
+			const float away = sqrtf(p.dx * p.dx + p.dy * p.dy + p.dz * p.dz);
+			if (away <= 2.0f * s.aimReach) {
+				*edge = away > s.body ? away - s.body : 0.0f;
+				return t;
+			}
+		}
+		st->target = -1;
+		*edge = 1.0e9f;
+		return -1;
 	}
 }

@@ -8,10 +8,15 @@
 // controller or the keyboard; A travels to the spot under the cursor through the game's custom restart (see
 // FlickitGame::RequestTravel), Y marks where the skater is as a spot of his own.
 //
-// The card of another player (players_game.h) is drawn here too, with the map's letters: who he is, his
-// sponsors, his story and his stats, and below them what can be done with him (Play S.K.A.T.E., Race, Join
-// party: not built yet, they come with online play). Up and down pick, A takes, B closes; the game is paused
-// while it is up, as for the map.
+// The card of another player (players_game.h) is drawn here too, with the map's letters: who he is, the logos
+// of the companies he rides for (the game's own pictures, read from its data\pre\skaterparts.pre), his story
+// and his stats, and below them what can be done with him (Play S.K.A.T.E., Race, Join party: not built yet,
+// they come with online play). Up and down pick, A takes, B closes. The game is not paused under it (other
+// players go on, as they would online): only its picture of the pad is left blank while the card is up.
+//
+// The list of the players there opens on its own button ([Flickit] PlayersButton, the d-pad's down) or key
+// (PlayersKey, P): the nearest first, how far each is and which way (an arrow, up where the camera looks); A
+// opens the card of the one picked, and B on that card comes back to the list. The game goes on under it too.
 //
 // It needs Flickit's hooks in the game (FlickitGame::Installed): the pad update is where the skater is read
 // and where he is moved. Everything here runs on the game's main thread: the look at the controller and the
@@ -22,8 +27,8 @@
 #include "players.h"
 
 namespace WorldMapGame {
-	// [Flickit] Map, MapButton, MapHoldMs, MapKey; the map and its spots from next to the exe; and the
-	// drawing put in at the end of the frame (once). Again when the settings are read again.
+	// [Flickit] Map, MapButton, MapHoldMs, MapKey, PlayersButton, PlayersKey; the map and its spots from next
+	// to the exe; and the drawing put in at the end of the frame (once). Again when the settings are read again.
 	void Configure(const char* configFile);
 
 	// The button that turns the camera, as player one's controller has it on this frame (in a level, not in
@@ -43,5 +48,6 @@ namespace WorldMapGame {
 	// A player's card, asked for from the game's frame (Circle by him): it opens at the next look at the
 	// controller, if it can then. False when there is no card to draw (the map is off or has no file).
 	bool AskCard(const Players::Identity& who);
+	// The card or the players' list is up (or the card is to open)
 	bool CardOpen();
 }

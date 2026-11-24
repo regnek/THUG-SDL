@@ -2498,6 +2498,15 @@ namespace FlickitGame {
 		return s_viewReady > 0;
 	}
 
+	bool CameraView(float eye[3], float view[16]) {
+		if (!ViewReady()) {
+			return false;
+		}
+		memcpy(eye, kViewEye, 3 * sizeof(float));
+		memcpy(view, kViewMatrix, 16 * sizeof(float));
+		return Watchdog::Sane(eye, 3) && Watchdog::Sane(view, 16);
+	}
+
 	static bool WatchReady() {
 		if (s_watchReady == 0) {
 			s_watchReady = 1;

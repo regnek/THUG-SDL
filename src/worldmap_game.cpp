@@ -12,7 +12,9 @@
 
 #include "d3d9.h"
 #include "flickit_game.h"
+#include "gamefiles.h"
 #include "patch.h"
+#include "players_game.h"
 #include "worldmap.h"
 #include "worldmap_game.h"
 #include "Logger/Logger.h"
@@ -66,6 +68,8 @@ namespace WorldMapGame {
 	/******************************************************************/
 
 	static const char* const kMine = "My spots";      // the district of the spots the player marks
+	static const int kDim = 40;                       // the game behind the card and the list: this much black (of 255)
+	static const int kPanel = 200;                    // the card and the list: this solid (of 255), the game seen through
 	static const double kPickRadius = 40.0;           // pixels at 1080 lines: a spot this near the cursor is picked
 	static const double kOpenZoom = 10.0;             // units a pixel at 1080 lines the first time it opens
 
@@ -126,6 +130,29 @@ namespace WorldMapGame {
 	static int s_cardStickWas = 0;      // the stick up (-1) or down (1) on the look before
 	static std::string s_cardMessage;
 	static uint32_t s_cardMessageUntil = 0;
+	static bool s_cardFromList = false; // opened from the players' list: closing it goes back to the list
+	static uint32_t s_overlayLevel = 0; // the level the card or the list opened in
+
+	// The list of the players there (players_game.h), on its own button (the d-pad's down) or key
+	static int s_listButton = SDL_CONTROLLER_BUTTON_DPAD_DOWN;   // [Flickit] PlayersButton
+	static int s_listKey = SDL_SCANCODE_P;                        // [Flickit] PlayersKey
+	static bool s_listOpen = false;
+	static int s_listPick = 0;          // the row picked
+	static int s_listSlot = -1;         // whose row it is: the pick stays with him as the rows move
+	static WorldMap::Pad s_listWas;
+	static int s_listStickWas = 0;
+	static bool s_listButtonWas = true; // down on the look before (down at the start: not a press)
+	static bool s_listKeyWas = true;
+	static std::vector<PlayersGame::Listed> s_listRows;
+
+	// The logos of the companies on a card: pictures of the game's own, read from its skaterparts.pre
+	struct Logo {
+		std::string company;
+		GameFiles::Picture picture;     // w 0: not there
+		IDirect3DTexture9* tex;         // of s_texDevice
+		bool texTried;
+	};
+	static std::vector<Logo> s_logos;
 
 	static double Seconds() {
 		static double perSecond = 0.0;
@@ -448,6 +475,123 @@ namespace WorldMapGame {
 		return NULL;
 	}
 
+	static Logo* FindLogo(const char* company) {
+		for (size_t i = 0; i < s_logos.size(); i++) {
+			if (_stricmp(s_logos[i].company.c_str(), company) == 0) {
+				return &s_logos[i];
+			}
+		}
+		return NULL;
+	}
+
+	// The logos of these companies, read from the game's data\pre\skaterparts.pre the first time each is
+	// wanted, in one pass over it (the other entries are passed by their heads)
+	static void ReadLogos(const char* const* companies, int n) {
+		std::vector<size_t> todo;
+		for (int i = 0; i < n; i++) {
+			if (!companies[i] || !companies[i][0] || FindLogo(companies[i])) {
+				continue;
+			}
+			Logo l;
+			l.company = companies[i];
+			l.picture.w = l.picture.h = 0;
+			l.tex = NULL;
+			l.texTried = false;
+			s_logos.push_back(l);
+			if (Players::LogoOf(companies[i])) {
+				todo.push_back(s_logos.size() - 1);
+			}
+			else {
+				Log::TypedLog(CHN_SDL, "Map: the game has no logo of %s; the card has its name\n", companies[i]);
+			}
+		}
+		if (todo.empty()) {
+			return;
+		}
+		const std::string path = std::string(s_dir) + "data\\pre\\skaterparts.pre";
+		FILE* f = NULL;
+		if (fopen_s(&f, path.c_str(), "rb") != 0 || !f) {
+			Log::TypedLog(CHN_SDL, "Map: cannot open %s; the card has the companies' names\n", path.c_str());
+			return;
+		}
+		uint8_t head[16];
+		uint32_t count = 0;
+		size_t found = 0;
+		if (fread(head, 1, 12, f) == 12 && GameFiles::ReadPreHead(head, &count)) {
+			std::vector<char> name;
+			std::vector<uint8_t> stored, data;
+			for (uint32_t e = 0; e < count && found < todo.size(); e++) {
+				GameFiles::EntryHead h;
+				if (fread(head, 1, 16, f) != 16 || !GameFiles::ReadEntryHead(head, &h)) {
+					break;
+				}
+				name.resize(h.nameLength);
+				if (fread(&name[0], 1, h.nameLength, f) != h.nameLength) {
+					break;
+				}
+				const uint32_t bytes = GameFiles::Stored(h);
+				Logo* want = NULL;
+				for (size_t k = 0; k < todo.size() && !want; k++) {
+					Logo& l = s_logos[todo[k]];
+					if (l.picture.w == 0 && GameFiles::SameName(&name[0], h.nameLength, Players::LogoOf(l.company.c_str()))) {
+						want = &l;
+					}
+				}
+				if (!want) {
+					if (fseek(f, (long)GameFiles::Padded(bytes), SEEK_CUR) != 0) {
+						break;
+					}
+					continue;
+				}
+				stored.resize(bytes ? bytes : 1);
+				if (bytes && fread(&stored[0], 1, bytes, f) != bytes) {
+					break;
+				}
+				if (GameFiles::Unpack(h, &stored[0], &data) && !data.empty() && GameFiles::DecodeImg(&data[0], data.size(), &want->picture)) {
+					found++;
+				}
+				else {
+					want->picture = GameFiles::Picture();
+					want->picture.w = want->picture.h = 0;
+					Log::TypedLog(CHN_SDL, "Map: the logo of %s in skaterparts.pre is not a picture Flickit can read\n", want->company.c_str());
+				}
+				if (fseek(f, (long)(GameFiles::Padded(bytes) - bytes), SEEK_CUR) != 0) {
+					break;
+				}
+			}
+		}
+		else {
+			Log::TypedLog(CHN_SDL, "Map: %s is not a .pre archive of the game's\n", path.c_str());
+		}
+		fclose(f);
+		Log::TypedLog(CHN_SDL, "Map: %u of %u logos read from %s\n", (unsigned)found, (unsigned)todo.size(), path.c_str());
+	}
+
+	static D3DCOLOR SponsorColor(int sponsor) {
+		return sponsor == Players::kPro ? D3DCOLOR_ARGB(255, 255, 196, 70) : sponsor == Players::kAm ? D3DCOLOR_ARGB(255, 96, 182, 255)
+			: D3DCOLOR_ARGB(255, 178, 184, 196);
+	}
+
+	// NULL while the card or the list can stay up, else why not: the game goes on under them
+	static const char* OverlayEnd(bool menuUp) {
+		if (menuUp) {
+			return "a menu of the game's came up";
+		}
+		if (NetGame()) {
+			return "a net game";
+		}
+		if (LevelNow() != s_overlayLevel) {
+			return "the level changed";
+		}
+		FlickitGame::Whereabouts w;
+		if (FlickitGame::SkaterWhereabouts(w) && GetTickCount() - w.tick <= 500 && (!w.controls || w.driving)) {
+			return "the skater's controls were taken";
+		}
+		return NULL;
+	}
+
+	static void OpenList(const WorldMap::Pad& now);
+
 	static void OpenCard(const WorldMap::Pad& now) {
 		ScreenSize();
 		s_cardPick = 0;
@@ -455,31 +599,39 @@ namespace WorldMapGame {
 		s_cardStickWas = now.ly < -0.5f ? -1 : (now.ly > 0.5f ? 1 : 0);
 		s_cardMessage.clear();
 		s_toast.clear();
-		PauseGame(*kFrontEnd, true);
+		s_overlayLevel = LevelNow();
+		if (s_cardWho.sponsor != Players::kUnsponsored) {
+			const char* companies[2] = { s_cardWho.board, s_cardWho.shoes };
+			ReadLogos(companies, 2);
+		}
 		s_cardOpen = true;
-		Log::TypedLog(CHN_SDL, "Map: the card of %s (%s, %s), open\n", s_cardWho.name, Players::SponsorName(s_cardWho.sponsor), s_cardWho.level);
+		Log::TypedLog(CHN_SDL, "Map: the card of %s (%s, %s), open%s\n", s_cardWho.name, Players::SponsorName(s_cardWho.sponsor), s_cardWho.level,
+			s_cardFromList ? ", from the list" : "");
 	}
 
-	static void CloseCard(bool unpause) {
+	// The game goes on under the card: closing it is only a matter of the buttons still down. back: to the
+	// list, if it came from there.
+	static void CloseCard(bool back, const WorldMap::Pad& now) {
 		s_cardOpen = false;
-		const uint8_t* frontEnd = *kFrontEnd;
-		if (unpause && frontEnd && frontEnd[FRONTEND_PAUSED]) {
-			PauseGame(*kFrontEnd, false);
+		if (back && s_cardFromList) {
+			s_cardFromList = false;
+			OpenList(now);
+			return;
 		}
+		s_cardFromList = false;
 		s_holdOff = true;
 		s_holdOffSince = GetTickCount();
 	}
 
 	static void CardFrame(uint8_t* cd, SDL_GameController* c, const Uint8* keys, bool menuUp) {
-		if (menuUp) {
-			Log::TypedLog(CHN_SDL, "Map: the card closed for a menu of the game's\n");
-			CloseCard(false);
-			return;
-		}
-		if (NetGame() || !*kFrontEnd || !(*kFrontEnd)[FRONTEND_PAUSED]) {
-			Log::TypedLog(CHN_SDL, "Map: the card closed by the game\n");
-			CloseCard(false);
-			Blank(cd, true);
+		const char* end = OverlayEnd(menuUp);
+		if (end) {
+			Log::TypedLog(CHN_SDL, "Map: the card closed: %s\n", end);
+			s_cardFromList = false;
+			CloseCard(false, ReadPad(c, keys));
+			if (!menuUp) {
+				Blank(cd, true);
+			}
 			return;
 		}
 		const WorldMap::Pad p = ReadPad(c, keys);
@@ -498,7 +650,7 @@ namespace WorldMapGame {
 		s_cardStickWas = stick;
 		if (close || (choose && kCardItems[s_cardPick].built)) {
 			Log::TypedLog(CHN_SDL, "Map: the card of %s, closed\n", s_cardWho.name);
-			CloseCard(true);
+			CloseCard(true, p);
 			Blank(cd, true);
 			return;
 		}
@@ -511,16 +663,104 @@ namespace WorldMapGame {
 	}
 
 	bool AskCard(const Players::Identity& who) {
-		if (!s_ready || s_open || s_cardOpen) {
+		if (!s_ready || s_open || s_cardOpen || s_listOpen) {
 			return false;
 		}
 		s_cardWho = who;
+		s_cardFromList = false;
 		s_cardAsked = true;
 		return true;
 	}
 
 	bool CardOpen() {
-		return s_cardOpen || s_cardAsked;
+		return s_cardOpen || s_cardAsked || s_listOpen;
+	}
+
+	/******************************************************************/
+	/*  The list of the players there                                 */
+	/******************************************************************/
+
+	static const char* ListRefusal(bool inMenu) {
+		const char* why = CardRefusal(inMenu);
+		if (why) {
+			return why;
+		}
+		FlickitGame::Whereabouts w;
+		if (FlickitGame::SkaterWhereabouts(w) && w.driving) {
+			return "he is in a car";
+		}
+		return NULL;
+	}
+
+	// The pick on the row of the player picked before, if he is still there
+	static void ListRows() {
+		PlayersGame::ListPlayers(s_listRows);
+		const int n = (int)s_listRows.size();
+		int at = -1;
+		for (int i = 0; i < n; i++) {
+			if (s_listRows[i].slot == s_listSlot) {
+				at = i;
+			}
+		}
+		s_listPick = at >= 0 ? at : (s_listPick >= n ? n - 1 : s_listPick);
+		s_listPick = s_listPick < 0 ? 0 : s_listPick;
+		s_listSlot = n ? s_listRows[s_listPick].slot : -1;
+	}
+
+	static void OpenList(const WorldMap::Pad& now) {
+		ScreenSize();
+		s_listWas = now;
+		s_listStickWas = now.ly < -0.5f ? -1 : (now.ly > 0.5f ? 1 : 0);
+		s_overlayLevel = LevelNow();
+		ListRows();
+		s_listOpen = true;
+	}
+
+	static void CloseList() {
+		s_listOpen = false;
+		s_holdOff = true;
+		s_holdOffSince = GetTickCount();
+	}
+
+	static void ListFrame(uint8_t* cd, SDL_GameController* c, const Uint8* keys, bool menuUp, bool keyPressed) {
+		const char* end = OverlayEnd(menuUp);
+		if (end) {
+			Log::TypedLog(CHN_SDL, "Map: the players' list closed: %s\n", end);
+			CloseList();
+			if (!menuUp) {
+				Blank(cd, true);
+			}
+			return;
+		}
+		ListRows();
+		const int n = (int)s_listRows.size();
+		const WorldMap::Pad p = ReadPad(c, keys);
+		const int stick = p.ly < -0.5f ? -1 : (p.ly > 0.5f ? 1 : (fabsf(p.ly) < 0.3f ? 0 : s_listStickWas));
+		int move = 0;
+		if ((p.up && !s_listWas.up) || (stick < 0 && s_listStickWas >= 0)) {
+			move = -1;
+		}
+		if ((p.down && !s_listWas.down) || (stick > 0 && s_listStickWas <= 0)) {
+			move = 1;
+		}
+		if (n > 0 && move) {
+			s_listPick = (s_listPick + move + n) % n;
+			s_listSlot = s_listRows[s_listPick].slot;
+		}
+		const bool choose = p.a && !s_listWas.a;
+		const bool close = (p.b && !s_listWas.b) || (p.back && !s_listWas.back) || (p.start && !s_listWas.start) || keyPressed;
+		s_listWas = p;
+		s_listStickWas = stick;
+		if (close) {
+			CloseList();
+		}
+		else if (choose && n > 0) {
+			s_listOpen = false;
+			s_cardWho = s_listRows[s_listPick].who;
+			s_cardFromList = true;
+			OpenCard(p);
+		}
+		Blank(cd, true);
 	}
 
 	static void TravelTo(int i, bool mapButtonDown) {
@@ -631,6 +871,12 @@ namespace WorldMapGame {
 		const bool keyDown = Key(keys, s_key);
 		const bool ownButton = s_button != cameraButton;
 		const bool buttonDown = ownButton && c && Button(c, s_button);
+		const bool listDown = c && Button(c, s_listButton);
+		const bool listKeyDown = Key(keys, s_listKey);
+		const bool listPress = listDown && !s_listButtonWas;
+		const bool listKeyPress = listKeyDown && !s_listKeyWas;
+		s_listButtonWas = listDown;
+		s_listKeyWas = listKeyDown;
 
 		if (s_open) {
 			OpenFrame(cd, c, keys, dt, menuUp);
@@ -646,6 +892,13 @@ namespace WorldMapGame {
 			s_gateOpened = false;
 			return;
 		}
+		if (s_listOpen) {
+			ListFrame(cd, c, keys, menuUp, listKeyPress);
+			s_keyWas = keyDown;
+			s_buttonWas = buttonDown;
+			s_gateOpened = false;
+			return;
+		}
 		if (s_cardAsked) {
 			s_cardAsked = false;
 			const char* why = CardRefusal(inMenu);
@@ -654,6 +907,23 @@ namespace WorldMapGame {
 			}
 			else {
 				OpenCard(ReadPad(c, keys));
+				Blank(cd, true);
+				s_keyWas = keyDown;
+				s_buttonWas = buttonDown;
+				s_gateOpened = false;
+				return;
+			}
+		}
+		// a press of its own (the button went down on this look), even while buttons let go of after the card are
+		// kept from the game
+		if (listPress || listKeyPress) {
+			const char* why = ListRefusal(inMenu);
+			if (why) {
+				Log::TypedLog(CHN_SDL, "Map: the players' list, not now: %s\n", why);
+			}
+			else {
+				OpenList(ReadPad(c, keys));
+				Log::TypedLog(CHN_SDL, "Map: the players' list, open (%u there)\n", (unsigned)s_listRows.size());
 				Blank(cd, true);
 				s_keyWas = keyDown;
 				s_buttonWas = buttonDown;
@@ -849,6 +1119,10 @@ namespace WorldMapGame {
 			s_mapTex = NULL;
 			s_fontTex = NULL;
 			s_texTried = false;
+			for (size_t i = 0; i < s_logos.size(); i++) {
+				s_logos[i].tex = NULL;
+				s_logos[i].texTried = false;
+			}
 		}
 		if (s_texTried) {
 			return;
@@ -919,6 +1193,30 @@ namespace WorldMapGame {
 		else {
 			Log::TypedLog(CHN_SDL, "Map: the card would not take the font; the map has no names on it\n");
 		}
+	}
+
+	// A logo's texture, made the first time it is drawn: MANAGED, as the others
+	static IDirect3DTexture9* LogoTexture(IDirect3DDevice9* dev, Logo& l) {
+		if (l.tex || l.texTried || !l.picture.w) {
+			return l.tex;
+		}
+		l.texTried = true;
+		IDirect3DTexture9* t = NULL;
+		if (FAILED(dev->CreateTexture(l.picture.w, l.picture.h, 1, 0, D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &t, NULL)) || !t) {
+			Log::TypedLog(CHN_SDL, "Map: the card would not take the logo of %s\n", l.company.c_str());
+			return NULL;
+		}
+		D3DLOCKED_RECT r;
+		if (FAILED(t->LockRect(0, &r, NULL, 0))) {
+			t->Release();
+			return NULL;
+		}
+		for (uint32_t y = 0; y < l.picture.h; y++) {
+			memcpy((uint8_t*)r.pBits + (size_t)y * r.Pitch, &l.picture.bgra[(size_t)y * l.picture.w * 4], (size_t)l.picture.w * 4);
+		}
+		t->UnlockRect(0);
+		l.tex = t;
+		return t;
 	}
 
 	static void SetStates(IDirect3DDevice9* dev, UINT w, UINT h) {
@@ -1148,8 +1446,7 @@ namespace WorldMapGame {
 	static void DrawCard(IDirect3DDevice9* dev) {
 		const float W = (float)s_screenW, H = (float)s_screenH, ui = (float)s_ui;
 		const Players::Identity& p = s_cardWho;
-		const D3DCOLOR accent = p.sponsor == Players::kPro ? Rgba(255, 196, 70, 255)
-			: p.sponsor == Players::kAm ? Rgba(96, 182, 255, 255) : Rgba(178, 184, 196, 255);
+		const D3DCOLOR accent = SponsorColor(p.sponsor);
 		const D3DCOLOR white = Rgba(255, 255, 255, 255), soft = Rgba(226, 230, 238, 235), dim = Rgba(146, 153, 167, 235);
 		const D3DCOLOR line = Rgba(255, 255, 255, 34);
 		const float cw = 640.0f * ui, ch = 896.0f * ui, pad = 40.0f * ui;
@@ -1165,10 +1462,11 @@ namespace WorldMapGame {
 		const std::string level = Upper(Players::SponsorName(p.sponsor));
 		const float badgePx = 17.0f * ui, badgeW = TextWidth(level, badgePx, 0.14f) + 22.0f * ui;
 
-		// the game behind it dimmed, the card, its colour at the top, the lines between its parts
-		Quad(0, 0, W, H, Rgba(0, 0, 0, 110));
+		// the game behind it a little dimmed (it goes on), the card (the game seen through it), its colour at
+		// the top, the lines between its parts
+		Quad(0, 0, W, H, Rgba(0, 0, 0, kDim));
 		Quad(x0 - 1.0f * ui, y0 - 1.0f * ui, x1 + 1.0f * ui, y1 + 1.0f * ui, Rgba(255, 255, 255, 30));
-		Quad(x0, y0, x1, y1, Rgba(12, 14, 20, 238));
+		Quad(x0, y0, x1, y1, Rgba(12, 14, 20, kPanel));
 		Quad(x0, y0, x1, y0 + 5.0f * ui, accent);
 		Quad(L, d1, R, d1 + 1.0f * ui, line);
 		Quad(L, d2, R, d2 + 1.0f * ui, line);
@@ -1191,6 +1489,20 @@ namespace WorldMapGame {
 			Quad(x0 + 16.0f * ui, top, x0 + 20.0f * ui, top + itemH, accent);
 		}
 		Flush(dev, NULL);
+		// the logos of the companies he rides for, the board's and the shoes' (their names where there is none)
+		const float logoTop = y0 + 132.0f * ui, logoW = 128.0f * ui, logoH = 64.0f * ui;
+		const char* companies[2] = { p.board, p.shoes };
+		bool logoDrawn[2] = { false, false };
+		for (int k = 0; k < 2 && p.sponsor != Players::kUnsponsored; k++) {
+			Logo* l = FindLogo(companies[k]);
+			IDirect3DTexture9* t = l ? LogoTexture(dev, *l) : NULL;
+			if (t) {
+				const float lx = k == 0 ? L : L + colW + colGap;
+				Quad(lx, logoTop, lx + logoW, logoTop + logoH, Rgba(255, 255, 255, 255), 0.0f, 0.0f, 1.0f, 1.0f);
+				Flush(dev, t);
+				logoDrawn[k] = true;
+			}
+		}
 		if (!s_fontTex) {
 			return;
 		}
@@ -1209,10 +1521,11 @@ namespace WorldMapGame {
 			Text("No sponsors yet", L, y0 + 150.0f * ui, 25.0f * ui, dim, -1, 0.0f, false);
 		}
 		else {
-			Text("BOARD", L, y0 + 140.0f * ui, 15.0f * ui, dim, -1, 0.16f, false);
-			Text(p.board, L, y0 + 160.0f * ui, 27.0f * ui, soft, -1, 0.0f, false);
-			Text("SHOES", L + colW + colGap, y0 + 140.0f * ui, 15.0f * ui, dim, -1, 0.16f, false);
-			Text(p.shoes, L + colW + colGap, y0 + 160.0f * ui, 27.0f * ui, soft, -1, 0.0f, false);
+			for (int k = 0; k < 2; k++) {
+				if (!logoDrawn[k]) {
+					Text(companies[k], k == 0 ? L : L + colW + colGap, y0 + 150.0f * ui, 27.0f * ui, soft, -1, 0.0f, false);
+				}
+			}
 		}
 		// his story
 		{
@@ -1236,7 +1549,8 @@ namespace WorldMapGame {
 		for (int i = 0; i < kCardItemCount; i++) {
 			const float top = menuTop + i * itemPitch;
 			const bool picked = i == s_cardPick;
-			Text(kCardItems[i].text, L, top + 9.0f * ui, 27.0f * ui, picked ? white : Rgba(220, 224, 232, 185), -1, 0.0f, false);
+			const char* text = i == kCardItemCount - 1 && s_cardFromList ? "Back to the list" : kCardItems[i].text;
+			Text(text, L, top + 9.0f * ui, 27.0f * ui, picked ? white : Rgba(220, 224, 232, 185), -1, 0.0f, false);
 			if (!kCardItems[i].built) {
 				Text("SOON", R, top + 16.0f * ui, 14.0f * ui, Rgba(255, 210, 120, picked ? 220 : 150), 1, 0.16f, false);
 			}
@@ -1248,6 +1562,75 @@ namespace WorldMapGame {
 		static const char* const kPad[][2] = { { "D-pad", "Choose" }, { "A", "Select" }, { "B", "Close" } };
 		static const char* const kPs[][2] = { { "D-pad", "Choose" }, { "Cross", "Select" }, { "Circle", "Close" } };
 		static const char* const kKeys[][2] = { { "Arrows", "Choose" }, { "Enter", "Select" }, { "Esc", "Close" } };
+		static const char* const kPadBack[][2] = { { "D-pad", "Choose" }, { "A", "Select" }, { "B", "Back" } };
+		static const char* const kPsBack[][2] = { { "D-pad", "Choose" }, { "Cross", "Select" }, { "Circle", "Back" } };
+		static const char* const kKeysBack[][2] = { { "Arrows", "Choose" }, { "Enter", "Select" }, { "Esc", "Back" } };
+		const char* const(*items)[2] = s_cardFromList ? (s_keyboardLast ? kKeysBack : s_playStation ? kPsBack : kPadBack)
+			: (s_keyboardLast ? kKeys : s_playStation ? kPs : kPad);
+		ButtonLine(items, 3, (x0 + x1) * 0.5f, y1 + 18.0f * ui, 21.0f * ui);
+		Flush(dev, s_fontTex);
+	}
+
+	// The players there, the nearest first: his sponsor level's colour, his name, how far he is and which way
+	// (an arrow, up where the camera looks)
+	static void DrawList(IDirect3DDevice9* dev) {
+		const float W = (float)s_screenW, H = (float)s_screenH, ui = (float)s_ui;
+		const int n = (int)s_listRows.size();
+		const float cw = 560.0f * ui, pad = 36.0f * ui, rowH = 78.0f * ui, headH = 104.0f * ui;
+		const float ch = headH + (n ? n : 1) * rowH + 22.0f * ui;
+		float x0 = floorf(W * 0.64f - cw * 0.5f);
+		x0 = x0 + cw > W - 40.0f * ui ? W - 40.0f * ui - cw : x0;
+		x0 = x0 < 40.0f * ui ? 40.0f * ui : x0;
+		const float y0 = floorf((H - ch) * 0.5f - 16.0f * ui), x1 = x0 + cw, y1 = y0 + ch;
+		const float L = x0 + pad, R = x1 - pad;
+		const D3DCOLOR white = Rgba(255, 255, 255, 255), dim = Rgba(146, 153, 167, 235), gold = Rgba(255, 210, 120, 255);
+		Quad(0, 0, W, H, Rgba(0, 0, 0, kDim));
+		Quad(x0 - 1.0f * ui, y0 - 1.0f * ui, x1 + 1.0f * ui, y1 + 1.0f * ui, Rgba(255, 255, 255, 30));
+		Quad(x0, y0, x1, y1, Rgba(12, 14, 20, kPanel));
+		Quad(x0, y0, x1, y0 + 5.0f * ui, gold);
+		Quad(L, y0 + headH - 12.0f * ui, R, y0 + headH - 11.0f * ui, Rgba(255, 255, 255, 34));
+		for (int i = 0; i < n; i++) {
+			const PlayersGame::Listed& r = s_listRows[i];
+			const float top = y0 + headH + i * rowH, mid = top + rowH * 0.5f;
+			if (i == s_listPick) {
+				Quad(x0 + 16.0f * ui, top + 4.0f * ui, x1 - 16.0f * ui, top + rowH - 4.0f * ui, Rgba(255, 255, 255, 24));
+				Quad(x0 + 16.0f * ui, top + 4.0f * ui, x0 + 20.0f * ui, top + rowH - 4.0f * ui, gold);
+			}
+			Diamond(L + 7.0f * ui, mid, 7.0f * ui, SponsorColor(r.who.sponsor));
+			Arrow(R - 14.0f * ui, mid, 13.0f * ui, 3.14159265 - r.bearing, Rgba(235, 238, 245, 235));
+		}
+		Flush(dev, NULL);
+		if (!s_fontTex) {
+			return;
+		}
+		char count[32];
+		sprintf_s(count, sizeof(count), "%d HERE", n);
+		Text("PLAYERS", L, y0 + 34.0f * ui, 30.0f * ui, white, -1, 0.06f, false);
+		Text(count, R, y0 + 44.0f * ui, 15.0f * ui, dim, 1, 0.16f, false);
+		if (!n) {
+			Text("No other players here", L, y0 + headH + 22.0f * ui, 25.0f * ui, dim, -1, 0.0f, false);
+		}
+		for (int i = 0; i < n; i++) {
+			const PlayersGame::Listed& r = s_listRows[i];
+			const float top = y0 + headH + i * rowH;
+			const bool picked = i == s_listPick;
+			float px = 27.0f * ui;
+			const float room = R - L - 150.0f * ui;
+			const float w = TextWidth(r.who.name, px);
+			px = w > room ? px * room / w : px;
+			Text(r.who.name, L + 26.0f * ui, top + 12.0f * ui, px, picked ? white : Rgba(226, 230, 238, 220), -1, 0.0f, false);
+			std::string about = Upper(Players::SponsorName(r.who.sponsor));
+			if (r.who.sponsor != Players::kUnsponsored && r.who.board[0]) {
+				about += std::string("  ") + r.who.board;
+			}
+			Text(about, L + 26.0f * ui, top + 46.0f * ui, 15.0f * ui, dim, -1, 0.1f, false);
+			char away[24];
+			sprintf_s(away, sizeof(away), "%.0f m", r.away * 0.0254f);
+			Text(away, R - 40.0f * ui, top + 26.0f * ui, 23.0f * ui, picked ? white : Rgba(226, 230, 238, 220), 1, 0.0f, false);
+		}
+		static const char* const kPad[][2] = { { "D-pad", "Choose" }, { "A", "View card" }, { "B", "Close" } };
+		static const char* const kPs[][2] = { { "D-pad", "Choose" }, { "Cross", "View card" }, { "Circle", "Close" } };
+		static const char* const kKeys[][2] = { { "Arrows", "Choose" }, { "Enter", "View card" }, { "Esc", "Close" } };
 		ButtonLine(s_keyboardLast ? kKeys : s_playStation ? kPs : kPad, 3, (x0 + x1) * 0.5f, y1 + 18.0f * ui, 21.0f * ui);
 		Flush(dev, s_fontTex);
 	}
@@ -1257,7 +1640,7 @@ namespace WorldMapGame {
 			return;
 		}
 		const bool toast = !s_toast.empty() && GetTickCount() - s_toastAt < kToastMs;
-		if (!s_open && !s_cardOpen && s_charge <= 0.35 && !toast) {
+		if (!s_open && !s_cardOpen && !s_listOpen && s_charge <= 0.35 && !toast) {
 			return;
 		}
 		IDirect3DDevice9* dev = *kDevice;
@@ -1290,6 +1673,9 @@ namespace WorldMapGame {
 		else if (s_cardOpen) {
 			DrawCard(dev);
 		}
+		else if (s_listOpen) {
+			DrawList(dev);
+		}
 		else {
 			DrawOver(dev);
 		}
@@ -1319,11 +1705,19 @@ namespace WorldMapGame {
 		const int hold = (int)GetPrivateProfileIntA(FLICKIT_SECTION, "MapHoldMs", 350, configFile);
 		s_gate.SetHold((uint32_t)(hold < 0 ? 0 : hold > 3000 ? 3000 : hold));
 		s_key = (int)GetPrivateProfileIntA(FLICKIT_SECTION, "MapKey", SDL_SCANCODE_M, configFile);
+		s_listButton = (int)GetPrivateProfileIntA(FLICKIT_SECTION, "PlayersButton", SDL_CONTROLLER_BUTTON_DPAD_DOWN, configFile);
+		s_listKey = (int)GetPrivateProfileIntA(FLICKIT_SECTION, "PlayersKey", SDL_SCANCODE_P, configFile);
 		if (s_open) {
 			Close(true, false);
 		}
 		if (s_cardOpen) {
-			CloseCard(true);
+			WorldMap::Pad none;
+			memset(&none, 0, sizeof(none));
+			s_cardFromList = false;
+			CloseCard(false, none);
+		}
+		if (s_listOpen) {
+			CloseList();
 		}
 		s_cardAsked = false;
 		s_ready = false;

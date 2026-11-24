@@ -57,6 +57,7 @@ static void TestIdentity() {
 		}
 		else {
 			Check(p.board[0] != 0 && p.shoes[0] != 0, "a board company and a shoe company when sponsored");
+			Check(Players::LogoOf(p.board) != NULL && Players::LogoOf(p.shoes) != NULL, "the game has a logo of both");
 		}
 		// the story level goes with the sponsor level: three each
 		int stage = -1;
@@ -73,6 +74,10 @@ static void TestIdentity() {
 		}
 	}
 	Check(differ > 200, "the names vary");
+	Check(Players::LogoOf("dc shoes") != NULL && std::strcmp(Players::LogoOf("DC SHOES"), "textures\\logos\\Sht_DCShoes01.img.xbx") == 0,
+		"a logo, by the company in any case");
+	Check(Players::LogoOf("Axion") == NULL && Players::LogoOf("") == NULL && Players::LogoOf("Vansx") == NULL && Players::LogoOf("Van") == NULL,
+		"no logo for a company the game has none of");
 	Check(sponsors[0] > 50 && sponsors[1] > 50 && sponsors[2] > 50, "all three sponsor levels come up");
 	Check(std::strcmp(Players::StatName(0), "Air") == 0 && std::strcmp(Players::StatName(9), "Manual Balance") == 0, "the stats' names");
 	Check(std::strcmp(Players::StatName(10), "") == 0 && std::strcmp(Players::StoryLevel(-1), "") == 0, "nothing out of range");
@@ -288,12 +293,139 @@ static void TestRestartsAndKeep() {
 	Check(!Players::Keep(r, MakeFrame(0, 0, 2, 0.0f)), "never one at the same time");
 }
 
+static Players::AimPlayer At(float x, float y, float z, bool present = true) {
+	Players::AimPlayer p;
+	p.dx = x;
+	p.dy = y;
+	p.dz = z;
+	p.present = present;
+	return p;
+}
+
+static void TestAim() {
+	Players::AimSettings s;
+	s.reach = 150.0f;
+	s.aimReach = 600.0f;
+	s.cone = 0.7f;
+	s.height = 300.0f;
+	s.body = 20.0f;
+	s.lockMs = 4000;
+	Players::AimState st = { -1, 0 };
+	float edge = 0.0f;
+	// looking along +z
+	Players::AimPlayer one[1] = { At(0, 0, 400) };
+	Check(Players::Aim(one, 1, 0.0f, 1.0f, 0, s, &st, &edge) == 0 && Near(edge, 380.0f, 0.01f), "aim: ahead, in reach");
+	st.target = -1;
+	one[0] = At(400, 0, 0);
+	Check(Players::Aim(one, 1, 0.0f, 1.0f, 10, s, &st, &edge) == -1, "aim: to the side and not near: nobody");
+	one[0] = At(0, 0, -100);
+	Check(Players::Aim(one, 1, 0.0f, 1.0f, 20, s, &st, &edge) == 0, "aim: behind him but right by him");
+	st.target = -1;
+	one[0] = At(0, 400, 200);
+	Check(Players::Aim(one, 1, 0.0f, 1.0f, 30, s, &st, &edge) == -1, "aim: too far up");
+	one[0] = At(0, 0, 700);
+	Check(Players::Aim(one, 1, 0.0f, 1.0f, 40, s, &st, &edge) == -1, "aim: ahead but past the reach");
+	one[0] = At(450, 0, 450);
+	Check(Players::Aim(one, 1, 0.0f, 1.0f, 50, s, &st, &edge) == -1, "aim: 45 degrees off is outside the cone");
+	one[0] = At(150, 0, 450);
+	Check(Players::Aim(one, 1, 0.0f, 1.0f, 60, s, &st, &edge) == 0, "aim: 18 degrees off is inside");
+	// the nearer and straighter wins; the one picked stays while nearly as good
+	st.target = -1;
+	Players::AimPlayer two[2] = { At(0, 0, 500), At(40, 0, 300) };
+	Check(Players::Aim(two, 2, 0.0f, 1.0f, 100, s, &st, &edge) == 1, "aim: the nearer of two ahead");
+	two[0] = At(0, 0, 280);
+	Check(Players::Aim(two, 2, 0.0f, 1.0f, 110, s, &st, &edge) == 1, "aim: the one picked stays while nearly as good");
+	two[0] = At(0, 0, 120);
+	Check(Players::Aim(two, 2, 0.0f, 1.0f, 120, s, &st, &edge) == 0, "aim: a much better one takes over");
+	// once nobody is there, the one picked stays for the lock
+	st.target = -1;
+	one[0] = At(0, 0, 300);
+	Check(Players::Aim(one, 1, 0.0f, 1.0f, 1000, s, &st, &edge) == 0, "lock: picked");
+	one[0] = At(300, 0, -300);
+	Check(Players::Aim(one, 1, 0.0f, 1.0f, 2000, s, &st, &edge) == 0, "lock: gone past him, still picked");
+	Check(edge > 380.0f && edge < 410.0f, "lock: how far he is now");
+	Check(Players::Aim(one, 1, 0.0f, 1.0f, 5000, s, &st, &edge) == 0, "lock: up to the lock's end");
+	Check(Players::Aim(one, 1, 0.0f, 1.0f, 5001, s, &st, &edge) == -1 && st.target == -1, "lock: then nobody");
+	st.target = -1;
+	one[0] = At(0, 0, 300);
+	Players::Aim(one, 1, 0.0f, 1.0f, 1000, s, &st, &edge);
+	one[0] = At(1300, 0, 0);
+	Check(Players::Aim(one, 1, 0.0f, 1.0f, 1500, s, &st, &edge) == -1, "lock: not once he is past twice the reach");
+	st.target = -1;
+	one[0] = At(0, 0, 300);
+	Players::Aim(one, 1, 0.0f, 1.0f, 1000, s, &st, &edge);
+	one[0] = At(0, 0, 300, false);
+	Check(Players::Aim(one, 1, 0.0f, 1.0f, 1100, s, &st, &edge) == -1, "lock: not once he has gone");
+	st.target = -1;
+	two[0] = At(0, 0, 300);
+	two[1] = At(500, 0, 0);
+	Check(Players::Aim(two, 2, 0.0f, 1.0f, 1000, s, &st, &edge) == 0, "lock: the first picked");
+	two[0] = At(-300, 0, -300);
+	two[1] = At(0, 0, 400);
+	Check(Players::Aim(two, 2, 0.0f, 1.0f, 1200, s, &st, &edge) == 1, "lock: another in front takes over");
+	// looking the other way round: the same with the camera turned
+	st.target = -1;
+	one[0] = At(-400, 0, 0);
+	Check(Players::Aim(one, 1, -1.0f, 0.0f, 0, s, &st, &edge) == 0, "aim: ahead the way the camera looks");
+	// no way known: the nearest in reach
+	st.target = -1;
+	two[0] = At(500, 0, 0);
+	two[1] = At(0, 0, -300);
+	Check(Players::Aim(two, 2, 0.0f, 0.0f, 0, s, &st, &edge) == 1, "aim: with no way known, the nearer");
+}
+
+// A view matrix as D3DXMatrixLookAtLH makes it (a point times the matrix), for a camera at eye turned by yaw
+static void LookAt(const float eye[3], float yaw, bool transposed, float out[16]) {
+	const float fx = sinf(yaw), fz = cosf(yaw);
+	const float x[3] = { fz, 0.0f, -fx }, y[3] = { 0.0f, 1.0f, 0.0f }, z[3] = { fx, 0.0f, fz };
+	float m[16] = {
+		x[0], y[0], z[0], 0.0f,
+		x[1], y[1], z[1], 0.0f,
+		x[2], y[2], z[2], 0.0f,
+		-(x[0] * eye[0] + x[1] * eye[1] + x[2] * eye[2]), -(y[0] * eye[0] + y[1] * eye[1] + y[2] * eye[2]),
+		-(z[0] * eye[0] + z[1] * eye[1] + z[2] * eye[2]), 1.0f,
+	};
+	for (int r = 0; r < 4; r++) {
+		for (int c = 0; c < 4; c++) {
+			out[r * 4 + c] = transposed ? m[c * 4 + r] : m[r * 4 + c];
+		}
+	}
+}
+
+static void TestCamera() {
+	const float eye[3] = { 1200.0f, 300.0f, -5400.0f };
+	float v[16], rx = 0.0f, rz = 0.0f;
+	for (int t = 0; t < 2; t++) {
+		for (int k = 0; k < 8; k++) {
+			const float yaw = -2.8f + 0.8f * k;
+			LookAt(eye, yaw, t == 1, v);
+			const bool ok = Players::CameraRight(eye, v, &rx, &rz);
+			Check(ok && Near(rx, cosf(yaw)) && Near(rz, -sinf(yaw)), t ? "camera: right, the matrix the other way round" : "camera: right");
+			// what is to the camera's right is to the right
+			const float b = Players::Bearing(sinf(yaw), cosf(yaw), rx, rz, cosf(yaw) * 10.0f, -sinf(yaw) * 10.0f);
+			Check(Near(b, 1.5707963f, 0.001f), "bearing: the camera's right is +90 degrees");
+		}
+	}
+	LookAt(eye, 0.0f, false, v);
+	Check(Near(Players::Bearing(0.0f, 1.0f, 1.0f, 0.0f, 1.0f, 1.0f), 0.7853982f), "bearing: ahead and right");
+	Check(Near(Players::Bearing(0.0f, 1.0f, 1.0f, 0.0f, -1.0f, 1.0f), -0.7853982f), "bearing: ahead and left");
+	Check(Near(fabsf(Players::Bearing(0.0f, 1.0f, 1.0f, 0.0f, 0.0f, -1.0f)), 3.1415927f), "bearing: behind");
+	// a camera on its side has no right along the ground; nor does a matrix that is not numbers
+	float side[16] = { 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1 };
+	const float origin[3] = { 0, 0, 0 };
+	Check(!Players::CameraRight(origin, side, &rx, &rz), "camera: on its side");
+	v[5] = std::nanf("");
+	Check(!Players::CameraRight(eye, v, &rx, &rz), "camera: not numbers");
+}
+
 int main() {
 	TestIdentity();
 	TestFile();
 	TestTurns();
 	TestSample();
 	TestRestartsAndKeep();
+	TestAim();
+	TestCamera();
 	std::printf("%d checks, %d failed\n", s_checks, s_failed);
 	return s_failed ? 1 : 0;
 }
