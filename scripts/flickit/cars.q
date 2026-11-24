@@ -231,9 +231,16 @@ SCRIPT Flickit_CarExit
 	// him beside the car through the game's own restart, standing, as he is after a goal's car
 	Flickit_CarOut
 	MakeSkaterGoto HandBrake
-	// the car the game's way for a car of the level, but standing: its model's own nodes (the gap triggers on
-	// its roof look there: without them the game looked in the level's nodes, found none and crashed) and the
-	// rails on its roof, as the game gives a car of the level (its car factory, 0x00506099)
+	Flickit_CarMake parked = <parked> model = <model> pos = <pos>
+	// the way the car faced, and on the list of cars to take
+	Flickit_CarParked
+ENDSCRIPT
+
+// A car standing on its own (a car he left, a car knocked off its way): the game's way for a car of the level,
+// but standing: its model's own nodes (the gap triggers on its roof look there: without them the game looked in
+// the level's nodes, found none and crashed) and the rails on its roof, as the game gives a car of the level
+// (its car factory, 0x00506099). Where it stands and how it is turned are src/drive_game.cpp's.
+SCRIPT Flickit_CarMake
 	CreateCompositeObject {
 		components = [
 			{ component = staticvehicle }
@@ -247,8 +254,312 @@ SCRIPT Flickit_CarExit
 		]
 		params = { name = <parked> pos = <pos> }
 	}
-	// the way the car faced, and on the list of cars to take
-	Flickit_CarParked
+ENDSCRIPT
+
+// A car of the level knocked off its way in a crash (src/drive_game.cpp: car, parked, model, pos): it goes, and
+// a car of the same model stands in its place under a name of its own, to tumble on from there as the hit
+// left it (the DLL moves it), and to be taken like a car he left
+SCRIPT Flickit_CarKnocked
+	IF ObjectExists id = <car>
+		<car> : Die
+	ENDIF
+	IF ObjectExists id = <parked>
+		<parked> : Die
+	ENDIF
+	Flickit_CarMake parked = <parked> model = <model> pos = <pos>
+ENDSCRIPT
+
+// The damage a car shows (src/drive_game.cpp picks them): smoke from its engine, heavy smoke, fire, and the
+// smoke of a car burnt out. Particles of the game's own kinds, with its own textures that are always there
+// (startup.q), seen from far off. fx: the name of the effect, car: what it is on, parts: one of the structures
+// below, offset: where on the car (from its model's origin, along its left, up and the way it faces)
+SCRIPT Flickit_CarFx
+	IF ObjectExists id = <fx>
+		<fx> : Die
+	ENDIF
+	IF NOT ObjectExists id = <car>
+		RETURN
+	ENDIF
+	CreateCompositeObject {
+		Components = skater_particle_composite_structure
+		params = { name = <fx> NeverSuspend <parts> }
+	}
+	<fx> : Obj_LockToObject id = <car> <offset>
+ENDSCRIPT
+
+SCRIPT Flickit_CarFxOff
+	IF ObjectExists id = <fx>
+		<fx> : Die
+	ENDIF
+ENDSCRIPT
+
+Flickit_FxSmoke = {
+	type = NEWFLAT
+	texture = dt_generic_particle01
+	blendmode = blend
+	FixedAlpha = 128
+	AlphaCutoff = 1
+	MaxStreams = 2
+	SuspendDistance = 0
+	lod_dist1 = 3000
+	lod_dist2 = 3500
+	UseMidPoint
+	UseColorMidTime
+	StartPosition = VECTOR(0, 0, 0)
+	BoxDimsStart = VECTOR(30, 6, 30)
+	MidPosition = VECTOR(0, 45, 0)
+	BoxDimsMid = VECTOR(30, 20, 30)
+	EndPosition = VECTOR(0, 110, 0)
+	BoxDimsEnd = VECTOR(60, 30, 60)
+	EmitRate = 20
+	Lifetime = 1.6
+	MidPointPCT = 40
+	StartRadius = 8
+	MidRadius = 18
+	EndRadius = 32
+	StartRadiusSpread = 2
+	MidRadiusSpread = 4
+	EndRadiusSpread = 6
+	StartRGB = [ 110 , 110 , 110 ]
+	StartAlpha = 50
+	ColorMidTime = 40
+	MidRGB = [ 95 , 95 , 95 ]
+	MidAlpha = 40
+	EndRGB = [ 85 , 85 , 85 ]
+	EndAlpha = 0
+}
+Flickit_FxSmokeHeavy = {
+	type = NEWFLAT
+	texture = dt_generic_particle01
+	blendmode = blend
+	FixedAlpha = 128
+	AlphaCutoff = 1
+	MaxStreams = 2
+	SuspendDistance = 0
+	lod_dist1 = 3500
+	lod_dist2 = 4000
+	UseMidPoint
+	UseColorMidTime
+	StartPosition = VECTOR(0, 0, 0)
+	BoxDimsStart = VECTOR(40, 8, 40)
+	MidPosition = VECTOR(0, 70, 0)
+	BoxDimsMid = VECTOR(50, 30, 50)
+	EndPosition = VECTOR(0, 190, 0)
+	BoxDimsEnd = VECTOR(90, 50, 90)
+	EmitRate = 40
+	Lifetime = 2.2
+	MidPointPCT = 40
+	StartRadius = 12
+	MidRadius = 30
+	EndRadius = 55
+	StartRadiusSpread = 3
+	MidRadiusSpread = 6
+	EndRadiusSpread = 10
+	StartRGB = [ 45 , 43 , 40 ]
+	StartAlpha = 100
+	ColorMidTime = 40
+	MidRGB = [ 35 , 33 , 30 ]
+	MidAlpha = 80
+	EndRGB = [ 30 , 30 , 30 ]
+	EndAlpha = 0
+}
+Flickit_FxSmokeBurnt = {
+	type = NEWFLAT
+	texture = dt_generic_particle01
+	blendmode = blend
+	FixedAlpha = 128
+	AlphaCutoff = 1
+	MaxStreams = 2
+	SuspendDistance = 0
+	lod_dist1 = 3000
+	lod_dist2 = 3500
+	UseMidPoint
+	UseColorMidTime
+	StartPosition = VECTOR(0, 0, 0)
+	BoxDimsStart = VECTOR(60, 10, 90)
+	MidPosition = VECTOR(0, 60, 0)
+	BoxDimsMid = VECTOR(50, 30, 50)
+	EndPosition = VECTOR(0, 160, 0)
+	BoxDimsEnd = VECTOR(80, 40, 80)
+	EmitRate = 10
+	Lifetime = 2.5
+	MidPointPCT = 40
+	StartRadius = 10
+	MidRadius = 24
+	EndRadius = 44
+	StartRadiusSpread = 3
+	MidRadiusSpread = 5
+	EndRadiusSpread = 8
+	StartRGB = [ 35 , 33 , 30 ]
+	StartAlpha = 60
+	ColorMidTime = 40
+	MidRGB = [ 30 , 30 , 30 ]
+	MidAlpha = 45
+	EndRGB = [ 30 , 30 , 30 ]
+	EndAlpha = 0
+}
+Flickit_FxFire = {
+	type = NEWFLAT
+	texture = dt_nj_flame02
+	blendmode = add
+	FixedAlpha = 128
+	AlphaCutoff = 0
+	MaxStreams = 2
+	SuspendDistance = 0
+	lod_dist1 = 3500
+	lod_dist2 = 4000
+	UseMidPoint
+	UseColorMidTime
+	StartPosition = VECTOR(0, 0, 0)
+	BoxDimsStart = VECTOR(50, 10, 40)
+	MidPosition = VECTOR(0, 30, 0)
+	BoxDimsMid = VECTOR(40, 15, 35)
+	EndPosition = VECTOR(0, 75, 0)
+	BoxDimsEnd = VECTOR(20, 20, 20)
+	EmitRate = 70
+	Lifetime = 0.5
+	MidPointPCT = 45
+	StartRadius = 14
+	MidRadius = 20
+	EndRadius = 8
+	StartRadiusSpread = 3
+	MidRadiusSpread = 4
+	EndRadiusSpread = 3
+	StartRGB = [ 255 , 150 , 60 ]
+	StartAlpha = 110
+	ColorMidTime = 45
+	MidRGB = [ 230 , 80 , 20 ]
+	MidAlpha = 90
+	EndRGB = [ 80 , 20 , 0 ]
+	EndAlpha = 0
+}
+Flickit_FxBoomFire = {
+	type = NEWFLAT
+	texture = dt_nj_flame02
+	blendmode = add
+	FixedAlpha = 128
+	AlphaCutoff = 0
+	MaxStreams = 2
+	SuspendDistance = 0
+	lod_dist1 = 4000
+	lod_dist2 = 4500
+	UseMidPoint
+	UseColorMidTime
+	StartPosition = VECTOR(0, 0, 0)
+	BoxDimsStart = VECTOR(80, 30, 120)
+	MidPosition = VECTOR(0, 90, 0)
+	BoxDimsMid = VECTOR(160, 80, 160)
+	EndPosition = VECTOR(0, 210, 0)
+	BoxDimsEnd = VECTOR(240, 100, 240)
+	EmitRate = 140
+	Lifetime = 0.6
+	MidPointPCT = 40
+	StartRadius = 40
+	MidRadius = 140
+	EndRadius = 40
+	StartRadiusSpread = 10
+	MidRadiusSpread = 20
+	EndRadiusSpread = 10
+	StartRGB = [ 255 , 160 , 70 ]
+	StartAlpha = 128
+	ColorMidTime = 40
+	MidRGB = [ 200 , 70 , 10 ]
+	MidAlpha = 110
+	EndRGB = [ 40 , 10 , 0 ]
+	EndAlpha = 0
+}
+Flickit_FxBoomSmoke = {
+	type = NEWFLAT
+	texture = dt_generic_particle01
+	blendmode = blend
+	FixedAlpha = 128
+	AlphaCutoff = 1
+	MaxStreams = 2
+	SuspendDistance = 0
+	lod_dist1 = 4000
+	lod_dist2 = 4500
+	UseMidPoint
+	UseColorMidTime
+	StartPosition = VECTOR(0, 40, 0)
+	BoxDimsStart = VECTOR(120, 40, 160)
+	MidPosition = VECTOR(0, 160, 0)
+	BoxDimsMid = VECTOR(200, 80, 200)
+	EndPosition = VECTOR(0, 340, 0)
+	BoxDimsEnd = VECTOR(300, 120, 300)
+	EmitRate = 60
+	Lifetime = 1.8
+	MidPointPCT = 40
+	StartRadius = 40
+	MidRadius = 90
+	EndRadius = 140
+	StartRadiusSpread = 10
+	MidRadiusSpread = 20
+	EndRadiusSpread = 30
+	StartRGB = [ 35 , 30 , 28 ]
+	StartAlpha = 110
+	ColorMidTime = 40
+	MidRGB = [ 30 , 28 , 26 ]
+	MidAlpha = 80
+	EndRGB = [ 30 , 30 , 30 ]
+	EndAlpha = 0
+}
+
+// A car blowing up at pos: the fireball and its smoke, gone by themselves (as the game's own fireball,
+// skutils.q), and the game's fireball sound, as loud as src/drive_game.cpp says for how far he is (vol)
+SCRIPT Flickit_CarBoom
+	CreateCompositeObject {
+		Components = explosion_composite_structure
+		params = { pos = <pos> NoName SystemLifetime = 700 NeverSuspend Flickit_FxBoomFire }
+	}
+	CreateCompositeObject {
+		Components = explosion_composite_structure
+		params = { pos = <pos> NoName SystemLifetime = 1800 NeverSuspend Flickit_FxBoomSmoke }
+	}
+	PlaySound FlamingFireBall01 vol = <vol> pitch = 55
+ENDSCRIPT
+
+// A car burnt out: dark (its model's own lights; the game's light from the ground under it only changes how
+// bright they are)
+SCRIPT Flickit_CarBurnt
+	IF ObjectExists id = <car>
+		<car> : Obj_SetLightAmbientColor r = 24 g = 21 b = 18
+		<car> : Obj_SetLightDiffuseColor index = 0 r = 18 g = 15 b = 12
+		<car> : Obj_SetLightDiffuseColor index = 1 r = 12 g = 10 b = 8
+	ENDIF
+ENDSCRIPT
+
+// The sound of a crash (the bang of metal his bail into a car makes), as loud and as high as the DLL says
+SCRIPT Flickit_CarHitSound
+	PlaySound BonkMetal_11 vol = <vol> pitch = <pitch>
+ENDSCRIPT
+
+// His car caught fire: it blows up in a few seconds
+SCRIPT Flickit_CarOnFire
+	IF ObjectExists id = flickit_car_help
+		DestroyScreenElement id = flickit_car_help
+	ENDIF
+	create_panel_block id = flickit_car_help text = "Your car is on fire!\\nHold \\b0 to get out" rgba = [ 128 60 40 110 ] time = 4500
+	PlaySound FlamingFireBall01 vol = 120 pitch = 110
+ENDSCRIPT
+
+// His car blew up with him in it: out the way he gets out (spawned, as the game's own exit is), then knocked
+// down
+SCRIPT Flickit_CarBlowOut
+	KillSpawnedScript name = Flickit_CarWaitForExit
+	KillSpawnedScript name = Flickit_CarBlownOut
+	SpawnScript Flickit_CarBlownOut
+ENDSCRIPT
+
+SCRIPT Flickit_CarBlownOut
+	Flickit_CarExit
+	MakeSkaterGoto PedKnockDown params = { Jump }
+ENDSCRIPT
+
+// A car blew up near him on foot: knocked down (the game's own for a person who walks into him)
+SCRIPT Flickit_CarBlastHim
+	IF NOT Skater : Driving
+		MakeSkaterGoto PedKnockDown params = { Jump }
+	ENDIF
 ENDSCRIPT
 
 // A car of the level, back at the start of its way (when he is far from there)

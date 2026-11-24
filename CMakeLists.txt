@@ -53,6 +53,7 @@ set(HEADER_FILES
 	"${SRC}/worldmap_game.h"
 	"${SRC}/drive.h"
 	"${SRC}/drive_game.h"
+	"${SRC}/crash.h"
 	"${SRC}/flickit_cars_qb.h"
 	"${SRC}/players.h"
 	"${SRC}/gamefiles.h"

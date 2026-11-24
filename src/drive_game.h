@@ -5,10 +5,17 @@
 // the game gets into its own drivable cars with: "Press Circle to drive", car_scripts.q). The car becomes the
 // game's own drivable car (PlayerVehicle) with the model of the car taken, put where that car was, facing its
 // way, and given its speed. Holding Triangle stops it and gets him out (the game's own); he stands beside the
-// driver's door on his board, and the car stays there, on the ground under it, to be taken again (the last four
-// he left are kept). While a car is in reach the game's own "Press Circle to drive." box shows, unless another
-// player is nearer (players_game.h): then Circle is his.
+// driver's door on his board, and the car stays there, on the ground under it, to be taken again. While a car is
+// in reach the game's own "Press Circle to drive." box shows, unless another player is nearer (players_game.h):
+// then Circle is his.
 // A car of the level's traffic comes back at the start of its way once he is far from there.
+//
+// Crashes (crash.h): his car hits the cars of the traffic and the cars standing on their own. A car of the
+// traffic hit hard enough is knocked off its way: it becomes a car standing on its own (a box of Flickit's own
+// that slides, turns, rolls over and comes to rest against the level), to be taken like a car he left; ten such
+// cars at most, his and the knocked ones together. A hard crash throws the car hit up and over. Each hit is
+// damage: smoke, heavy smoke, fire, and a few seconds after it caught fire the car blows up, which throws it,
+// burns it out and pushes and damages what is near. His own car too: he is thrown out of it if he is still in.
 //
 // The steps are scripts of Flickit's own (scripts/flickit/cars.q, compiled into flickit_cars_qb.h), which
 // the game reads in the first level; they ask the commands below for what only the code can do. It needs
@@ -28,7 +35,8 @@ namespace DriveGame {
 	};
 
 	// [Flickit] Cars (1 on), CarReach (how close to a car's body, in game units: 45 by default), CarParkedTime
-	// (seconds a car he left stands before it goes back: 120 by default, 0 for always)
+	// (seconds a car he left stands before it goes back: 120 by default, 0 for always), CarCrashes (1 on),
+	// CarDamage and CarLaunch (percent, 100 by default: how much a hit hurts, how high a hard crash throws)
 	void Configure(const char* configFile);
 
 	// The script commands the car scripts use. Before the game makes its table of them (InitPatch).

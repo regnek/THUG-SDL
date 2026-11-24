@@ -1,9 +1,11 @@
 #include <windows.h>
 #include <math.h>
+#include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
+#include "crash.h"
 #include "drive.h"
 #include "drive_game.h"
 #include "flickit_cars_qb.h"
@@ -73,6 +75,19 @@ namespace DriveGame {
 	typedef bool(__thiscall* InNetGame_t)(void* net);
 	static const InNetGame_t InNetGame = (InNetGame_t)0x004C6B50;
 	static void** const kNetManager = (void**)0x0076914C;
+	// CFeeler, the game's line into the level (the skater's physics has one at +0xA8, which its own line test
+	// uses): its two ends (four floats each), what it ignores (0x10, 0 as the skater's test has it), and whether
+	// the line hits the level, the moving objects too or not (MoveToNode looks for the ground without them).
+	// After a hit it has the place it hit and the face's normal there (0x00539921, 0x0053993F).
+	typedef void(__thiscall* FeelerLine_t)(void* feeler, const float* start, const float* end);
+	static const FeelerLine_t FeelerLine = (FeelerLine_t)0x005396C0;
+	typedef void(__thiscall* FeelerIgnore_t)(void* feeler, uint32_t ignore, uint32_t ignore2);
+	static const FeelerIgnore_t FeelerIgnore = (FeelerIgnore_t)0x005395F0;
+	typedef bool(__thiscall* FeelerHit_t)(void* feeler, int movables, int distant);
+	static const FeelerHit_t FeelerHit = (FeelerHit_t)0x005397E0;
+	// CVehicleComponent: its speeds from its momentum and its spin's (as Vehicle_Kick does after a kick)
+	typedef void(__thiscall* VehicleSpeeds_t)(void* vehicle);
+	static const VehicleSpeeds_t VehicleSpeeds = (VehicleSpeeds_t)0x00457AD0;
 
 	// An object: where it is, its matrix (left, up, the way it faces, a fourth row), the matrix it is drawn with
 	enum {
@@ -93,6 +108,24 @@ namespace DriveGame {
 		WHEEL_PLACE = 0xA0,
 		INPUT_TRIANGLE = 0x1A0,      // the game's picture of the pad starts at +0x20; Triangle at +0x180 of it
 	};
+	// CVehicleComponent's body (Vehicle_Kick 0x0045EB78, its speeds 0x00457AD0, its setup 0x0045B4CC): its
+	// momentum and its spin's in the world (four floats each), awake and how long it has been still (Vehicle_Wake
+	// sets 1 and 0), its speed and spin from them, its mass and moment of inertia as 386.4 over the setup's
+	enum {
+		VEHICLE_MOMENTUM = 0x28,
+		VEHICLE_SPIN_MOMENTUM = 0x48,
+		VEHICLE_AWAKE = 0x58,
+		VEHICLE_STILL = 0x5C,
+		VEHICLE_VELOCITY = 0xA4,
+		VEHICLE_SPIN = 0xB4,
+		VEHICLE_INV_MASS = 0x158,
+		VEHICLE_INV_INERTIA = 0x15C,  // about its left, up, the way it faces
+		CORE_FEELER = 0xA8,           // the skater's physics' feeler
+		FEELER_POINT = 0x78,
+		FEELER_NORMAL = 0x88,
+	};
+	static const uint32_t kSkaterCorePhysics = 0x5BD63B29;    // SkaterCorePhysics
+
 	enum {
 		SYMBOL_SCRIPT = 7,
 		SYMBOL_STRUCTURE = 10,
@@ -131,6 +164,24 @@ namespace DriveGame {
 		{ 0x0040FD00, 12, { 0x6A, 0xFF, 0x68, 0x5B, 0x18, 0x62, 0x00, 0x64, 0xA1, 0x00, 0x00, 0x00 }, "Script::RunScript" },
 		{ 0x004C6B50, 12, { 0x56, 0x8B, 0xF1, 0xF6, 0x86, 0x38, 0x01, 0x00, 0x00, 0x0C, 0x74, 0x24 }, "GameNet::Manager::InNetGame" },
 	};
+	// What the crashes use besides (crashes off, the cars on, if these are not as expected)
+	static const Expect kCrashExpect[] = {
+		{ 0x005396C0, 14, { 0x8B, 0x44, 0x24, 0x04, 0xD9, 0x00, 0xD9, 0x19, 0xD9, 0x40, 0x04, 0xD9, 0x59, 0x04 }, "CFeeler: its line" },
+		{ 0x005395F0, 14, { 0x66, 0x8B, 0x44, 0x24, 0x04, 0x66, 0x8B, 0x54, 0x24, 0x08, 0x66, 0x89, 0x41, 0x4C }, "CFeeler: what it ignores" },
+		{ 0x005397E0, 14, { 0x83, 0xEC, 0x28, 0x53, 0x55, 0x56, 0x8B, 0xF1, 0x57, 0x8D, 0x4C, 0x24, 0x18, 0xE8 }, "CFeeler: does it hit" },
+		{ 0x005398AD, 9, { 0x80, 0x7C, 0x24, 0x3C, 0x00, 0x88, 0x44, 0x24, 0x13 }, "CFeeler: the moving objects or not" },
+		{ 0x00539921, 6, { 0xD9, 0x46, 0x34, 0xD9, 0x5E, 0x78 }, "CFeeler: the place it hit" },
+		{ 0x0053993F, 9, { 0xD9, 0x45, 0x00, 0xD9, 0x9E, 0x88, 0x00, 0x00, 0x00 }, "CFeeler: the face's normal" },
+		{ 0x00560302, 10, { 0x02, 0x00, 0x00, 0x8D, 0xBE, 0xA8, 0x00, 0x00, 0x00, 0x51 }, "the skater's line test: its feeler" },
+		{ 0x00457AD0, 9, { 0x83, 0xEC, 0x14, 0xD9, 0x81, 0x58, 0x01, 0x00, 0x00 }, "CVehicleComponent: its speeds" },
+		{ 0x00457B05, 10, { 0xD9, 0x44, 0x24, 0x04, 0xD9, 0x99, 0xA4, 0x00, 0x00, 0x00 }, "CVehicleComponent: its speed" },
+		{ 0x0045EB5C, 14, { 0xC7, 0x46, 0x58, 0x01, 0x00, 0x00, 0x00, 0xC7, 0x46, 0x5C, 0x00, 0x00, 0x00, 0x00 }, "Vehicle_Wake" },
+		{ 0x0045EC14, 6, { 0xD9, 0x86, 0x58, 0x01, 0x00, 0x00 }, "Vehicle_Kick: its mass" },
+		{ 0x0045EC28, 3, { 0x8D, 0x4E, 0x28 }, "Vehicle_Kick: its momentum" },
+		{ 0x0045EC4D, 3, { 0x8D, 0x4E, 0x48 }, "Vehicle_Kick: its spin's" },
+		{ 0x0045B4F1, 8, { 0xD9, 0x06, 0xDC, 0x3D, 0xC8, 0x04, 0x63, 0x00 }, "CVehicleComponent: mass as 386.4 over the setup's" },
+		{ 0x0045B530, 6, { 0xD9, 0x87, 0x60, 0x01, 0x00, 0x00 }, "CVehicleComponent: its moment of inertia about up" },
+	};
 
 	/******************************************************************/
 	/*                                                                */
@@ -145,6 +196,11 @@ namespace DriveGame {
 		uint32_t stealScript, backScript, goesBackScript, defaultTune, promptScript, promptOffScript, createdAtStart;
 		uint32_t cameraHeight, cameraDistance;
 		uint32_t parkedCar[Drive::Parking::kSlots];
+		// the crashes'
+		uint32_t knockedScript, fxScript, fxOffScript, boomScript, burntScript, hitSoundScript, onFireScript;
+		uint32_t blowOutScript, blastHimScript, fx, parts, offset, vol, pitch;
+		uint32_t smokeParts[4], fireParts;
+		uint32_t fxSmoke[Drive::Parking::kSlots + 1], fxFire[Drive::Parking::kSlots + 1];
 	};
 	static Names s_n;
 
@@ -238,6 +294,44 @@ namespace DriveGame {
 	static uint32_t s_lastGoesBack = 0;
 	static float s_carAway = 1.0e9f;         // the nearest car in reach on this frame (CarAway)
 
+	// Crashes ([Flickit] CarCrashes, CarDamage and CarLaunch in percent: how much a hit hurts, how high a hard
+	// hit throws). His car is the game's own body, pushed through its momentum; a car of the traffic follows
+	// its way, and a hit that would change its speed enough knocks it off it: it becomes a loose car (one of
+	// the parking slots, Flickit_ParkedCar...), a box of Flickit's own (crash.h) that tumbles against the level
+	// until it rests, and can be taken like a car he left. A car he left is a loose car too.
+	static bool s_crashes = true;
+	static int s_crashReady = 0;             // 1: the game is as the crashes expect, -1: not
+	static float s_damageScale = 1.0f;
+	static float s_launchScale = 1.0f;
+	struct Loose {
+		bool made;                       // its body is from its object
+		Crash::Tumbler body;
+		Crash::Health health;
+		uint32_t groundSeen;             // the last time there was ground under it
+	};
+	static Loose s_loose[Drive::Parking::kSlots];
+	static Crash::Health s_drivenHealth;     // his car's
+	static float s_drivenLastVel[3];
+	static float s_drivenPushed[3];          // how much Flickit changed its speed since
+	static bool s_drivenHaveVel = false;
+	static int s_lastParked = -1;            // the slot of the car he got out of last
+	static bool s_boomPending = false;       // his car blew up with him in it, and he is on his way out
+	static int s_boomSlot = -1;              // the slot of the car he left in the blast
+	static uint32_t s_boomSince = 0;
+	static float s_boomVel[3];               // how his car was going
+	// What each car shows of its damage (slot k, or kFxDriven for his): its smoke (0 none, 1, heavy 2, burnt
+	// 3) and whether it burns, on which object
+	enum { kFxDriven = Drive::Parking::kSlots, kFxCars = Drive::Parking::kSlots + 1 };
+	struct Fx {
+		uint32_t car;
+		int smoke;
+		bool fire;
+	};
+	static Fx s_fx[kFxCars];
+	static uint32_t s_lastSound = 0;
+	static uint8_t* s_feeler = 0;            // the skater's physics' feeler, on this frame
+	static void ResetCrashes();
+
 	/******************************************************************/
 	/*                                                                */
 	/*  Checks                                                        */
@@ -276,6 +370,32 @@ namespace DriveGame {
 			char name[32];
 			sprintf_s(name, sizeof(name), "Flickit_ParkedCar%d", i);
 			s_n.parkedCar[i] = Flickit::NameChecksum(name);
+		}
+		s_n.knockedScript = Flickit::NameChecksum("Flickit_CarKnocked");
+		s_n.fxScript = Flickit::NameChecksum("Flickit_CarFx");
+		s_n.fxOffScript = Flickit::NameChecksum("Flickit_CarFxOff");
+		s_n.boomScript = Flickit::NameChecksum("Flickit_CarBoom");
+		s_n.burntScript = Flickit::NameChecksum("Flickit_CarBurnt");
+		s_n.hitSoundScript = Flickit::NameChecksum("Flickit_CarHitSound");
+		s_n.onFireScript = Flickit::NameChecksum("Flickit_CarOnFire");
+		s_n.blowOutScript = Flickit::NameChecksum("Flickit_CarBlowOut");
+		s_n.blastHimScript = Flickit::NameChecksum("Flickit_CarBlastHim");
+		s_n.fx = Flickit::NameChecksum("fx");
+		s_n.parts = Flickit::NameChecksum("parts");
+		s_n.offset = Flickit::NameChecksum("offset");
+		s_n.vol = Flickit::NameChecksum("vol");
+		s_n.pitch = Flickit::NameChecksum("pitch");
+		s_n.smokeParts[0] = 0;
+		s_n.smokeParts[1] = Flickit::NameChecksum("Flickit_FxSmoke");
+		s_n.smokeParts[2] = Flickit::NameChecksum("Flickit_FxSmokeHeavy");
+		s_n.smokeParts[3] = Flickit::NameChecksum("Flickit_FxSmokeBurnt");
+		s_n.fireParts = Flickit::NameChecksum("Flickit_FxFire");
+		for (int i = 0; i <= Drive::Parking::kSlots; i++) {
+			char name[32];
+			sprintf_s(name, sizeof(name), "Flickit_CarSmoke%d", i);
+			s_n.fxSmoke[i] = Flickit::NameChecksum(name);
+			sprintf_s(name, sizeof(name), "Flickit_CarFire%d", i);
+			s_n.fxFire[i] = Flickit::NameChecksum(name);
 		}
 	}
 
@@ -444,6 +564,7 @@ namespace DriveGame {
 		memset(&s_taken, 0, sizeof(s_taken));
 		memset(&s_driven, 0, sizeof(s_driven));
 		memset(&s_leaving, 0, sizeof(s_leaving));
+		ResetCrashes();
 		void* nodes = GetGlobalArray(s_n.nodeArray, 0);
 		const uint32_t count = nodes ? *(const uint32_t*)((const uint8_t*)nodes + 8) : 0;
 		int skipped = 0, atStart = 0;
@@ -530,6 +651,947 @@ namespace DriveGame {
 		}
 	}
 
+	/******************************************************************/
+	/*                                                                */
+	/*  Crashes                                                       */
+	/*                                                                */
+	/******************************************************************/
+
+	static const float kInvMassUsual = 386.4f / 2943.0f;   // PoliceCarSetup's: the setup most cars get
+	static const float kKnockFrom = 60.0f;      // a car of the traffic whose speed a hit would change this much goes off its way
+	static const float kLaunchFrom = 700.0f;    // cars that meet this fast: the one hit is thrown up and over
+	static const float kSoundFrom = 120.0f;
+	static const float kDamageFloor = 100.0f;   // a hit's change of speed past this is damage
+	static const float kLandingFloor = 300.0f;  // a loose car's landing, or the wall it meets
+	static const float kWallFloor = 260.0f;     // his car's own change of speed in a frame (a wall, a post) past this
+	static const float kBlastRadius = 600.0f;
+	static const float kBlastHim = 350.0f;      // he is knocked down on foot this near
+	static const int kKnocksAFrame = 2;
+	static const int kKnocksABlast = 3;
+	static const uint32_t kFallMs = 5000;       // a loose car with no ground under it this long fell out of the level
+
+	static bool Finite(const float* v, int n) {
+		for (int i = 0; i < n; i++) {
+			if (!(v[i] > -1.0e7f && v[i] < 1.0e7f)) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	// A line for flickit_watchdog.txt (and the log): what the crashes did, a few hundred a session at most
+	static int s_notes = 0;
+	static void Note(const char* format, ...) {
+		char text[400];
+		va_list args;
+		va_start(args, format);
+		vsnprintf(text, sizeof(text), format, args);
+		va_end(args);
+		text[sizeof(text) - 1] = 0;
+		if (s_notes < 400) {
+			s_notes++;
+			FlickitGame::WatchNote(text);
+		}
+		else {
+			Log::TypedLog(CHN_SDL, "%s", text);
+		}
+	}
+
+	static bool CrashReady() {
+		if (s_crashReady == 0) {
+			s_crashReady = 1;
+			for (size_t i = 0; i < sizeof(kCrashExpect) / sizeof(kCrashExpect[0]); i++) {
+				if (memcmp((const void*)kCrashExpect[i].address, kCrashExpect[i].bytes, (size_t)kCrashExpect[i].size) != 0) {
+					Note("Crashes: the game's code at %08X (%s) is not what was expected; the cars go through each other as before\n",
+						kCrashExpect[i].address, kCrashExpect[i].what);
+					s_crashReady = -1;
+				}
+			}
+			if (s_crashReady > 0) {
+				Note("Crashes: on; damage %.0f%%, launch %.0f%%\n", s_damageScale * 100.0f, s_launchScale * 100.0f);
+			}
+		}
+		return s_crashReady > 0;
+	}
+
+	// Does the line hit the level itself (not its moving objects: a loose car's own collision would be in the
+	// way), and where, and the face's normal there. Through the skater's physics' feeler, as its own line test.
+	static bool WorldHit(const float from[3], const float to[3], float point[3], float normal[3]) {
+		if (!s_feeler || !Finite(from, 3) || !Finite(to, 3)) {
+			return false;
+		}
+		const float a[4] = { from[0], from[1], from[2], 1.0f };
+		const float b[4] = { to[0], to[1], to[2], 1.0f };
+		FeelerLine(s_feeler, a, b);
+		FeelerIgnore(s_feeler, 0x10, 0);
+		if (!FeelerHit(s_feeler, 0, 0)) {
+			return false;
+		}
+		const float* p = (const float*)(s_feeler + FEELER_POINT);
+		const float* n = (const float*)(s_feeler + FEELER_NORMAL);
+		if (!Finite(p, 3) || !Finite(n, 3)) {
+			return false;
+		}
+		memcpy(point, p, 3 * sizeof(float));
+		memcpy(normal, n, 3 * sizeof(float));
+		return Crash::Normalize3(normal);
+	}
+
+	// A car's mass for its size: the usual car's (most of the cars have PoliceCarSetup), more for more of it
+	// along the ground
+	static float InvMassFor(const Drive::Box& b) {
+		const Drive::Box u = Drive::UsualBox();
+		const float area = (b.front - b.rear) * b.halfWidth;
+		float k = area > 1.0f ? ((u.front - u.rear) * u.halfWidth) / area : 1.0f;
+		k = k < 0.4f ? 0.4f : (k > 2.5f ? 2.5f : k);
+		return kInvMassUsual * k;
+	}
+
+	// About up, as a solid box of it
+	static float InvInertiaFor(const Drive::Box& b, float invMass) {
+		const float w = 2.0f * b.halfWidth, l = b.front - b.rear;
+		return invMass * 12.0f / (w * w + l * l);
+	}
+
+	static void RowsOf(const float* m, float rows[3][3]) {
+		for (int k = 0; k < 3; k++) {
+			for (int i = 0; i < 3; i++) {
+				rows[k][i] = m[k * 4 + i];
+			}
+		}
+	}
+
+	static void ResetLoose(int slot) {
+		if (slot < 0 || slot >= Drive::Parking::kSlots) {
+			return;
+		}
+		memset(&s_loose[slot], 0, sizeof(s_loose[slot]));
+		s_loose[slot].health = Crash::Whole();
+	}
+
+	static void ResetCrashes() {
+		for (int k = 0; k < Drive::Parking::kSlots; k++) {
+			ResetLoose(k);
+		}
+		memset(s_fx, 0, sizeof(s_fx));       // (a new level: the effects went with the old one)
+		s_drivenHealth = Crash::Whole();
+		s_drivenHaveVel = false;
+		s_lastParked = -1;
+		s_boomPending = false;
+		s_boomSlot = -1;
+	}
+
+	// The body of a loose car from its object, where it stands now, at rest
+	static void MakeLoose(int slot, const uint8_t* obj) {
+		Loose& l = s_loose[slot];
+		const Drive::Box* box = s_parking.BoxOf(slot);
+		const Drive::Box b = box ? *box : Drive::UsualBox();
+		float rows[3][3];
+		RowsOf((const float*)(obj + OBJECT_MATRIX), rows);
+		Crash::MakeTumbler((const float*)(obj + OBJECT_POSITION), rows, b.halfWidth, b.rear, b.front, b.height, InvMassFor(b), &l.body);
+		l.made = true;
+		l.groundSeen = GetTickCount();
+	}
+
+	// A loose car's object where its body is
+	static void PlaceLoose(int slot, uint8_t* obj) {
+		const Loose& l = s_loose[slot];
+		const Drive::Box* box = s_parking.BoxOf(slot);
+		const Drive::Box b = box ? *box : Drive::UsualBox();
+		float origin[3];
+		Crash::OriginOf(l.body, b.rear, b.front, origin);
+		if (!Finite(origin, 3) || !Finite(&l.body.rows[0][0], 9)) {
+			return;
+		}
+		float* pos = (float*)(obj + OBJECT_POSITION);
+		float* m = (float*)(obj + OBJECT_MATRIX);
+		float* d = (float*)(obj + OBJECT_DISPLAY_MATRIX);
+		memcpy(pos, origin, sizeof(origin));
+		for (int k = 0; k < 3; k++) {
+			for (int i = 0; i < 3; i++) {
+				m[k * 4 + i] = l.body.rows[k][i];
+				d[k * 4 + i] = l.body.rows[k][i];
+			}
+			m[k * 4 + 3] = 0.0f;
+			d[k * 4 + 3] = 0.0f;
+		}
+	}
+
+	// Can he take this car he left (or that was knocked)? Not on fire or burnt out, on its wheels, nearly still.
+	static bool Takeable(int slot) {
+		const Loose& l = s_loose[slot];
+		if (l.health.burning || l.health.burnt) {
+			return false;
+		}
+		return !l.made || (Crash::Upright(l.body) && Crash::Length3(l.body.vel) < 100.0f);
+	}
+
+	/* The effects */
+
+	// An effect on a car (Flickit_CarFx), or none (parts 0): at its engine, a little behind its front
+	static void RunFx(uint32_t fx, uint32_t car, uint32_t parts, const Drive::Box& box) {
+		Script::LazyStruct* p = Script::LazyStruct::s_create();
+		if (!p) {
+			return;
+		}
+		p->AddChecksum(s_n.fx, fx);
+		if (parts) {
+			p->AddChecksum(s_n.car, car);
+			p->AddChecksum(s_n.parts, parts);
+			StructAddVector(p, s_n.offset, 0.0f, box.height * 0.55f, box.front - (box.front - box.rear) * 0.22f);
+		}
+		RunGameScript(parts ? s_n.fxScript : s_n.fxOffScript, p, 0, 0);
+		Script::LazyStruct::s_free(p);
+	}
+
+	static void KillFx(int i) {
+		if (i < 0 || i >= kFxCars) {
+			return;
+		}
+		if (s_fx[i].car || s_fx[i].smoke || s_fx[i].fire) {
+			const Drive::Box usual = Drive::UsualBox();
+			RunFx(s_n.fxSmoke[i], 0, 0, usual);
+			RunFx(s_n.fxFire[i], 0, 0, usual);
+		}
+		memset(&s_fx[i], 0, sizeof(s_fx[i]));
+	}
+
+	// What a car shows for how damaged it is: smoke, heavy smoke, fire (with heavy smoke), the smoke of a car
+	// burnt out; made again when it is another object
+	static void ShowFx(int i, uint32_t car, const Drive::Box& box, Crash::Stage stage) {
+		const int smoke = stage == Crash::kSmoking ? 1 : (stage == Crash::kSmokingHard || stage == Crash::kBurning) ? 2 : stage == Crash::kBurnt ? 3 : 0;
+		const bool fire = stage == Crash::kBurning;
+		Fx& f = s_fx[i];
+		if (f.car == car && f.smoke == smoke && f.fire == fire) {
+			return;
+		}
+		const bool other = f.car != car;
+		if (other || f.smoke != smoke) {
+			RunFx(s_n.fxSmoke[i], car, s_n.smokeParts[smoke], box);
+		}
+		if (other || f.fire != fire) {
+			RunFx(s_n.fxFire[i], car, fire ? s_n.fireParts : 0, box);
+		}
+		f.car = car;
+		f.smoke = smoke;
+		f.fire = fire;
+	}
+
+	static void Effects(bool driving) {
+		for (int k = 0; k < Drive::Parking::kSlots; k++) {
+			const Drive::Box* box = s_parking.BoxOf(k);
+			if (!box || !ResolveToObject(s_n.parkedCar[k])) {
+				if (s_fx[k].car) {
+					KillFx(k);
+				}
+				continue;
+			}
+			ShowFx(k, s_n.parkedCar[k], *box, Crash::StageOf(s_loose[k].health));
+		}
+		if (driving && s_driven.set) {
+			ShowFx(kFxDriven, s_n.playerVehicle, s_driven.box, Crash::StageOf(s_drivenHealth));
+		}
+		else if (s_fx[kFxDriven].car) {
+			KillFx(kFxDriven);
+		}
+	}
+
+	/* Sounds */
+
+	// How near a place is to him for its sound: 1 there, nothing from 3000 away
+	static float Near(const float at[3], const float* him) {
+		const float dx = at[0] - him[0], dy = at[1] - him[1], dz = at[2] - him[2];
+		const float away = sqrtf(dx * dx + dy * dy + dz * dz);
+		return away < 3000.0f ? 1.0f - away / 3000.0f : 0.0f;
+	}
+
+	static void HitSound(float speed, const float at[3], const float* him, uint32_t now) {
+		const float closeBy = Near(at, him);
+		if (now - s_lastSound < 120 || closeBy < 0.05f) {
+			return;
+		}
+		float vol = speed * 0.12f;
+		vol = (vol < 40.0f ? 40.0f : (vol > 170.0f ? 170.0f : vol)) * closeBy;
+		Script::LazyStruct* p = Script::LazyStruct::s_create();
+		if (!p) {
+			return;
+		}
+		p->AddFloat(s_n.vol, vol);
+		p->AddFloat(s_n.pitch, 85.0f + (float)((now * 7919u) % 30u));
+		RunGameScript(s_n.hitSoundScript, p, 0, 0);
+		Script::LazyStruct::s_free(p);
+		s_lastSound = now;
+	}
+
+	/* His car: the game's own body */
+
+	// An impulse on his car, at the touch along the ground at the height of its place (from above or below: at
+	// its place), through its momentum and its spin's; then its speeds from them, awake
+	static void PushHis(uint8_t* vehicle, const float* pos, const Crash::Contact& c, const float impulse[3], float sign) {
+		float* momentum = (float*)(vehicle + VEHICLE_MOMENTUM);
+		float* spinMomentum = (float*)(vehicle + VEHICLE_SPIN_MOMENTUM);
+		const float invMass = *(const float*)(vehicle + VEHICLE_INV_MASS);
+		const bool vertical = fabsf(c.normal[1]) > 0.5f;
+		const float r[3] = { vertical ? 0.0f : c.point[0] - pos[0], 0.0f, vertical ? 0.0f : c.point[1] - pos[2] };
+		const float j[3] = { impulse[0] * sign, impulse[1] * sign, impulse[2] * sign };
+		float torque[3];
+		Crash::Cross3(r, j, torque);
+		for (int i = 0; i < 3; i++) {
+			momentum[i] += j[i];
+			spinMomentum[i] += torque[i];
+			s_drivenPushed[i] += j[i] * invMass;
+		}
+		VehicleSpeeds(vehicle);
+		*(uint32_t*)(vehicle + VEHICLE_AWAKE) = 1;
+		*(uint32_t*)(vehicle + VEHICLE_STILL) = 0;
+	}
+
+	// His car thrown: up units a second, roll radians a second about axis (in the world), at its place
+	static void ThrowHis(uint8_t* vehicle, float up, const float dv[3], float roll, const float axis[3]) {
+		float* momentum = (float*)(vehicle + VEHICLE_MOMENTUM);
+		float* spinMomentum = (float*)(vehicle + VEHICLE_SPIN_MOMENTUM);
+		const float invMass = *(const float*)(vehicle + VEHICLE_INV_MASS);
+		const float invRoll = *(const float*)(vehicle + VEHICLE_INV_INERTIA);
+		if (!(invMass > 0.001f && invMass < 10.0f)) {
+			return;
+		}
+		const bool rolls = invRoll > 1.0e-8f && invRoll < 1.0f;
+		for (int i = 0; i < 3; i++) {
+			const float v = (i == 1 ? up : 0.0f) + (dv ? dv[i] : 0.0f);
+			momentum[i] += v / invMass;
+			if (rolls) {
+				spinMomentum[i] += axis[i] * roll / invRoll;
+			}
+			s_drivenPushed[i] += v;
+		}
+		VehicleSpeeds(vehicle);
+		*(uint32_t*)(vehicle + VEHICLE_AWAKE) = 1;
+		*(uint32_t*)(vehicle + VEHICLE_STILL) = 0;
+	}
+
+	static void HurtHis(float damage, uint32_t now, const char* how) {
+		if (damage <= 0.0f) {
+			return;
+		}
+		const Crash::Stage was = Crash::StageOf(s_drivenHealth);
+		if (Crash::Hurt(&s_drivenHealth, damage, now) == Crash::kCaughtFire) {
+			RunGameScript(s_n.onFireScript, 0, 0, 0);
+			Note("Crashes: his car caught fire (%s); it blows up in %u s\n", how, Crash::kBurnMs / 1000);
+		}
+		else if (Crash::StageOf(s_drivenHealth) != was) {
+			Note("Crashes: his car is %s (%s, %.0f left)\n", Crash::StageOf(s_drivenHealth) == Crash::kSmoking ? "smoking" : "smoking hard",
+				how, s_drivenHealth.hp);
+		}
+	}
+
+	static void HurtLoose(int slot, float damage, uint32_t now, const char* how) {
+		if (damage <= 0.0f) {
+			return;
+		}
+		if (Crash::Hurt(&s_loose[slot].health, damage, now) == Crash::kCaughtFire) {
+			Note("Crashes: the car in slot %d caught fire (%s)\n", slot, how);
+		}
+	}
+
+	// His car's own crashes into the level: its speed along the ground changed more in a frame than the game's
+	// driving and Flickit's pushes do
+	static void HisWalls(const uint8_t* vehicle, const float* at, const float* him, uint32_t now) {
+		const float* v = (const float*)(vehicle + VEHICLE_VELOCITY);
+		if (!Finite(v, 3)) {
+			return;
+		}
+		if (s_drivenHaveVel) {
+			const float dx = v[0] - (s_drivenLastVel[0] + s_drivenPushed[0]);
+			const float dz = v[2] - (s_drivenLastVel[2] + s_drivenPushed[2]);
+			const float change = sqrtf(dx * dx + dz * dz);
+			if (change > kWallFloor) {
+				HurtHis(Crash::Damage(change, kWallFloor, s_damageScale), now, "it hit the level");
+				HitSound(change * 1.3f, at, him, now);
+			}
+		}
+		memcpy(s_drivenLastVel, v, sizeof(s_drivenLastVel));
+		memset(s_drivenPushed, 0, sizeof(s_drivenPushed));
+		s_drivenHaveVel = true;
+	}
+
+	/* The cars that touch */
+
+	enum { kHis, kTraffic, kLoose };
+	struct Party {
+		int kind;
+		int index;                   // the car (s_cars) of the traffic, the slot of a loose car
+		Crash::Body body;
+		float invMass, invInertia;   // as if it could move (a car of the traffic cannot, until it is knocked)
+		float radius;
+		bool awake;                  // his car, or a loose car that moves
+		bool knocked;
+	};
+	static Party s_parties[kMaxCars + Drive::Parking::kSlots + 1];
+	static int s_partyCount = 0;
+
+	struct Knock {
+		int car;
+		float vel[3];
+		float spin;
+		Crash::Launch launch;
+		float damage;
+	};
+
+	static void AddParty(const Party& p) {
+		if (s_partyCount < (int)(sizeof(s_parties) / sizeof(s_parties[0]))) {
+			s_parties[s_partyCount] = p;
+			s_parties[s_partyCount].radius = sqrtf(p.body.halfX * p.body.halfX + p.body.halfZ * p.body.halfZ);
+			s_partyCount++;
+		}
+	}
+
+	static void Parties(const uint8_t* his, const uint8_t* vehicle) {
+		s_partyCount = 0;
+		Party p;
+		if (his && vehicle) {
+			memset(&p, 0, sizeof(p));
+			const float* pos = (const float*)(his + OBJECT_POSITION);
+			const float* m = (const float*)(his + OBJECT_MATRIX);
+			const float* v = (const float*)(vehicle + VEHICLE_VELOCITY);
+			const float* w = (const float*)(vehicle + VEHICLE_SPIN);
+			const float invMass = *(const float*)(vehicle + VEHICLE_INV_MASS);
+			const float invInertia = *(const float*)(vehicle + VEHICLE_INV_INERTIA + 4);
+			const Drive::Box& b = s_driven.box;
+			if (Finite(pos, 3) && Finite(m, 12) && Finite(v, 3) && Finite(w, 3) && invMass > 0.001f && invMass < 10.0f && invInertia > 1.0e-8f && invInertia < 1.0f
+				&& Crash::MakeBox(pos, m, m + 8, b.halfWidth, b.rear, b.front, b.height, &p.body)) {
+				// it turns about its place (the game's body), and its speeds are its place's
+				p.body.pivot[0] = pos[0];
+				p.body.pivot[1] = pos[2];
+				memcpy(p.body.vel, v, sizeof(p.body.vel));
+				p.body.spin = w[1];
+				p.body.invMass = invMass;
+				p.body.invInertia = invInertia;
+				p.kind = kHis;
+				p.index = -1;
+				p.invMass = invMass;
+				p.invInertia = invInertia;
+				p.awake = true;
+				AddParty(p);
+			}
+		}
+		for (int i = 0; i < s_levelCars; i++) {
+			const Car& c = s_cars[i];
+			const uint8_t* obj = CarObject(c);
+			if (!obj) {
+				continue;
+			}
+			memset(&p, 0, sizeof(p));
+			const float* pos = (const float*)(obj + OBJECT_POSITION);
+			const float* m = (const float*)(obj + OBJECT_MATRIX);
+			if (!Finite(pos, 3) || !Finite(m, 12) || !Crash::MakeBox(pos, m, m + 8, c.box.halfWidth, c.box.rear, c.box.front, c.box.height, &p.body)) {
+				continue;
+			}
+			if (c.track.frames >= 2) {
+				memcpy(p.body.vel, c.track.vel, sizeof(p.body.vel));
+			}
+			p.kind = kTraffic;
+			p.index = i;
+			p.invMass = InvMassFor(c.box);
+			p.invInertia = InvInertiaFor(c.box, p.invMass);
+			AddParty(p);
+		}
+		for (int k = 0; k < Drive::Parking::kSlots; k++) {
+			const uint8_t* obj = s_parking.Used(k) ? (const uint8_t*)ResolveToObject(s_n.parkedCar[k]) : 0;
+			if (!obj || !GetComponent((void*)obj, s_n.staticVehicle)) {
+				continue;
+			}
+			if (!s_loose[k].made) {
+				MakeLoose(k, obj);
+			}
+			memset(&p, 0, sizeof(p));
+			if (!Crash::FootprintOf(s_loose[k].body, &p.body)) {
+				continue;
+			}
+			p.kind = kLoose;
+			p.index = k;
+			p.invMass = p.body.invMass;
+			p.invInertia = p.body.invInertia;
+			p.awake = !s_loose[k].body.asleep;
+			AddParty(p);
+		}
+	}
+
+	// A car of the traffic is knocked off its way by what hit it: his car, or a loose car thrown at it
+	static bool Knocks(const Party& by) {
+		return by.kind == kHis || (by.kind == kLoose && by.awake && Crash::Length3(by.body.vel) > 150.0f);
+	}
+
+	static void QueueKnock(Knock* knocks, int* count, const Party& t, const float dv[3], float spin, const Crash::Launch& launch, float damage) {
+		for (int i = 0; i < *count; i++) {
+			if (knocks[i].car == t.index) {
+				return;
+			}
+		}
+		if (*count >= kKnocksAFrame) {
+			return;
+		}
+		Knock& k = knocks[(*count)++];
+		k.car = t.index;
+		for (int i = 0; i < 3; i++) {
+			k.vel[i] = t.body.vel[i] + dv[i];
+		}
+		k.spin = t.body.spin + spin;
+		k.launch = launch;
+		k.damage = damage;
+	}
+
+	// The touches of this frame: each car that moves (his, a loose one) against every other near it, and the
+	// cars of the traffic against loose cars standing in their way. Knocks: the cars of the traffic to knock off.
+	static int Touch(uint8_t* his, uint8_t* vehicle, const DriveGame::Skater& s, uint32_t now, Knock* knocks) {
+		const Crash::Settings set = Crash::DefaultSettings();
+		int count = 0;
+		for (int i = 0; i < s_partyCount; i++) {
+			for (int j = i + 1; j < s_partyCount; j++) {
+				Party& A = s_parties[i];
+				Party& B = s_parties[j];
+				if (A.kind == kTraffic && B.kind == kTraffic) {
+					continue;
+				}
+				if (!A.awake && !B.awake) {
+					// two loose cars at rest, or a car of the traffic and a loose one: only if the traffic moves
+					const Party* t = A.kind == kTraffic ? &A : B.kind == kTraffic ? &B : 0;
+					if (!t || Crash::Dot3(t->body.vel, t->body.vel) < 25.0f) {
+						continue;
+					}
+				}
+				const float dx = A.body.centre[0] - B.body.centre[0], dz = A.body.centre[1] - B.body.centre[1];
+				const float reach = A.radius + B.radius;
+				if (dx * dx + dz * dz > reach * reach) {
+					continue;
+				}
+				Crash::Contact c;
+				if (!Crash::Overlap(A.body, B.body, &c)) {
+					continue;
+				}
+				Crash::Body a = A.body, b = B.body;
+				a.invMass = A.invMass;
+				a.invInertia = A.invInertia;
+				b.invMass = B.invMass;
+				b.invInertia = B.invInertia;
+				Crash::Result r;
+				if (!Crash::Resolve(a, b, c, set, &r)) {
+					continue;
+				}
+				const float at[3] = { c.point[0], 0.5f * ((A.body.low > B.body.low ? A.body.low : B.body.low) + (A.body.high < B.body.high ? A.body.high : B.body.high)), c.point[1] };
+				if (r.approach >= kSoundFrom) {
+					HitSound(r.approach, at, s.pos, now);
+				}
+				const float share = r.hitA + r.hitB > 1.0f ? 2.0f / (r.hitA + r.hitB) : 0.0f;
+				for (int side = 0; side < 2; side++) {
+					Party& X = side == 0 ? A : B;
+					const Party& O = side == 0 ? B : A;
+					const float sign = side == 0 ? 1.0f : -1.0f;
+					const float hit = side == 0 ? r.hitA : r.hitB;
+					const float spin = side == 0 ? r.spinA : r.spinB;
+					const float invMass = side == 0 ? a.invMass : b.invMass;
+					const float push[3] = { c.normal[0] * sign, c.normal[1] * sign, c.normal[2] * sign };
+					float scale = hit * share;
+					scale = scale > 1.5f ? 1.5f : scale;
+					const float damage = Crash::Damage(hit, kDamageFloor, s_damageScale);
+					const float dv[3] = { r.impulse[0] * sign * invMass, r.impulse[1] * sign * invMass, r.impulse[2] * sign * invMass };
+					if (X.kind == kTraffic) {
+						// it goes on its way unless hit hard enough by something that knocks it off
+						if (!X.knocked && hit >= kKnockFrom && Knocks(O)) {
+							X.knocked = true;
+							QueueKnock(knocks, &count, X, dv, spin, Crash::LaunchFor(r.approach, push, kLaunchFrom, s_launchScale * scale), damage);
+						}
+						continue;
+					}
+					if (X.kind == kHis) {
+						PushHis(vehicle, (const float*)(his + OBJECT_POSITION), c, r.impulse, sign);
+						const Crash::Launch l = Crash::LaunchFor(r.approach, push, kLaunchFrom + 300.0f, 0.5f * s_launchScale * scale);
+						if (l.up > 0.0f) {
+							ThrowHis(vehicle, l.up, 0, l.roll, l.axis);
+						}
+						HurtHis(damage, now, "a crash");
+					}
+					else {
+						Loose& l = s_loose[X.index];
+						Crash::TakeHit(&l.body, c, r.impulse, sign);
+						const Crash::Launch launch = Crash::LaunchFor(r.approach, push, kLaunchFrom, s_launchScale * scale);
+						if (launch.up > 0.0f) {
+							Crash::Throw(&l.body, launch.up, launch.roll, launch.axis);
+						}
+						HurtLoose(X.index, damage, now, "a crash");
+						X.awake = true;
+					}
+					for (int k = 0; k < 3; k++) {
+						X.body.vel[k] += dv[k];
+					}
+					X.body.spin += spin;
+				}
+			}
+		}
+		return count;
+	}
+
+	// A car of the traffic knocked off its way: it goes, and a car of the same model stands in its place under the
+	// name of a free slot (or of the loose car left longest ago away from him, which makes room), moving as the
+	// hit left it. False when there is no room (it goes on its way).
+	static bool KnockOff(const Knock& k, const DriveGame::Skater& s, uint32_t now, const char* why) {
+		Car& c = s_cars[k.car];
+		const uint8_t* obj = CarObject(c);
+		if (!obj || c.slot >= 0) {
+			return false;
+		}
+		bool inUse[Drive::Parking::kSlots], away[Drive::Parking::kSlots];
+		for (int i = 0; i < Drive::Parking::kSlots; i++) {
+			const uint8_t* there = (const uint8_t*)ResolveToObject(s_n.parkedCar[i]);
+			inUse[i] = s_parking.Used(i) || there;
+			away[i] = false;
+			if (there && s.pos) {
+				const float* at = (const float*)(there + OBJECT_POSITION);
+				const Loose& l = s_loose[i];
+				away[i] = Drive::FarApart(at, s.pos, kFar) && !l.health.burning && (!l.made || l.body.asleep);
+			}
+		}
+		const int slot = s_parking.Room(inUse, away);
+		if (slot < 0) {
+			return false;
+		}
+		if (inUse[slot]) {
+			ComeBackLater(s_parking.Origin(slot), now, "a car knocked off its way made room");
+			KillFx(slot);
+			s_parking.Leave(slot);
+		}
+		float pos[4], m[16];
+		memcpy(pos, obj + OBJECT_POSITION, sizeof(pos));
+		memcpy(m, obj + OBJECT_MATRIX, sizeof(m));
+		Script::LazyStruct* p = Script::LazyStruct::s_create();
+		if (!p) {
+			return false;
+		}
+		p->AddChecksum(s_n.car, c.name);
+		p->AddChecksum(s_n.parked, s_n.parkedCar[slot]);
+		p->AddString(s_n.model, c.model);
+		StructAddVector(p, s_n.pos, pos[0], pos[1], pos[2]);
+		const bool ran = RunGameScript(s_n.knockedScript, p, 0, 0);
+		Script::LazyStruct::s_free(p);
+		c.track.Reset();
+		ResetLoose(slot);
+		uint8_t* made = (uint8_t*)ResolveToObject(s_n.parkedCar[slot]);
+		if (!ran || !made || !GetComponent(made, s_n.staticVehicle)) {
+			Note("Crashes: %08X was knocked off its way, but %s\n", c.name, ran ? "no car stood in its place" : "Flickit_CarKnocked did not run");
+			if (!ResolveToObject(c.name)) {
+				ComeBackLater(c.name, now, "it was knocked off its way");
+			}
+			return false;
+		}
+		memcpy(made + OBJECT_POSITION, pos, sizeof(pos));
+		memcpy(made + OBJECT_MATRIX, m, 12 * sizeof(float));
+		memcpy(made + OBJECT_DISPLAY_MATRIX, m, 12 * sizeof(float));
+		s_parking.Park(slot, c.model, c.box, c.name, now);
+		Car* left = CarNamed(s_n.parkedCar[slot]);
+		if (left) {
+			left->track.Reset();
+			TuneFor(c.model, left);
+		}
+		Loose& l = s_loose[slot];
+		MakeLoose(slot, made);
+		memcpy(l.body.vel, k.vel, sizeof(l.body.vel));
+		l.body.w[1] = k.spin;
+		Crash::Wake(&l.body);
+		if (k.launch.up > 0.0f || k.launch.roll > 0.0f) {
+			Crash::Throw(&l.body, k.launch.up, k.launch.roll, k.launch.axis);
+		}
+		HurtLoose(slot, k.damage, now, why);
+		Note("Crashes: %08X (%s) knocked off its way (%s) at (%.0f %.0f %.0f), going %.0f units/s%s; slot %d\n", c.name, c.model, why,
+			pos[0], pos[1], pos[2], Crash::Length3(l.body.vel), k.launch.up > 0.0f ? ", thrown up" : "", slot);
+		return true;
+	}
+
+	// The planes a loose car meets: the ground under its middle, and the walls each way along the ground it
+	// faces and across, as far as its corners reach (the level's own faces; the cars are the touches)
+	static int PlanesFor(const Crash::Tumbler& t, Crash::Plane* out, bool* ground) {
+		int n = 0;
+		*ground = false;
+		float point[3], normal[3];
+		const float reach = Crash::Length3(t.half);
+		const float below[3] = { t.com[0], t.com[1] - reach - 400.0f, t.com[2] };
+		const float from[3] = { t.com[0], t.com[1] + 20.0f, t.com[2] };
+		const float higher[3] = { t.com[0], t.com[1] + 150.0f, t.com[2] };
+		if ((WorldHit(from, below, point, normal) && normal[1] > 0.3f) ||
+			(WorldHit(higher, below, point, normal) && normal[1] > 0.3f && point[1] < t.com[1] + 40.0f)) {
+			memcpy(out[n].point, point, sizeof(point));
+			memcpy(out[n].normal, normal, sizeof(normal));
+			n++;
+			*ground = point[1] > t.com[1] - reach - 30.0f;
+		}
+		Crash::Body f;
+		if (!Crash::FootprintOf(t, &f)) {
+			return n;
+		}
+		const float ways[4][2] = { { f.axisZ[0], f.axisZ[1] }, { -f.axisZ[0], -f.axisZ[1] }, { f.axisX[0], f.axisX[1] }, { -f.axisX[0], -f.axisX[1] } };
+		for (int i = 0; i < 4; i++) {
+			const float length = reach + 25.0f;
+			const float to[3] = { t.com[0] + ways[i][0] * length, t.com[1], t.com[2] + ways[i][1] * length };
+			if (WorldHit(t.com, to, point, normal) && normal[1] < 0.7f && normal[0] * ways[i][0] + normal[2] * ways[i][1] < 0.0f) {
+				memcpy(out[n].point, point, sizeof(point));
+				memcpy(out[n].normal, normal, sizeof(normal));
+				n++;
+			}
+		}
+		return n;
+	}
+
+	// A loose car goes for good (it fell out of the level): the car of the level it was comes back later
+	static void LooseGoes(int slot, uint32_t now, const char* why) {
+		KillFx(slot);
+		Script::LazyStruct* p = Script::LazyStruct::s_create();
+		if (p) {
+			p->AddChecksum(s_n.parked, s_n.parkedCar[slot]);
+			RunGameScript(s_n.goesBackScript, p, 0, 0);
+			Script::LazyStruct::s_free(p);
+		}
+		ComeBackLater(s_parking.Origin(slot), now, why);
+		s_parking.Leave(slot);
+		ResetLoose(slot);
+		Car* c = CarNamed(s_n.parkedCar[slot]);
+		if (c) {
+			c->track.Reset();
+		}
+		Note("Crashes: the car in slot %d went (%s)\n", slot, why);
+	}
+
+	// The loose cars that move, a frame on: against the level, then their objects where they are
+	static void Tumbles(float dt, uint32_t now, const DriveGame::Skater& s) {
+		const Crash::TumbleSettings set = Crash::DefaultTumble();
+		for (int k = 0; k < Drive::Parking::kSlots; k++) {
+			Loose& l = s_loose[k];
+			if (!l.made || l.body.asleep || !s_parking.Used(k)) {
+				continue;
+			}
+			uint8_t* obj = (uint8_t*)ResolveToObject(s_n.parkedCar[k]);
+			if (!obj) {
+				continue;
+			}
+			Crash::Plane planes[5];
+			bool ground = false;
+			const int n = PlanesFor(l.body, planes, &ground);
+			if (ground) {
+				l.groundSeen = now;
+			}
+			else if (now - l.groundSeen > kFallMs) {
+				LooseGoes(k, now, "it fell out of the level");
+				continue;
+			}
+			const Crash::TumbleResult r = Crash::Tumble(&l.body, dt, planes, n, set);
+			if (r.hit > kLandingFloor) {
+				HurtLoose(k, Crash::Damage(r.hit, kLandingFloor, s_damageScale), now, "it landed hard");
+				HitSound(r.hit, l.body.com, s.pos, now);
+			}
+			PlaceLoose(k, obj);
+			if (r.cameToRest) {
+				Note("Crashes: the car in slot %d came to rest at (%.0f %.0f %.0f), %s\n", k, l.body.com[0], l.body.com[1], l.body.com[2],
+					Crash::Upright(l.body) ? "on its wheels" : l.body.rows[1][1] < -0.7f ? "on its roof" : "on its side");
+			}
+		}
+	}
+
+	/* Fire, and blowing up */
+
+	// The push of a blast at at on everything near it: the loose cars, his car, the cars of the traffic (knocked
+	// off their way), and him on foot (knocked down). Damage too: a car near enough catches fire in its turn.
+	static void Blast(const float at[3], int except, uint32_t now, const DriveGame::Skater& s, uint8_t* his, uint8_t* vehicle, bool knockHim) {
+		for (int k = 0; k < Drive::Parking::kSlots; k++) {
+			Loose& l = s_loose[k];
+			if (k == except || !l.made || !s_parking.Used(k) || !ResolveToObject(s_n.parkedCar[k])) {
+				continue;
+			}
+			float d[3] = { l.body.com[0] - at[0], 0.0f, l.body.com[2] - at[2] };
+			const float away = Crash::Length3(d);
+			const float push = Crash::Blast(away, kBlastRadius);
+			if (push <= 0.0f) {
+				continue;
+			}
+			if (!Crash::Normalize3(d)) {
+				d[0] = 1.0f;
+			}
+			// pushed below its middle: it goes over away from the blast
+			const float r[3] = { 0.0f, -l.body.half[1] * 0.6f, 0.0f };
+			const float p[3] = { d[0] * 700.0f * push / l.body.invMass, 380.0f * push / l.body.invMass, d[2] * 700.0f * push / l.body.invMass };
+			Crash::Push(&l.body, r, p);
+			Crash::Wake(&l.body);
+			HurtLoose(k, 900.0f * push * s_damageScale, now, "a blast");
+		}
+		if (his && vehicle) {
+			const float* pos = (const float*)(his + OBJECT_POSITION);
+			float d[3] = { pos[0] - at[0], 0.0f, pos[2] - at[2] };
+			const float push = Crash::Blast(Crash::Length3(d), kBlastRadius);
+			if (push > 0.0f) {
+				if (!Crash::Normalize3(d)) {
+					d[0] = 1.0f;
+				}
+				const float dv[3] = { d[0] * 600.0f * push, 0.0f, d[2] * 600.0f * push };
+				const float axis[3] = { d[2], 0.0f, -d[0] };
+				ThrowHis(vehicle, 300.0f * push, dv, 0.0f, axis);
+				HurtHis(900.0f * push * s_damageScale, now, "a blast");
+			}
+		}
+		int knocked = 0;
+		for (int i = 0; i < s_levelCars && knocked < kKnocksABlast; i++) {
+			const Car& c = s_cars[i];
+			const uint8_t* obj = CarObject(c);
+			if (!obj) {
+				continue;
+			}
+			const float* pos = (const float*)(obj + OBJECT_POSITION);
+			float d[3] = { pos[0] - at[0], 0.0f, pos[2] - at[2] };
+			const float push = Crash::Blast(Crash::Length3(d), kBlastRadius);
+			if (push < 0.1f) {
+				continue;
+			}
+			if (!Crash::Normalize3(d)) {
+				d[0] = 1.0f;
+			}
+			Knock k;
+			memset(&k, 0, sizeof(k));
+			k.car = i;
+			for (int j = 0; j < 3; j++) {
+				k.vel[j] = (c.track.frames >= 2 ? c.track.vel[j] : 0.0f) + d[j] * 700.0f * push;
+			}
+			k.vel[1] += 380.0f * push;
+			k.launch.roll = 3.0f * push;
+			k.launch.axis[0] = d[2];
+			k.launch.axis[2] = -d[0];
+			k.damage = 900.0f * push * s_damageScale;
+			knocked += KnockOff(k, s, now, "a blast") ? 1 : 0;
+		}
+		if (knockHim && !s.driving && s.pos && s.object) {
+			const float dx = s.pos[0] - at[0], dy = s.pos[1] - at[1], dz = s.pos[2] - at[2];
+			if (dx * dx + dy * dy + dz * dz < kBlastHim * kBlastHim) {
+				RunGameScript(s_n.blastHimScript, 0, s.object, 0);
+				Note("Crashes: the blast knocked him down\n");
+			}
+		}
+	}
+
+	// The fireball and its bang at a place
+	static void Boom(const float at[3], const float* him) {
+		Script::LazyStruct* p = Script::LazyStruct::s_create();
+		if (p) {
+			StructAddVector(p, s_n.pos, at[0], at[1], at[2]);
+			p->AddFloat(s_n.vol, 60.0f + 390.0f * (him ? Near(at, him) : 1.0f));
+			RunGameScript(s_n.boomScript, p, 0, 0);
+			Script::LazyStruct::s_free(p);
+		}
+	}
+
+	// A loose car burnt out: dark, thrown up and over
+	static void Burnt(int slot, uint32_t now) {
+		Loose& l = s_loose[slot];
+		Script::LazyStruct* p = Script::LazyStruct::s_create();
+		if (p) {
+			p->AddChecksum(s_n.car, s_n.parkedCar[slot]);
+			RunGameScript(s_n.burntScript, p, 0, 0);
+			Script::LazyStruct::s_free(p);
+		}
+		const float turn = (float)(now % 628u) * 0.01f;
+		const float axis[3] = { cosf(turn), 0.0f, sinf(turn) };
+		const float launch = s_launchScale > 0.3f ? s_launchScale : 0.3f;
+		Crash::Throw(&l.body, (400.0f + (float)(now % 120u)) * launch, (2.0f + (float)(now % 17u) * 0.1f) * launch, axis);
+	}
+
+	// A loose car blows up: the fireball, burnt dark, thrown up and over, and the blast
+	static void BlowUp(int slot, uint32_t now, const DriveGame::Skater& s, uint8_t* his, uint8_t* vehicle) {
+		uint8_t* obj = (uint8_t*)ResolveToObject(s_n.parkedCar[slot]);
+		if (!obj) {
+			return;
+		}
+		Loose& l = s_loose[slot];
+		if (!l.made) {
+			MakeLoose(slot, obj);
+		}
+		Boom(l.body.com, s.pos);
+		Burnt(slot, now);
+		Blast(l.body.com, slot, now, s, his, vehicle, true);
+		Note("Crashes: the car in slot %d blew up at (%.0f %.0f %.0f)\n", slot, l.body.com[0], l.body.com[1], l.body.com[2]);
+	}
+
+	// His car blowing up with him in it: the fireball and the blast now; out the way he gets out (a spawned
+	// script, as the game's own exit: Flickit_CarBlowOut), knocked down, and the car he leaves behind (where it
+	// was, as a car he left) burnt and thrown, going as his car went, once it stands there (Flickit_CarParked)
+	static void BlowUpHis(const DriveGame::Skater& s, const uint8_t* his, const uint8_t* vehicle, uint32_t now) {
+		const float* v = (const float*)(vehicle + VEHICLE_VELOCITY);
+		memset(s_boomVel, 0, sizeof(s_boomVel));
+		if (Finite(v, 3)) {
+			memcpy(s_boomVel, v, sizeof(s_boomVel));
+		}
+		const float* pos = (const float*)(his + OBJECT_POSITION);
+		const float at[3] = { pos[0], pos[1] + 20.0f, pos[2] };
+		Boom(at, s.pos);
+		Blast(at, -1, now, s, 0, 0, false);
+		s_boomPending = RunGameScript(s_n.blowOutScript, 0, s.object, 0);
+		s_boomSlot = -1;
+		s_boomSince = now;
+		Note("Crashes: his car blew up with him in it at (%.0f %.0f %.0f)%s\n", pos[0], pos[1], pos[2],
+			s_boomPending ? "; he is thrown out" : ", but Flickit_CarBlowOut did not run");
+	}
+
+	static void AfterBlowOut(uint32_t now) {
+		if (!s_boomPending) {
+			return;
+		}
+		uint8_t* obj = s_boomSlot >= 0 ? (uint8_t*)ResolveToObject(s_n.parkedCar[s_boomSlot]) : 0;
+		if (obj) {
+			MakeLoose(s_boomSlot, obj);
+			memcpy(s_loose[s_boomSlot].body.vel, s_boomVel, sizeof(s_boomVel));
+			Crash::Wake(&s_loose[s_boomSlot].body);
+			Burnt(s_boomSlot, now);
+			s_boomPending = false;
+			Note("Crashes: he is out; the car he was in is burnt out in slot %d\n", s_boomSlot);
+		}
+		else if (now - s_boomSince > 3000) {
+			s_boomPending = false;
+			Note("Crashes: his car blew up, but he did not get out of it\n");
+		}
+	}
+
+	static void Burning(uint32_t now, const DriveGame::Skater& s, uint8_t* his, uint8_t* vehicle) {
+		for (int k = 0; k < Drive::Parking::kSlots; k++) {
+			if (s_parking.Used(k) && Crash::Tick(&s_loose[k].health, now) == Crash::kBlewUp) {
+				BlowUp(k, now, s, his, vehicle);
+			}
+		}
+		if (his && vehicle && s_driven.set && Crash::Tick(&s_drivenHealth, now) == Crash::kBlewUp) {
+			BlowUpHis(s, his, vehicle, now);
+		}
+	}
+
+	// The crashes of this frame, once the cars' places and speeds are known
+	static void CrashFrame(const DriveGame::Skater& s, uint32_t now, float seconds) {
+		if (!s_crashes || !CrashReady()) {
+			return;
+		}
+		uint8_t* core = (uint8_t*)GetComponent(s.object, kSkaterCorePhysics);
+		s_feeler = core ? core + CORE_FEELER : 0;
+		// a frame after a pause (or a load) moves nothing
+		const float dt = seconds > 0.25f ? 0.0f : (seconds > 0.05f ? 0.05f : seconds);
+		void* vehicle = 0;
+		uint8_t* his = s.driving && s_driven.set ? PlayerVehicle(&vehicle) : 0;
+		if (his) {
+			HisWalls((const uint8_t*)vehicle, (const float*)(his + OBJECT_POSITION), s.pos, now);
+		}
+		else {
+			s_drivenHaveVel = false;
+		}
+		Parties(his, (const uint8_t*)vehicle);
+		Knock knocks[kKnocksAFrame];
+		const int count = Touch(his, (uint8_t*)vehicle, s, now, knocks);
+		for (int i = 0; i < count; i++) {
+			KnockOff(knocks[i], s, now, "a crash");
+		}
+		AfterBlowOut(now);
+		Tumbles(dt, now, s);
+		Burning(now, s, his, (uint8_t*)vehicle);
+		Effects(s.driving);
+	}
+
 	// A car he left that has stood long enough goes back, one at a time: it goes, and in the same frame the
 	// car of the level it was comes back at the start of its way (unless that car is there again already, or
 	// was a goal's), when he is far from both places
@@ -557,9 +1619,11 @@ namespace DriveGame {
 				params->AddChecksum(s_n.car, origin);
 			}
 			const uint32_t stood = (now - s_parking.ParkedAt(k)) / 1000;
+			KillFx(k);
 			const bool ran = RunGameScript(s_n.goesBackScript, params, 0, 0);
 			Script::LazyStruct::s_free(params);
 			s_parking.Leave(k);
+			ResetLoose(k);
 			p.track.Reset();
 			if (appears) {
 				s_back.Remove(origin);
@@ -647,6 +1711,7 @@ namespace DriveGame {
 			// out of the car some other way (a restart, the end of a goal): it went with PlayerVehicle
 			s_driven.set = false;
 			ComeBackLater(s_driven.origin, now, "the car he drove went with a restart");
+			KillFx(kFxDriven);
 		}
 
 		// where each car is and how fast it goes, and the nearest in reach
@@ -661,6 +1726,8 @@ namespace DriveGame {
 					// gone (a restart of the level's objects)
 					ComeBackLater(s_parking.Origin(c.slot), now, "the car he left went with a restart");
 					s_parking.Leave(c.slot);
+					KillFx(c.slot);
+					ResetLoose(c.slot);
 				}
 				continue;
 			}
@@ -670,7 +1737,7 @@ namespace DriveGame {
 			if (c.slot < 0 && s_back.Count() > 0) {
 				s_back.Remove(c.name);           // made again by the level itself
 			}
-			if (!s.free || s.driving) {
+			if (!s.free || s.driving || (c.slot >= 0 && !Takeable(c.slot))) {
 				continue;
 			}
 			const Drive::Box* box = c.slot >= 0 ? s_parking.BoxOf(c.slot) : &c.box;
@@ -681,6 +1748,8 @@ namespace DriveGame {
 				bestAway = away;
 			}
 		}
+
+		CrashFrame(s, now, seconds);
 
 		// another player nearer than the car has Circle (players_game.h)
 		s_carAway = best >= 0 ? bestAway : 1.0e9f;
@@ -804,7 +1873,14 @@ namespace DriveGame {
 		}
 		if (s_taken.slot >= 0) {
 			s_parking.Leave(s_taken.slot);
+			s_drivenHealth = s_loose[s_taken.slot].health;
+			KillFx(s_taken.slot);
+			ResetLoose(s_taken.slot);
 		}
+		else {
+			s_drivenHealth = Crash::Whole();
+		}
+		s_drivenHaveVel = false;
 		s_driven.set = true;
 		s_driven.origin = s_taken.origin;
 		strncpy_s(s_driven.model, sizeof(s_driven.model), s_taken.model, _TRUNCATE);
@@ -958,16 +2034,20 @@ namespace DriveGame {
 			s_leaving.door[1] = s_leaving.pos[1] + wheels.height + 10.0f;
 			s_leaving.door[2] = s_leaving.pos[2];
 		}
-		bool inUse[Drive::Parking::kSlots];
+		bool inUse[Drive::Parking::kSlots], away[Drive::Parking::kSlots];
 		for (int k = 0; k < Drive::Parking::kSlots; k++) {
-			inUse[k] = ResolveToObject(s_n.parkedCar[k]) != 0;
+			const uint8_t* there = (const uint8_t*)ResolveToObject(s_n.parkedCar[k]);
+			inUse[k] = there != 0;
+			away[k] = there && Drive::FarApart((const float*)(there + OBJECT_POSITION), s_leaving.pos, kFar);
 		}
-		s_leaving.slot = s_parking.Pick(inUse);
+		s_leaving.slot = s_parking.Pick(inUse, away);
 		if (inUse[s_leaving.slot]) {
 			// the one left longest ago goes (Flickit_CarExit), to make room
 			ComeBackLater(s_parking.Origin(s_leaving.slot), GetTickCount(), "the car he left made room for another");
+			KillFx(s_leaving.slot);
 		}
 		s_parking.Leave(s_leaving.slot);
+		ResetLoose(s_leaving.slot);
 		s_leaving.set = true;
 		Script::LazyStruct* back = Returned(script);
 		if (back) {
@@ -1014,6 +2094,15 @@ namespace DriveGame {
 		if (c) {
 			c->track.Reset();
 			TuneFor(s_leaving.model, c);
+		}
+		// as damaged as his car was (and burning on, if it was): the effects move to it
+		ResetLoose(s_leaving.slot);
+		s_loose[s_leaving.slot].health = s_drivenHealth;
+		KillFx(kFxDriven);
+		s_drivenHealth = Crash::Whole();
+		s_lastParked = s_leaving.slot;
+		if (s_boomPending) {
+			s_boomSlot = s_leaving.slot;
 		}
 		return true;
 	}
@@ -1188,6 +2277,16 @@ namespace DriveGame {
 		int stand = (int)GetPrivateProfileIntA(FLICKIT_SECTION, "CarParkedTime", 120, configFile);
 		stand = stand <= 0 ? 0 : (stand < 10 ? 10 : (stand > 3600 ? 3600 : stand));
 		s_standMs = (uint32_t)stand * 1000u;
+		s_crashes = GetPrivateProfileIntA(FLICKIT_SECTION, "CarCrashes", 1, configFile) != 0;
+		int damage = (int)GetPrivateProfileIntA(FLICKIT_SECTION, "CarDamage", 100, configFile);
+		damage = damage < 0 ? 0 : (damage > 500 ? 500 : damage);
+		s_damageScale = (float)damage / 100.0f;
+		int launch = (int)GetPrivateProfileIntA(FLICKIT_SECTION, "CarLaunch", 100, configFile);
+		launch = launch < 0 ? 0 : (launch > 300 ? 300 : launch);
+		s_launchScale = (float)launch / 100.0f;
+		if (!s_crashes) {
+			Log::TypedLog(CHN_SDL, "Crashes: off (CarCrashes=0): the cars go through each other\n");
+		}
 		if (!s_on) {
 			Log::TypedLog(CHN_SDL, "Cars: off\n");
 		}

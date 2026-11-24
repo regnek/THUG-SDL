@@ -381,12 +381,13 @@ namespace Drive {
 		return FarApart(parked, at, farAway) && (!start || FarApart(start, at, farAway));
 	}
 
-	// The cars he got out of, under names of their own (Flickit_ParkedCar0 ...): a free name if there is
-	// one, otherwise the one left longest ago (that car goes). Each keeps the car of the level it was (its
-	// origin: taken again and left again, still that one) and when he got out of it.
+	// The cars standing on their own, under names of their own (Flickit_ParkedCar0 ...): the cars he got out
+	// of, and the cars knocked off their way in a crash. A free name if there is one, otherwise the one left
+	// longest ago (that car goes), one far from him first. Each keeps the car of the level it was (its origin:
+	// taken again and left again, still that one) and when it was left.
 	class Parking {
 	public:
-		enum { kSlots = 4, kModel = 128 };
+		enum { kSlots = 10, kModel = 128 };
 		Parking() {
 			Clear();
 		}
@@ -394,13 +395,29 @@ namespace Drive {
 			memset(m_slots, 0, sizeof(m_slots));
 			m_stamp = 0;
 		}
-		// The slot for the next car. inUse: whether a slot's car is still there.
-		int Pick(const bool inUse[kSlots]) const {
-			int oldest = 0;
+		// A slot for another car without taking one from under his eyes: a free one (inUse: whether a slot's
+		// car is still there), else the one left longest ago of those away from him (away, if given); -1 for
+		// none
+		int Room(const bool inUse[kSlots], const bool* away) const {
+			int oldest = -1;
 			for (int i = 0; i < kSlots; i++) {
 				if (!inUse[i]) {
 					return i;
 				}
+				if (away && away[i] && (oldest < 0 || m_slots[i].stamp < m_slots[oldest].stamp)) {
+					oldest = i;
+				}
+			}
+			return oldest;
+		}
+		// The slot for the next car he leaves: room if there is any, else the one left longest ago
+		int Pick(const bool inUse[kSlots], const bool* away = 0) const {
+			const int room = Room(inUse, away);
+			if (room >= 0) {
+				return room;
+			}
+			int oldest = 0;
+			for (int i = 1; i < kSlots; i++) {
 				if (m_slots[i].stamp < m_slots[oldest].stamp) {
 					oldest = i;
 				}

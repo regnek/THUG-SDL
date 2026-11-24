@@ -183,7 +183,10 @@ static void TestComeback() {
 
 static void TestParking() {
 	Drive::Parking p;
-	bool inUse[Drive::Parking::kSlots] = { false, false, false, false };
+	bool inUse[Drive::Parking::kSlots];
+	for (int i = 0; i < Drive::Parking::kSlots; i++) {
+		inUse[i] = false;
+	}
 	Check(p.Pick(inUse) == 0, "the first free");
 	const Drive::Box box = Drive::UsualBox();
 	for (int i = 0; i < Drive::Parking::kSlots; i++) {
@@ -203,7 +206,25 @@ static void TestParking() {
 	longName[sizeof(longName) - 1] = 0;
 	p.Park(1, longName, box);
 	Check(std::strlen(p.Model(1)) == Drive::Parking::kModel - 1, "a long model name cut to fit");
-	Check(p.Model(7) == 0 && !p.Used(-1), "no such slot");
+	Check(p.Model(Drive::Parking::kSlots) == 0 && !p.Used(-1), "no such slot");
+
+	// room for a car knocked off its way: a free name, else the oldest of those away from him, else none
+	bool away[Drive::Parking::kSlots];
+	for (int i = 0; i < Drive::Parking::kSlots; i++) {
+		inUse[i] = true;
+		away[i] = false;
+	}
+	Check(p.Room(inUse, away) == -1 && p.Room(inUse, 0) == -1, "room: all there and near him, none");
+	away[5] = true;
+	away[6] = true;
+	p.Park(5, "veh\\veh_custom\\veh_custom.mdl", box);
+	Check(p.Room(inUse, away) == 6, "room: the oldest of those away");
+	Check(p.Pick(inUse, away) == 6, "pick: the oldest away before the oldest of all");
+	away[5] = away[6] = false;
+	const int oldest = p.Pick(inUse, away);
+	Check(oldest >= 0 && oldest != 5 && oldest != 1, "pick: with none away, the oldest of all");
+	inUse[8] = false;
+	Check(p.Room(inUse, away) == 8 && p.Pick(inUse, away) == 8, "room: a free name first");
 
 	// The car of the level each was, and when he got out of it
 	p.Park(3, "veh\\veh_custom\\veh_custom.mdl", box, 0xABCD, 50000);
@@ -212,7 +233,7 @@ static void TestParking() {
 	Check(p.ParkedAt(3) == 90000, "left again: the time from then");
 	p.Leave(3);
 	Check(p.Origin(3) == 0 && p.ParkedAt(3) == 0, "taken again: not kept with the slot");
-	Check(p.Origin(-1) == 0 && p.ParkedAt(9) == 0, "no such slot, no car");
+	Check(p.Origin(-1) == 0 && p.ParkedAt(Drive::Parking::kSlots) == 0, "no such slot, no car");
 }
 
 static void TestCamera() {
