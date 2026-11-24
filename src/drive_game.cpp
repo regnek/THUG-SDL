@@ -200,7 +200,6 @@ namespace DriveGame {
 		uint32_t knockedScript, fxScript, fxOffScript, boomScript, burntScript, hitSoundScript, onFireScript;
 		uint32_t blowOutScript, blastHimScript, fx, parts, offset, vol, pitch;
 		uint32_t smokeParts[4], fireParts;
-		uint32_t fxSmoke[Drive::Parking::kSlots + 1], fxFire[Drive::Parking::kSlots + 1];
 	};
 	static Names s_n;
 
@@ -326,6 +325,7 @@ namespace DriveGame {
 		uint32_t car;
 		int smoke;
 		bool fire;
+		uint32_t smokeName, fireName;    // the effects' own names (0: none)
 	};
 	static Fx s_fx[kFxCars];
 	static uint32_t s_lastSound = 0;
@@ -390,13 +390,6 @@ namespace DriveGame {
 		s_n.smokeParts[2] = Flickit::NameChecksum("Flickit_FxSmokeHeavy");
 		s_n.smokeParts[3] = Flickit::NameChecksum("Flickit_FxSmokeBurnt");
 		s_n.fireParts = Flickit::NameChecksum("Flickit_FxFire");
-		for (int i = 0; i <= Drive::Parking::kSlots; i++) {
-			char name[32];
-			sprintf_s(name, sizeof(name), "Flickit_CarSmoke%d", i);
-			s_n.fxSmoke[i] = Flickit::NameChecksum(name);
-			sprintf_s(name, sizeof(name), "Flickit_CarFire%d", i);
-			s_n.fxFire[i] = Flickit::NameChecksum(name);
-		}
 	}
 
 	static bool Ready() {
@@ -828,31 +821,72 @@ namespace DriveGame {
 
 	/* The effects */
 
-	// An effect on a car (Flickit_CarFx), or none (parts 0): at its engine, a little behind its front
-	static void RunFx(uint32_t fx, uint32_t car, uint32_t parts, const Drive::Box& box) {
+	// The game's particle systems are kept by name (Nx::CParticleManager at 0x006FF6E8, a hash table that takes
+	// two of one name: 0x0049D470) and taken out by name when their object is deleted, which is after the frame it
+	// died in (0x0043FE24, 0x0041F9E0 takes out the first of that name it meets). An effect made again under the
+	// name of one that died in the same frame left the dead one in the table, and the table's update called it
+	// after its memory went to something else: the crash at 0x00421BEA (its update took its stack 4 off). The
+	// game's own scripts wait a frame between the two (Emit_SpecialTrickParticles). Each effect here has a name
+	// of its own that is never used again (Flickit_CarFx<n>).
+	static uint32_t s_fxMade = 0;
+
+	static uint32_t NewFxName() {
+		char name[32];
+		sprintf_s(name, sizeof(name), "Flickit_CarFx%u", ++s_fxMade);
+		return Flickit::NameChecksum(name);
+	}
+
+	static void FxOff(uint32_t fx) {
+		if (!fx) {
+			return;
+		}
 		Script::LazyStruct* p = Script::LazyStruct::s_create();
 		if (!p) {
 			return;
 		}
 		p->AddChecksum(s_n.fx, fx);
-		if (parts) {
-			p->AddChecksum(s_n.car, car);
-			p->AddChecksum(s_n.parts, parts);
-			StructAddVector(p, s_n.offset, 0.0f, box.height * 0.55f, box.front - (box.front - box.rear) * 0.22f);
-		}
-		RunGameScript(parts ? s_n.fxScript : s_n.fxOffScript, p, 0, 0);
+		RunGameScript(s_n.fxOffScript, p, 0, 0);
 		Script::LazyStruct::s_free(p);
+	}
+
+	// An effect on a car (Flickit_CarFx): at its engine, a little behind its front, from where the car is now
+	// (the game's lock moves it with the car from then on). Its name, 0 if there was no car.
+	static uint32_t FxOn(uint32_t car, uint32_t parts, const Drive::Box& box) {
+		const uint8_t* obj = (const uint8_t*)ResolveToObject(car);
+		if (!obj || !parts) {
+			return 0;
+		}
+		const float* pos = (const float*)(obj + OBJECT_POSITION);
+		const float* m = (const float*)(obj + OBJECT_MATRIX);
+		const float offset[3] = { 0.0f, box.height * 0.55f, box.front - (box.front - box.rear) * 0.22f };
+		float at[3];
+		for (int i = 0; i < 3; i++) {
+			at[i] = pos[i] + m[i] * offset[0] + m[4 + i] * offset[1] + m[8 + i] * offset[2];
+		}
+		if (!Finite(at, 3)) {
+			return 0;
+		}
+		Script::LazyStruct* p = Script::LazyStruct::s_create();
+		if (!p) {
+			return 0;
+		}
+		const uint32_t fx = NewFxName();
+		p->AddChecksum(s_n.fx, fx);
+		p->AddChecksum(s_n.car, car);
+		p->AddChecksum(s_n.parts, parts);
+		StructAddVector(p, s_n.offset, offset[0], offset[1], offset[2]);
+		StructAddVector(p, s_n.pos, at[0], at[1], at[2]);
+		RunGameScript(s_n.fxScript, p, 0, 0);
+		Script::LazyStruct::s_free(p);
+		return fx;
 	}
 
 	static void KillFx(int i) {
 		if (i < 0 || i >= kFxCars) {
 			return;
 		}
-		if (s_fx[i].car || s_fx[i].smoke || s_fx[i].fire) {
-			const Drive::Box usual = Drive::UsualBox();
-			RunFx(s_n.fxSmoke[i], 0, 0, usual);
-			RunFx(s_n.fxFire[i], 0, 0, usual);
-		}
+		FxOff(s_fx[i].smokeName);
+		FxOff(s_fx[i].fireName);
 		memset(&s_fx[i], 0, sizeof(s_fx[i]));
 	}
 
@@ -867,10 +901,12 @@ namespace DriveGame {
 		}
 		const bool other = f.car != car;
 		if (other || f.smoke != smoke) {
-			RunFx(s_n.fxSmoke[i], car, s_n.smokeParts[smoke], box);
+			FxOff(f.smokeName);
+			f.smokeName = smoke ? FxOn(car, s_n.smokeParts[smoke], box) : 0;
 		}
 		if (other || f.fire != fire) {
-			RunFx(s_n.fxFire[i], car, fire ? s_n.fireParts : 0, box);
+			FxOff(f.fireName);
+			f.fireName = fire ? FxOn(car, s_n.fireParts, box) : 0;
 		}
 		f.car = car;
 		f.smoke = smoke;

@@ -271,8 +271,12 @@ ENDSCRIPT
 
 // The damage a car shows (src/drive_game.cpp picks them): smoke from its engine, heavy smoke, fire, and the
 // smoke of a car burnt out. Particles of the game's own kinds, with its own textures that are always there
-// (startup.q), seen from far off. fx: the name of the effect, car: what it is on, parts: one of the structures
-// below, offset: where on the car (from its model's origin, along its left, up and the way it faces)
+// (startup.q), seen from far off. fx: the name of the effect (a new one each time: the game keeps particles by
+// name, and one made under the name of one that died in the same frame left the dead one behind), car: what it
+// is on, parts: one of the structures below, offset: where on the car (from its model's origin, along its left,
+// up and the way it faces), pos: that place now. Each structure has LocalSpace and UseStartPosition, as the
+// game's own fireball: its places are from the effect's object, which the lock moves with the car (without
+// them the game takes them as places in the world, at its middle).
 SCRIPT Flickit_CarFx
 	IF ObjectExists id = <fx>
 		<fx> : Die
@@ -282,7 +286,7 @@ SCRIPT Flickit_CarFx
 	ENDIF
 	CreateCompositeObject {
 		Components = skater_particle_composite_structure
-		params = { name = <fx> NeverSuspend <parts> }
+		params = { name = <fx> pos = <pos> LocalSpace UseStartPosition NeverSuspend <parts> }
 	}
 	<fx> : Obj_LockToObject id = <car> <offset>
 ENDSCRIPT
@@ -295,6 +299,8 @@ ENDSCRIPT
 
 Flickit_FxSmoke = {
 	type = NEWFLAT
+	LocalSpace
+	UseStartPosition
 	texture = dt_generic_particle01
 	blendmode = blend
 	FixedAlpha = 128
@@ -321,15 +327,17 @@ Flickit_FxSmoke = {
 	MidRadiusSpread = 4
 	EndRadiusSpread = 6
 	StartRGB = [ 110 , 110 , 110 ]
-	StartAlpha = 50
+	StartAlpha = 90
 	ColorMidTime = 40
 	MidRGB = [ 95 , 95 , 95 ]
-	MidAlpha = 40
+	MidAlpha = 70
 	EndRGB = [ 85 , 85 , 85 ]
 	EndAlpha = 0
 }
 Flickit_FxSmokeHeavy = {
 	type = NEWFLAT
+	LocalSpace
+	UseStartPosition
 	texture = dt_generic_particle01
 	blendmode = blend
 	FixedAlpha = 128
@@ -356,15 +364,17 @@ Flickit_FxSmokeHeavy = {
 	MidRadiusSpread = 6
 	EndRadiusSpread = 10
 	StartRGB = [ 45 , 43 , 40 ]
-	StartAlpha = 100
+	StartAlpha = 140
 	ColorMidTime = 40
 	MidRGB = [ 35 , 33 , 30 ]
-	MidAlpha = 80
+	MidAlpha = 110
 	EndRGB = [ 30 , 30 , 30 ]
 	EndAlpha = 0
 }
 Flickit_FxSmokeBurnt = {
 	type = NEWFLAT
+	LocalSpace
+	UseStartPosition
 	texture = dt_generic_particle01
 	blendmode = blend
 	FixedAlpha = 128
@@ -391,15 +401,17 @@ Flickit_FxSmokeBurnt = {
 	MidRadiusSpread = 5
 	EndRadiusSpread = 8
 	StartRGB = [ 35 , 33 , 30 ]
-	StartAlpha = 60
+	StartAlpha = 90
 	ColorMidTime = 40
 	MidRGB = [ 30 , 30 , 30 ]
-	MidAlpha = 45
+	MidAlpha = 65
 	EndRGB = [ 30 , 30 , 30 ]
 	EndAlpha = 0
 }
 Flickit_FxFire = {
 	type = NEWFLAT
+	LocalSpace
+	UseStartPosition
 	texture = dt_nj_flame02
 	blendmode = add
 	FixedAlpha = 128
@@ -435,6 +447,8 @@ Flickit_FxFire = {
 }
 Flickit_FxBoomFire = {
 	type = NEWFLAT
+	LocalSpace
+	UseStartPosition
 	texture = dt_nj_flame02
 	blendmode = add
 	FixedAlpha = 128
@@ -470,6 +484,8 @@ Flickit_FxBoomFire = {
 }
 Flickit_FxBoomSmoke = {
 	type = NEWFLAT
+	LocalSpace
+	UseStartPosition
 	texture = dt_generic_particle01
 	blendmode = blend
 	FixedAlpha = 128
@@ -509,11 +525,11 @@ Flickit_FxBoomSmoke = {
 SCRIPT Flickit_CarBoom
 	CreateCompositeObject {
 		Components = explosion_composite_structure
-		params = { pos = <pos> NoName SystemLifetime = 700 NeverSuspend Flickit_FxBoomFire }
+		params = { pos = <pos> NoName SystemLifetime = 700 LocalSpace UseStartPosition NeverSuspend Flickit_FxBoomFire }
 	}
 	CreateCompositeObject {
 		Components = explosion_composite_structure
-		params = { pos = <pos> NoName SystemLifetime = 1800 NeverSuspend Flickit_FxBoomSmoke }
+		params = { pos = <pos> NoName SystemLifetime = 1800 LocalSpace UseStartPosition NeverSuspend Flickit_FxBoomSmoke }
 	}
 	PlaySound FlamingFireBall01 vol = <vol> pitch = 55
 ENDSCRIPT
