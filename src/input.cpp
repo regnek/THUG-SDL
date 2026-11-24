@@ -13,6 +13,7 @@
 #include "camrel_game.h"
 #include "worldmap_game.h"
 #include "drive_game.h"
+#include "players_game.h"
 #include "guard_game.h"
 #include "flickit_pose.h"
 #include <QB/LazyStruct.h>
@@ -486,6 +487,7 @@ void loadFlickitSettings() {
 	}
 	WorldMapGame::Configure(configFile);
 	DriveGame::Configure(configFile);
+	PlayersGame::Configure(configFile);
 
 	loadFlickitPatterns(configFile, s.enabled && s.patterns);
 
@@ -1979,6 +1981,10 @@ void handleInputEvent(SDL_Event* e) {
 		// Camera-relative drawing of the level on and off, to compare
 		if (CamRelGame::ToggleKey() > 0 && (int)e->key.keysym.scancode == CamRelGame::ToggleKey() && !e->key.repeat) {
 			CamRelGame::Toggle();
+		}
+		// A run recorded for the fake players, started and stopped
+		if (PlayersGame::RunKey() > 0 && (int)e->key.keysym.scancode == PlayersGame::RunKey() && !e->key.repeat) {
+			PlayersGame::RunKeyPressed();
 		}
 		setUsingKeyboard(1);
 		do_key_input((SDL_KeyCode)e->key.keysym.sym);

@@ -46,15 +46,19 @@ jobs:
           ./drive_test
           g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -I src tests/guard_test.cpp -o guard_test
           ./guard_test
-      - name: Flickit's car scripts
+          g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -I src tests/players_test.cpp -o players_test
+          ./players_test
+      - name: Flickit's car and player scripts
         run: |
           # the compiler gives the game's own compiled files for these sources (but for the order of the names)
           for f in game/misc/car_scripts game/player_controlled_vehicle game/skater/switch_control game/goal_utilities thugsdl/thugsdl_scripts; do
             python3 scripts/flickit/qbc.py --check scripts/qb/source/scripts/$f.q scripts/qb/compiled/scripts/$f.qb
           done
-          # and src/flickit_cars_qb.h is what scripts/flickit/cars.q compiles to
+          # and src/flickit_cars_qb.h is what scripts/flickit/cars.q compiles to, src/flickit_players_qb.h players.q
           python3 scripts/flickit/qbc.py --header scripts/flickit/cars.q /tmp/flickit_cars_qb.h
           diff /tmp/flickit_cars_qb.h src/flickit_cars_qb.h
+          python3 scripts/flickit/qbc.py --header scripts/flickit/players.q /tmp/flickit_players_qb.h
+          diff /tmp/flickit_players_qb.h src/flickit_players_qb.h
 
   build:
     runs-on: windows-latest

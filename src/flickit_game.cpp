@@ -4,6 +4,7 @@
 #include "autosave.h"
 #include "bigworld.h"
 #include "drive_game.h"
+#include "players_game.h"
 
 #include <windows.h>
 #include <string.h>
@@ -3237,18 +3238,23 @@ namespace FlickitGame {
 		}
 	}
 
-	// The cars (drive_game.h): him as they need him, once a frame after the game has read his pad
+	// The other players (players_game.h) and the cars (drive_game.h): him as they need him, once a frame after
+	// the game has read his pad. Circle is for the nearer of a player and a car in reach.
 	static void CarsFrame(uint8_t* skater, const uint8_t* core, uint8_t* input) {
 		const uint8_t* state = *(const uint8_t* const*)(core + CORE_STATE);
 		DriveGame::Skater s;
 		s.object = skater;
 		s.pos = (const float*)(skater + OBJECT_POSITION);
 		s.take = input + INPUT_CIRCLE_PRESSED;
+		s.otherAway = 1.0e9f;
 		s.driving = state && state[STATE_DRIVING] != 0;
 		s.free = state && !s.driving && state[STATE_BAILING] == 0 && *(const int32_t*)(state + STATE_STATE) == 0
 			&& input[INPUT_DISABLED] == 0 && input[INPUT_NET_DISABLED] == 0
 			&& Watchdog::Sane((const float*)(skater + OBJECT_POSITION), 3);
+		PlayersGame::Frame(s);
+		s.otherAway = PlayersGame::NearestAway();
 		DriveGame::PadFrame(s);
+		PlayersGame::AfterCars(s, DriveGame::CarAway());
 	}
 
 	static void __fastcall PadUpdateHook(uint8_t* pad, void* /*edx*/, void* data) {

@@ -235,6 +235,7 @@ namespace DriveGame {
 	static LARGE_INTEGER s_lastFrame;        // zero: no frame yet
 	static uint32_t s_lastComeBack = 0;
 	static uint32_t s_lastGoesBack = 0;
+	static float s_carAway = 1.0e9f;         // the nearest car in reach on this frame (CarAway)
 
 	/******************************************************************/
 	/*                                                                */
@@ -600,7 +601,16 @@ namespace DriveGame {
 		s_grabMade = made;
 	}
 
+	bool FlickitGrab() {
+		return s_grabMade;
+	}
+
+	float CarAway() {
+		return s_carAway;
+	}
+
 	void PadFrame(const DriveGame::Skater& s) {
+		s_carAway = 1.0e9f;
 		if (!s_on || !Ready() || !Parsed() || !s.object || !s.pos || !s.take) {
 			return;
 		}
@@ -669,6 +679,12 @@ namespace DriveGame {
 				best = i;
 				bestAway = away;
 			}
+		}
+
+		// another player nearer than the car has Circle (players_game.h)
+		s_carAway = best >= 0 ? bestAway : 1.0e9f;
+		if (best >= 0 && s.otherAway < bestAway) {
+			best = -1;
 		}
 
 		// a car he left long enough ago back where it came from, once a second at most

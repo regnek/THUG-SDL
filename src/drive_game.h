@@ -6,7 +6,8 @@
 // game's own drivable car (PlayerVehicle) with the model of the car taken, put where that car was, facing its
 // way, and given its speed. Holding Triangle stops it and gets him out (the game's own); he stands beside the
 // driver's door on his board, and the car stays there, on the ground under it, to be taken again (the last four
-// he left are kept). While a car is in reach the game's own "Press Circle to drive." box shows.
+// he left are kept). While a car is in reach the game's own "Press Circle to drive." box shows, unless another
+// player is nearer (players_game.h): then Circle is his.
 // A car of the level's traffic comes back at the start of its way once he is far from there.
 //
 // The steps are scripts of Flickit's own (scripts/flickit/cars.q, compiled into flickit_cars_qb.h), which
@@ -22,6 +23,8 @@ namespace DriveGame {
 		uint8_t* take;             // the game's Circle button: one byte, down or not (cleared for a press that takes a car)
 		bool free;                 // on the ground (or walking), not in a bail, the controls his
 		bool driving;
+		float otherAway;           // how far the other thing Circle is for is (another player: players_game.h), a large
+		                           // number with none: a car only gets Circle when it is nearer
 	};
 
 	// [Flickit] Cars (1 on), CarReach (how close to a car's body, in game units: 45 by default), CarParkedTime
@@ -41,4 +44,8 @@ namespace DriveGame {
 
 	// Once a frame, after the game has read the local skater's pad
 	void PadFrame(const Skater& s);
+	// How far the nearest car in reach was on this frame (from its body), a large number with none
+	float CarAway();
+	// Whether the game's Circle on this frame's pad data is Flickit's own (a trigger grab), not his
+	bool FlickitGrab();
 }

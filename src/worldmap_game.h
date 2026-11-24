@@ -8,11 +8,18 @@
 // controller or the keyboard; A travels to the spot under the cursor through the game's custom restart (see
 // FlickitGame::RequestTravel), Y marks where the skater is as a spot of his own.
 //
+// The card of another player (players_game.h) is drawn here too, with the map's letters: who he is, his
+// sponsors, his story and his stats, and below them what can be done with him (Play S.K.A.T.E., Race, Join
+// party: not built yet, they come with online play). Up and down pick, A takes, B closes; the game is paused
+// while it is up, as for the map.
+//
 // It needs Flickit's hooks in the game (FlickitGame::Installed): the pad update is where the skater is read
 // and where he is moved. Everything here runs on the game's main thread: the look at the controller and the
 // end of the frame are both there.
 #include <stdint.h>
 #include <SDL.h>
+
+#include "players.h"
 
 namespace WorldMapGame {
 	// [Flickit] Map, MapButton, MapHoldMs, MapKey; the map and its spots from next to the exe; and the
@@ -32,4 +39,9 @@ namespace WorldMapGame {
 	void AfterPoll(uint8_t* controlData, SDL_GameController* controller, int cameraButton, bool inMenu, bool menuUp);
 
 	bool IsOpen();
+
+	// A player's card, asked for from the game's frame (Circle by him): it opens at the next look at the
+	// controller, if it can then. False when there is no card to draw (the map is off or has no file).
+	bool AskCard(const Players::Identity& who);
+	bool CardOpen();
 }

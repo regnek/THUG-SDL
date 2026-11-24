@@ -1,5 +1,6 @@
 #include "script.h"
 #include "drive_game.h"
+#include "players_game.h"
 #include "flickit_game.h"
 
 /*
@@ -98,6 +99,7 @@ void initScriptPatch() {
 	setCavemanKeys();
 	setLadderGrabKeys();
 	DriveGame::AtScriptsLoaded();   /* Flickit's car scripts */
+	PlayersGame::AtScriptsLoaded(); /* and its player scripts */
 }
 
 

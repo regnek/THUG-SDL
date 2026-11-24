@@ -106,6 +106,27 @@ namespace WorldMapGame {
 	static uint32_t s_toastAt = 0;
 	static const uint32_t kToastMs = 2600;
 
+	// The card of another player (players_game.h): what can be done with him, and whether it is built yet
+	struct CardItem {
+		const char* text;
+		bool built;
+	};
+	static const CardItem kCardItems[] = {
+		{ "Play S.K.A.T.E.", false },
+		{ "Race", false },
+		{ "Join party", false },
+		{ "Close", true },
+	};
+	enum { kCardItemCount = sizeof(kCardItems) / sizeof(kCardItems[0]) };
+	static bool s_cardAsked = false;    // asked for on a frame of the game's, to open at the next look at the pad
+	static Players::Identity s_cardWho;
+	static bool s_cardOpen = false;
+	static int s_cardPick = 0;
+	static WorldMap::Pad s_cardWas;     // the pad on the look before: a press is a button going down
+	static int s_cardStickWas = 0;      // the stick up (-1) or down (1) on the look before
+	static std::string s_cardMessage;
+	static uint32_t s_cardMessageUntil = 0;
+
 	static double Seconds() {
 		static double perSecond = 0.0;
 		LARGE_INTEGER v;
@@ -398,6 +419,110 @@ namespace WorldMapGame {
 		Log::TypedLog(CHN_SDL, "Map: marked %s at %.0f %.0f %.0f\n", kept.name.c_str(), kept.x, kept.y, kept.z);
 	}
 
+	/******************************************************************/
+	/*  The card of another player                                    */
+	/******************************************************************/
+
+	// NULL when the card can open now, else why not (for the log)
+	static const char* CardRefusal(bool inMenu) {
+		if (!s_ready) {
+			return "the map is off";
+		}
+		if (inMenu) {
+			return "a menu is up";
+		}
+		const uint8_t* frontEnd = *kFrontEnd;
+		if (!frontEnd || frontEnd[FRONTEND_PAUSED]) {
+			return "the game is paused";
+		}
+		if (NetGame()) {
+			return "this is a net game";
+		}
+		FlickitGame::Whereabouts w;
+		if (!FlickitGame::SkaterWhereabouts(w) || GetTickCount() - w.tick > 500) {
+			return "no skater has been seen";
+		}
+		if (!w.controls) {
+			return "the skater's controls are taken";
+		}
+		return NULL;
+	}
+
+	static void OpenCard(const WorldMap::Pad& now) {
+		ScreenSize();
+		s_cardPick = 0;
+		s_cardWas = now;                // what is down already (the Circle that asked) does nothing
+		s_cardStickWas = now.ly < -0.5f ? -1 : (now.ly > 0.5f ? 1 : 0);
+		s_cardMessage.clear();
+		s_toast.clear();
+		PauseGame(*kFrontEnd, true);
+		s_cardOpen = true;
+		Log::TypedLog(CHN_SDL, "Map: the card of %s (%s, %s), open\n", s_cardWho.name, Players::SponsorName(s_cardWho.sponsor), s_cardWho.level);
+	}
+
+	static void CloseCard(bool unpause) {
+		s_cardOpen = false;
+		const uint8_t* frontEnd = *kFrontEnd;
+		if (unpause && frontEnd && frontEnd[FRONTEND_PAUSED]) {
+			PauseGame(*kFrontEnd, false);
+		}
+		s_holdOff = true;
+		s_holdOffSince = GetTickCount();
+	}
+
+	static void CardFrame(uint8_t* cd, SDL_GameController* c, const Uint8* keys, bool menuUp) {
+		if (menuUp) {
+			Log::TypedLog(CHN_SDL, "Map: the card closed for a menu of the game's\n");
+			CloseCard(false);
+			return;
+		}
+		if (NetGame() || !*kFrontEnd || !(*kFrontEnd)[FRONTEND_PAUSED]) {
+			Log::TypedLog(CHN_SDL, "Map: the card closed by the game\n");
+			CloseCard(false);
+			Blank(cd, true);
+			return;
+		}
+		const WorldMap::Pad p = ReadPad(c, keys);
+		const int stick = p.ly < -0.5f ? -1 : (p.ly > 0.5f ? 1 : (fabsf(p.ly) < 0.3f ? 0 : s_cardStickWas));
+		int move = 0;
+		if ((p.up && !s_cardWas.up) || (stick < 0 && s_cardStickWas >= 0)) {
+			move = -1;
+		}
+		if ((p.down && !s_cardWas.down) || (stick > 0 && s_cardStickWas <= 0)) {
+			move = 1;
+		}
+		s_cardPick = (s_cardPick + move + kCardItemCount) % kCardItemCount;
+		const bool choose = p.a && !s_cardWas.a;
+		const bool close = (p.b && !s_cardWas.b) || (p.back && !s_cardWas.back) || (p.start && !s_cardWas.start);
+		s_cardWas = p;
+		s_cardStickWas = stick;
+		if (close || (choose && kCardItems[s_cardPick].built)) {
+			Log::TypedLog(CHN_SDL, "Map: the card of %s, closed\n", s_cardWho.name);
+			CloseCard(true);
+			Blank(cd, true);
+			return;
+		}
+		if (choose) {
+			s_cardMessage = std::string(kCardItems[s_cardPick].text) + " is not built yet: it comes with online play.";
+			s_cardMessageUntil = GetTickCount() + 2600;
+			Log::TypedLog(CHN_SDL, "Map: %s with %s: not built yet\n", kCardItems[s_cardPick].text, s_cardWho.name);
+		}
+		Blank(cd, true);
+	}
+
+	bool AskCard(const Players::Identity& who) {
+		if (!s_ready || s_open || s_cardOpen) {
+			return false;
+		}
+		s_cardWho = who;
+		s_cardAsked = true;
+		return true;
+	}
+
+	bool CardOpen() {
+		return s_cardOpen || s_cardAsked;
+	}
+
 	static void TravelTo(int i, bool mapButtonDown) {
 		const WorldMap::Spot& s = s_spots[i];
 		if (s_where.driving) {
@@ -513,6 +638,28 @@ namespace WorldMapGame {
 			s_buttonWas = buttonDown;
 			s_gateOpened = false;
 			return;
+		}
+		if (s_cardOpen) {
+			CardFrame(cd, c, keys, menuUp);
+			s_keyWas = keyDown;
+			s_buttonWas = buttonDown;
+			s_gateOpened = false;
+			return;
+		}
+		if (s_cardAsked) {
+			s_cardAsked = false;
+			const char* why = CardRefusal(inMenu);
+			if (why) {
+				Log::TypedLog(CHN_SDL, "Map: the card of %s, not now: %s\n", s_cardWho.name, why);
+			}
+			else {
+				OpenCard(ReadPad(c, keys));
+				Blank(cd, true);
+				s_keyWas = keyDown;
+				s_buttonWas = buttonDown;
+				s_gateOpened = false;
+				return;
+			}
 		}
 		if (s_holdOff) {
 			if (AnyHeld(c, keys) && GetTickCount() - s_holdOffSince < 1500) {
@@ -980,12 +1127,137 @@ namespace WorldMapGame {
 		}
 	}
 
+	// A line of what the buttons do, centred on cx: the buttons in a colour of their own
+	static void ButtonLine(const char* const (*items)[2], int n, float cx, float y, float px) {
+		const float gap = px * 0.45f, space = px * 1.4f;
+		float total = 0.0f;
+		for (int i = 0; i < n; i++) {
+			total += TextWidth(items[i][0], px) + gap + TextWidth(items[i][1], px) + (i + 1 < n ? space : 0.0f);
+		}
+		float x = cx - total * 0.5f;
+		for (int i = 0; i < n; i++) {
+			Text(items[i][0], x, y, px, Rgba(255, 210, 120, 255), -1);
+			x += TextWidth(items[i][0], px) + gap;
+			Text(items[i][1], x, y, px, Rgba(235, 238, 245, 230), -1);
+			x += TextWidth(items[i][1], px) + space;
+		}
+	}
+
+	// The card of another player: who he is at the top (his sponsor level, his name, the companies he rides
+	// for), his story and his stats in the middle, and what can be done with him below
+	static void DrawCard(IDirect3DDevice9* dev) {
+		const float W = (float)s_screenW, H = (float)s_screenH, ui = (float)s_ui;
+		const Players::Identity& p = s_cardWho;
+		const D3DCOLOR accent = p.sponsor == Players::kPro ? Rgba(255, 196, 70, 255)
+			: p.sponsor == Players::kAm ? Rgba(96, 182, 255, 255) : Rgba(178, 184, 196, 255);
+		const D3DCOLOR white = Rgba(255, 255, 255, 255), soft = Rgba(226, 230, 238, 235), dim = Rgba(146, 153, 167, 235);
+		const D3DCOLOR line = Rgba(255, 255, 255, 34);
+		const float cw = 640.0f * ui, ch = 896.0f * ui, pad = 40.0f * ui;
+		float x0 = floorf(W * 0.64f - cw * 0.5f);
+		x0 = x0 + cw > W - 40.0f * ui ? W - 40.0f * ui - cw : x0;
+		x0 = x0 < 40.0f * ui ? 40.0f * ui : x0;
+		const float y0 = floorf((H - ch) * 0.5f - 16.0f * ui), x1 = x0 + cw, y1 = y0 + ch;
+		const float L = x0 + pad, R = x1 - pad;
+		const float d1 = y0 + 206.0f * ui, d2 = y0 + 306.0f * ui, d3 = y0 + 634.0f * ui;
+		const float statsTop = y0 + 356.0f * ui, rowPitch = 54.0f * ui, colGap = 36.0f * ui;
+		const float colW = (R - L - colGap) * 0.5f;
+		const float menuTop = y0 + 650.0f * ui, itemPitch = 50.0f * ui, itemH = 46.0f * ui;
+		const std::string level = Upper(Players::SponsorName(p.sponsor));
+		const float badgePx = 17.0f * ui, badgeW = TextWidth(level, badgePx, 0.14f) + 22.0f * ui;
+
+		// the game behind it dimmed, the card, its colour at the top, the lines between its parts
+		Quad(0, 0, W, H, Rgba(0, 0, 0, 110));
+		Quad(x0 - 1.0f * ui, y0 - 1.0f * ui, x1 + 1.0f * ui, y1 + 1.0f * ui, Rgba(255, 255, 255, 30));
+		Quad(x0, y0, x1, y1, Rgba(12, 14, 20, 238));
+		Quad(x0, y0, x1, y0 + 5.0f * ui, accent);
+		Quad(L, d1, R, d1 + 1.0f * ui, line);
+		Quad(L, d2, R, d2 + 1.0f * ui, line);
+		Quad(L, d3, R, d3 + 1.0f * ui, line);
+		// the badge of his sponsor level
+		Quad(L, y0 + 30.0f * ui, L + badgeW, y0 + 58.0f * ui, accent);
+		// the stats' bars: ten steps each
+		const float stepGap = 3.0f * ui, stepW = (colW - 9.0f * stepGap) / 10.0f;
+		for (int k = 0; k < Players::kStats; k++) {
+			const float cx = L + (k / 5) * (colW + colGap), top = statsTop + (k % 5) * rowPitch + 28.0f * ui;
+			for (int i = 0; i < 10; i++) {
+				const float sx = cx + i * (stepW + stepGap);
+				Quad(sx, top, sx + stepW, top + 8.0f * ui, i < p.stats[k] ? accent : Rgba(255, 255, 255, 30));
+			}
+		}
+		// the pick in the menu
+		{
+			const float top = menuTop + s_cardPick * itemPitch;
+			Quad(x0 + 16.0f * ui, top, x1 - 16.0f * ui, top + itemH, Rgba(255, 255, 255, 24));
+			Quad(x0 + 16.0f * ui, top, x0 + 20.0f * ui, top + itemH, accent);
+		}
+		Flush(dev, NULL);
+		if (!s_fontTex) {
+			return;
+		}
+
+		// who he is
+		Text(level, L + 11.0f * ui, y0 + 35.0f * ui, badgePx, Rgba(12, 14, 20, 255), -1, 0.14f, false);
+		Text("TEST PLAYER", R, y0 + 38.0f * ui, 15.0f * ui, dim, 1, 0.16f, false);
+		{
+			float px = 52.0f * ui;
+			const float room = R - L;
+			const float w = TextWidth(p.name, px);
+			px = w > room ? px * room / w : px;
+			Text(p.name, L, y0 + 70.0f * ui, px, white, -1);
+		}
+		if (p.sponsor == Players::kUnsponsored) {
+			Text("No sponsors yet", L, y0 + 150.0f * ui, 25.0f * ui, dim, -1, 0.0f, false);
+		}
+		else {
+			Text("BOARD", L, y0 + 140.0f * ui, 15.0f * ui, dim, -1, 0.16f, false);
+			Text(p.board, L, y0 + 160.0f * ui, 27.0f * ui, soft, -1, 0.0f, false);
+			Text("SHOES", L + colW + colGap, y0 + 140.0f * ui, 15.0f * ui, dim, -1, 0.16f, false);
+			Text(p.shoes, L + colW + colGap, y0 + 160.0f * ui, 27.0f * ui, soft, -1, 0.0f, false);
+		}
+		// his story
+		{
+			char goals[16];
+			sprintf_s(goals, sizeof(goals), "%d", p.goals);
+			Text("STORY", L, y0 + 226.0f * ui, 15.0f * ui, dim, -1, 0.16f, false);
+			Text("GOALS", R, y0 + 226.0f * ui, 15.0f * ui, dim, 1, 0.16f, false);
+			Text(p.level, L, y0 + 248.0f * ui, 28.0f * ui, white, -1, 0.0f, false);
+			Text(goals, R, y0 + 248.0f * ui, 28.0f * ui, white, 1, 0.0f, false);
+		}
+		// his stats
+		Text("STATS", L, y0 + 326.0f * ui, 15.0f * ui, dim, -1, 0.16f, false);
+		for (int k = 0; k < Players::kStats; k++) {
+			const float cx = L + (k / 5) * (colW + colGap), top = statsTop + (k % 5) * rowPitch;
+			char value[8];
+			sprintf_s(value, sizeof(value), "%d", p.stats[k]);
+			Text(Players::StatName(k), cx, top, 19.0f * ui, soft, -1, 0.0f, false);
+			Text(value, cx + colW, top, 19.0f * ui, white, 1, 0.0f, false);
+		}
+		// what can be done with him
+		for (int i = 0; i < kCardItemCount; i++) {
+			const float top = menuTop + i * itemPitch;
+			const bool picked = i == s_cardPick;
+			Text(kCardItems[i].text, L, top + 9.0f * ui, 27.0f * ui, picked ? white : Rgba(220, 224, 232, 185), -1, 0.0f, false);
+			if (!kCardItems[i].built) {
+				Text("SOON", R, top + 16.0f * ui, 14.0f * ui, Rgba(255, 210, 120, picked ? 220 : 150), 1, 0.16f, false);
+			}
+		}
+		if (!s_cardMessage.empty() && (int32_t)(s_cardMessageUntil - GetTickCount()) > 0) {
+			Text(s_cardMessage, (x0 + x1) * 0.5f, y0 + 858.0f * ui, 20.0f * ui, Rgba(255, 210, 120, 255), 0, 0.0f, false);
+		}
+		// the buttons, under the card
+		static const char* const kPad[][2] = { { "D-pad", "Choose" }, { "A", "Select" }, { "B", "Close" } };
+		static const char* const kPs[][2] = { { "D-pad", "Choose" }, { "Cross", "Select" }, { "Circle", "Close" } };
+		static const char* const kKeys[][2] = { { "Arrows", "Choose" }, { "Enter", "Select" }, { "Esc", "Close" } };
+		ButtonLine(s_keyboardLast ? kKeys : s_playStation ? kPs : kPad, 3, (x0 + x1) * 0.5f, y1 + 18.0f * ui, 21.0f * ui);
+		Flush(dev, s_fontTex);
+	}
+
 	static void __cdecl DrawFrameEnd() {
 		if (!s_ready) {
 			return;
 		}
 		const bool toast = !s_toast.empty() && GetTickCount() - s_toastAt < kToastMs;
-		if (!s_open && s_charge <= 0.35 && !toast) {
+		if (!s_open && !s_cardOpen && s_charge <= 0.35 && !toast) {
 			return;
 		}
 		IDirect3DDevice9* dev = *kDevice;
@@ -1014,6 +1286,9 @@ namespace WorldMapGame {
 		s_tris.clear();
 		if (s_open) {
 			DrawMap(dev);
+		}
+		else if (s_cardOpen) {
+			DrawCard(dev);
 		}
 		else {
 			DrawOver(dev);
@@ -1047,6 +1322,10 @@ namespace WorldMapGame {
 		if (s_open) {
 			Close(true, false);
 		}
+		if (s_cardOpen) {
+			CloseCard(true);
+		}
+		s_cardAsked = false;
 		s_ready = false;
 		if (!on) {
 			Log::TypedLog(CHN_SDL, "Map: off ([Flickit] Map=0)\n");
