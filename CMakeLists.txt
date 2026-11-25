@@ -48,6 +48,7 @@ set(HEADER_FILES
 	"${SRC}/flickit_game.h"
 	"${SRC}/memory.h"
 	"${SRC}/bigworld.h"
+	"${SRC}/facelist.h"
 	"${SRC}/camrel.h"
 	"${SRC}/camrel_game.h"
 	"${SRC}/worldmap.h"

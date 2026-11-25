@@ -3284,6 +3284,25 @@ namespace FlickitGame {
 		PlayersGame::AfterCars(s, DriveGame::CarAway());
 	}
 
+	// The news of the collision's faces in a box (BigWorld), once a second and 30 times a session at most:
+	// written here, between frames, rather than from inside the collision
+	static void FaceListFrame() {
+		static DWORD s_last = 0;
+		static int s_notes = 0;
+		const DWORD now = GetTickCount();
+		if (s_notes >= 30 || (s_last && now - s_last < 1000)) {
+			return;
+		}
+		s_last = now;
+		char news[400];
+		if (BigWorld::FaceListNews(news, sizeof(news))) {
+			WatchNote(news);
+			if (++s_notes == 30) {
+				WatchNote("BigWorld: no more notes on the faces in a box this session");
+			}
+		}
+	}
+
 	static void __fastcall PadUpdateHook(uint8_t* pad, void* /*edx*/, void* data) {
 		PadUpdate(pad, data);
 		if (s_turnKept && s_turnKept + INPUT_PAD == pad) {
@@ -3302,6 +3321,7 @@ namespace FlickitGame {
 		MapFrame(skater, core);
 		CarsFrame(skater, core, input);
 		DayNightGame::Frame();
+		FaceListFrame();
 		RailExitFrame(skater, (uint8_t*)core);
 		ShowCrouch(skater);
 		KeepStance(skater);

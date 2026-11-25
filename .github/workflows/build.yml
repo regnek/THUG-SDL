@@ -56,6 +56,8 @@ jobs:
           ./peds_test
           g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -I src tests/daynight_test.cpp -o daynight_test
           ./daynight_test
+          g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -I src tests/facelist_test.cpp -o facelist_test
+          ./facelist_test
       - name: Flickit's car and player scripts
         run: |
           # the compiler gives the game's own compiled files for these sources (but for the order of the names)

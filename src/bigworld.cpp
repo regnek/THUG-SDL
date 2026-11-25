@@ -1,8 +1,10 @@
 #include <windows.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "bigworld.h"
+#include "facelist.h"
 #include "nodenames.h"
 #include "patch.h"
 #include "Logger/Logger.h"
@@ -162,6 +164,90 @@ namespace BigWorld {
 		Log::TypedLog(CHN_DLL, "BigWorld: room for %u level lights (the game has 256)\n", kLights);
 	}
 
+	/******************************************************************/
+	/*                                                                */
+	/*  The faces in a box                                            */
+	/*                                                                */
+	/******************************************************************/
+
+	// The game's collision finds the faces of a collision object that a box reaches through the object's BSP
+	// tree (0x0041AFD0, called from 0x004176B1, 0x00419330 and 0x0041966B, which go through the list it gives
+	// back). Its walk (0x0041AF00) appends the face numbers of each leaf the box reaches, 16 bits each, to one
+	// static list at 0x006985D8, the count at 0x006985D0, without looking at the list's size: 6000 numbers, and
+	// right after them the component manager's list heads (0x0069B4B8, one per type of component), its own
+	// pointer (0x0069B6B8) and the object manager's (0x0069B6C0). A box that reached more faces than that wrote
+	// face numbers over those, two consecutive ones where a pointer was: the crashes while driving across the
+	// joined world (0x0041FBB3 and 0x0041CBC0 with 0x003B003A, 0x004515F7 with 0x001B001A in the suspend
+	// components' list). The list moves into the DLL with room for 65536, and a leaf that does not fit is cut
+	// short and counted (src/facelist.h).
+	static const uint32_t kFaceCap = 65536;
+	static const uint32_t kGameFaceCap = 6000;
+	static const uint32_t kLeafAt = 0x0041AF92;          // the walk at a leaf: movzx edx, word ptr [esi+2] ...
+	static const uint32_t kLeafEnd = 0x0041AFC1;         // add [count], edx; pop edi, esi, ebp, ebx; ret 8
+	static const uint32_t kListAt = 0x0041B00D;          // mov eax, list: what 0x0041AFD0 gives back
+	static const uint8_t kLeafBytes[] = { 0x0F, 0xB7, 0x56, 0x02, 0x85, 0xD2, 0xA1, 0xD0, 0x85, 0x69, 0x00, 0x8B, 0x76, 0x04,
+		0x8D, 0x04, 0x45, 0xD8, 0x85, 0x69, 0x00 };
+	static const uint8_t kLeafEndBytes[] = { 0x01, 0x15, 0xD0, 0x85, 0x69, 0x00, 0x5F, 0x5E, 0x5D, 0x5B, 0xC2, 0x08, 0x00 };
+	static uint16_t s_faces[kFaceCap];
+	static volatile uint32_t* const kFaceCount = (volatile uint32_t*)0x006985D0;
+	static FaceList::Tally s_faceTally = { 0, 0, 0 };
+	static bool s_facesOn = false;
+
+	static void __cdecl AppendFaces(const uint16_t* from, uint32_t n) {
+		FaceList::Append(s_faces, kFaceCap, kFaceCount, from, n, kGameFaceCap, &s_faceTally);
+	}
+
+	// In the place of 0x0041AF92: esi is the leaf (its count at +2, its numbers at [+4]); the walk's four
+	// registers are on the stack (edi, esi, ebp, ebx) and its two arguments after its return. Its end is the
+	// walk's own (0x0041AFC7), which its other way out jumps to as well.
+	static __declspec(naked) void LeafHook() {
+		__asm {
+			movzx edx, word ptr [esi + 2]
+			mov eax, dword ptr [esi + 4]
+			push edx
+			push eax
+			call AppendFaces
+			add esp, 8
+			pop edi
+			pop esi
+			pop ebp
+			pop ebx
+			ret 8
+		}
+	}
+
+	static void BigFaceList() {
+		if (memcmp((const void*)(uintptr_t)kLeafAt, kLeafBytes, sizeof(kLeafBytes)) != 0
+			|| memcmp((const void*)(uintptr_t)kLeafEnd, kLeafEndBytes, sizeof(kLeafEndBytes)) != 0
+			|| *(const uint8_t*)(uintptr_t)(kListAt - 1) != 0xB8 || *(const uint32_t*)(uintptr_t)kListAt != 0x006985D8) {
+			Log::TypedLog(CHN_DLL, "BigWorld: the game's list of the faces in a box is not where it was expected, left at 6000 (it overruns past that)\n");
+			return;
+		}
+		patchDWord((void*)(uintptr_t)kListAt, (uint32_t)(uintptr_t)s_faces);
+		patchJump((void*)(uintptr_t)kLeafAt, (void*)LeafHook);
+		s_facesOn = true;
+		Log::TypedLog(CHN_DLL, "BigWorld: room for %u faces in a box of the collision (the game has 6000, and wrote past them over its managers' pointers)\n", kFaceCap);
+	}
+
+	bool FaceListNews(char* text, size_t size) {
+		static FaceList::Told s_told = FaceList::FirstTold(kGameFaceCap);
+		if (!s_facesOn) {
+			return false;
+		}
+		switch (FaceList::NewsOf(s_faceTally, &s_told)) {
+		case FaceList::kDropped:
+			sprintf_s(text, size, "BigWorld: a box in the collision reached more than %u faces; %u face numbers did not fit, all boxes together "
+				"(those faces were not tried); the most a box reached: %u\n", kFaceCap, s_faceTally.dropped, s_faceTally.most);
+			return true;
+		case FaceList::kMost:
+			sprintf_s(text, size, "BigWorld: a box in the collision reached %u faces, past the game's list of 6000 (past that it wrote over its "
+				"managers' pointers: the crashes while driving); %u boxes past 6000 so far\n", s_faceTally.most, s_faceTally.past);
+			return true;
+		default:
+			return false;
+		}
+	}
+
 	void AtStartup(const char* configFile) {
 		if (GetPrivateProfileIntA(MEMORY_SECTION, "BigNodeNames", 1, configFile)) {
 			BigNodeNames();
@@ -174,6 +260,12 @@ namespace BigWorld {
 		}
 		else {
 			Log::TypedLog(CHN_DLL, "BigWorld: the game's 256 level lights (BigLights=0)\n");
+		}
+		if (GetPrivateProfileIntA(MEMORY_SECTION, "BigFaceList", 1, configFile)) {
+			BigFaceList();
+		}
+		else {
+			Log::TypedLog(CHN_DLL, "BigWorld: the game's list of 6000 faces in a box, which overruns (BigFaceList=0)\n");
 		}
 	}
 }
