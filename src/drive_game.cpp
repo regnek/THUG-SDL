@@ -284,6 +284,10 @@ namespace DriveGame {
 		Drive::Box box;
 	};
 	static Driven s_driven;
+	// The car he took, forgotten while PlayerVehicle stayed (he seemed out of it for two seconds of play): if he
+	// drives PlayerVehicle again, it is that car again
+	static Driven s_lastDriven;
+	static float s_outSeconds = 0.0f;        // play he has not been driving the car he took
 	struct Leaving {
 		bool set;
 		uint32_t origin;
@@ -621,6 +625,8 @@ namespace DriveGame {
 		s_back.Clear();
 		memset(&s_taken, 0, sizeof(s_taken));
 		memset(&s_driven, 0, sizeof(s_driven));
+		memset(&s_lastDriven, 0, sizeof(s_lastDriven));
+		s_outSeconds = 0.0f;
 		memset(&s_leaving, 0, sizeof(s_leaving));
 		ResetCrashes();
 		void* nodes = GetGlobalArray(s_n.nodeArray, 0);
@@ -1727,7 +1733,7 @@ namespace DriveGame {
 		else if (!s.driving) {
 			s_hisTold = false;
 		}
-		if (s.driving && s_aroundTold < 8 && now - s_aroundAt > 15000) {
+		if (s.driving && s_aroundTold < 40 && now - s_aroundAt > 10000) {
 			s_aroundAt = now;
 			s_aroundTold++;
 			int traffic = 0, loose = 0;
@@ -1743,8 +1749,15 @@ namespace DriveGame {
 					nearest = d < nearest ? d : nearest;
 				}
 			}
-			Note("Crashes: he drives%s; %d cars of the traffic and %d loose cars in the crashes%s%.0f\n", me ? "" : " (his car not in the crashes)",
-				traffic, loose, me ? ", the nearest's middle " : "", me && nearest < 1.0e9f ? nearest : 0.0f);
+			float fromHim = 0.0f;
+			if (me) {
+				const float dx = me->body.centre[0] - s.pos[0], dz = me->body.centre[1] - s.pos[2];
+				fromHim = sqrtf(dx * dx + dz * dz);
+			}
+			Note("Crashes: he drives at (%.0f %.0f %.0f)%s; %d cars of the traffic and %d loose cars in the crashes%s%.0f%s%.0f\n", s.pos[0], s.pos[1], s.pos[2],
+				me ? "" : !s_driven.set ? " a car Flickit does not know (his car not in the crashes)" : " (PlayerVehicle not found: his car not in the crashes)",
+				traffic, loose, me ? ", the nearest's middle " : "", me && nearest < 1.0e9f ? nearest : 0.0f,
+				me ? " away; his car's middle is this far from him: " : "", fromHim);
 		}
 		Knock knocks[kKnocksAFrame];
 		const int count = Touch(his, (uint8_t*)vehicle, s, now, knocks);
@@ -2109,10 +2122,36 @@ namespace DriveGame {
 			}
 		}
 		if (!s.driving && s_driven.set && !s_leaving.set) {
-			// out of the car some other way (a restart, the end of a goal): it went with PlayerVehicle
-			s_driven.set = false;
-			ComeBackLater(s_driven.origin, now, "the car he drove went with a restart");
-			KillFx(kFxDriven);
+			// Not driving it, and not by getting out (CarLeave): a restart or the end of a goal took the car
+			// (PlayerVehicle goes), or something that only looks so for a while. It stays his until PlayerVehicle
+			// goes, or he has been out of it for two seconds of play (a pause counts for nothing).
+			s_outSeconds += seconds > 0.0f && seconds < 0.25f ? seconds : 0.0f;
+			const bool there = PlayerVehicle(0) != 0;
+			if (!there || s_outSeconds > 2.0f) {
+				Note("Cars: he is out of the car he took (%s) without getting out: %s\n", s_driven.model,
+					there ? "not driving it for two seconds of play (it is his again if he drives it)" : "it went");
+				if (there) {
+					s_lastDriven = s_driven;
+				}
+				s_driven.set = false;
+				s_outSeconds = 0.0f;
+				ComeBackLater(s_driven.origin, now, "the car he drove went with a restart");
+				KillFx(kFxDriven);
+			}
+		}
+		else {
+			if (s.driving && s_driven.set && s_outSeconds > 0.0f) {
+				Note("Cars: he is driving the car he took again, after %.2f s of play not driving it\n", s_outSeconds);
+			}
+			s_outSeconds = 0.0f;
+		}
+		// He drives PlayerVehicle, and it is the car he took, forgotten above: his again
+		if (s.driving && !s_driven.set && s_lastDriven.set && !s_taken.set && PlayerVehicle(0)) {
+			s_driven = s_lastDriven;
+			s_lastDriven.set = false;
+			s_back.Remove(s_driven.origin);
+			s_drivenHaveVel = false;
+			Note("Cars: he drives the car he took again (%s): it is his once more, in the crashes too\n", s_driven.model);
 		}
 
 		// where each car is and how fast it goes, and the nearest in reach
@@ -2283,6 +2322,7 @@ namespace DriveGame {
 			s_drivenHealth = Crash::Whole();
 		}
 		s_drivenHaveVel = false;
+		s_lastDriven.set = false;
 		s_driven.set = true;
 		s_driven.origin = s_taken.origin;
 		strncpy_s(s_driven.model, sizeof(s_driven.model), s_taken.model, _TRUNCATE);

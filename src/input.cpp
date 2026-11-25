@@ -1412,7 +1412,11 @@ void pollController(device* dev, SDL_GameController* controller) {
 					flickit = (flickitMode == FLICKIT_ON);
 
 					// The board button (Triangle, as in Skate) gets him off the board and back on, through the game's
-					// own button for that (Black: the PC's SwitchControl_Trigger). Not in a car: there it stays the
+					// own way for that: SwitchControl_Trigger. Its trigger is L1 and R1 pressed within 400 ms of each
+					// other: the game picks Xbox_Trigger (Black) only on the platform it sets from the registry
+					// (0x0057CF70: [0x007CA188] = 6), and THUG-SDL leaves that call out (config.cpp, 0x0057CCAC), so
+					// the platform stays 0 and the PS2's Trigger is the one (0x00452220). A press of the button gives
+					// the game L1 and R1 for three frames, as both bumpers did. Not in a car: there it stays the
 					// game's (Triangle held stops the car and gets him out), as it does with Flickit off.
 					int boardButton = -1;
 					if (dev->port == 0 && flickitMode != FLICKIT_OFF && flickitSettings.boardButton >= 0) {
@@ -1421,23 +1425,34 @@ void pollController(device* dev, SDL_GameController* controller) {
 							boardButton = flickitSettings.boardButton;
 						}
 					}
-					if (boardButton >= 0 && getButton(controller, (controllerButton)boardButton)) {
-						dev->controlData[20] |= 0x01 << 0;
-					}
-					// What the board button did, for the first presses of a run (flickit_watchdog.txt)
 					if (dev->port == 0 && flickitSettings.boardButton >= 0) {
 						static bool s_boardWas = false;
+						static int s_boardPulse = 0;
 						static int s_boardTold = 0;
 						const bool down = getButton(controller, (controllerButton)flickitSettings.boardButton) != 0;
-						if (down && !s_boardWas && s_boardTold < 20) {
+						const bool pressed = down && !s_boardWas;
+						s_boardWas = down;
+						if (pressed && boardButton >= 0) {
+							s_boardPulse = 3;
+						}
+						if (boardButton < 0) {
+							s_boardPulse = 0;
+						}
+						if (s_boardPulse > 0) {
+							s_boardPulse--;
+							dev->controlData[3] |= (0x01 << 2) | (0x01 << 3);   // L1, R1
+							dev->controlData[16] = 0xff;
+							dev->controlData[17] = 0xff;
+						}
+						// What it did, for the first presses of a run (flickit_watchdog.txt)
+						if (pressed && s_boardTold < 20) {
 							s_boardTold++;
 							char text[160];
 							sprintf_s(text, sizeof(text), "Buttons: the board button (%d) down: %s\n", flickitSettings.boardButton,
-								boardButton >= 0 ? (flickitMode == FLICKIT_ON ? "Black to the game, on the board" : "Black to the game, off the board")
+								boardButton >= 0 ? (flickitMode == FLICKIT_ON ? "L1 + R1 to the game, on the board" : "L1 + R1 to the game, off the board")
 								: flickitMode == FLICKIT_OFF ? "left to the game (Flickit is off)" : "left to the game (in a car)");
 							FlickitGame::WatchNote(text);
 						}
-						s_boardWas = down;
 					}
 					const controllerButton cameraButton = flickitCameraButton();
 

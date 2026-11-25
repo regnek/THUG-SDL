@@ -122,7 +122,7 @@ Flickit puts the board on the right stick, the way the Skate games do. The stick
 | Movement stick left / right | Steers the way Skate's board does: gently near the centre, tightly at a walk, widely at speed (see Rolling below) |
 | Movement stick left / right, in the air | Turns the skater the way Skate does: by how far the stick is pushed, and faster the harder it was thrown over as the board left the ground (see Spinning below) |
 | Right stick click | Flickit on / off, for looking around. On foot and in a car it stands down by itself |
-| Triangle | Off the board, and back on, as in Skate (`BoardButton`; the game's own button for it, Black on the PC). In a car it stays the car's: held, it stops the car and gets him out |
+| Triangle | Off the board, and back on, as in Skate (`BoardButton`). It gives the game what both bumpers did: L1 and R1 together for three frames, the trigger the game uses for it here (its `SwitchControl_Trigger`: Black only on the platform it reads from the registry, which THUG-SDL skips). In a car it stays the car's: held, it stops the car and gets him out |
 | Left stick click | The camera's angle (`CameraButton`), so that Back is the map's alone: a press of it opens the map |
 
 The tricks named above are the default trick slots. Flickit presses the slot, so whatever is assigned to it in the Edit Tricks menu is what comes out. Manuals are unchanged (up, down on the movement stick).
