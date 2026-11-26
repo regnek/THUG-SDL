@@ -67,6 +67,11 @@ static void TestOverlap() {
 	// across each other at an angle (a T-bone)
 	Check(Crash::Overlap(Car(0, 0, 0, 0), Car(100, 0, 40, 1.5707963f), &c), "overlap: a T-bone");
 	Check(c.normal[1] == 0.0f && Near(c.normal[0] * c.normal[0] + c.normal[2] * c.normal[2], 1.0f), "overlap: the normal is a unit along the ground");
+	// crossed like a plus, deep in each other, no corner of either inside the other: still a touch, pushed apart
+	// along the way that takes the least, at a point among the corners that face each other
+	Check(Crash::Overlap(Car(0, 0, 0, 0), Car(-25, 0, 35, 1.5707963f), &c), "overlap: crossed, no corner in the other");
+	Check(Near(c.normal[0], -1.0f) && Near(c.normal[2], 0.0f) && Near(c.depth, 131.0f, 0.05f), "overlap: crossed: apart sideways, a from b");
+	Check(c.point[0] > -95.0f && c.point[0] < 36.0f && c.point[1] > -70.0f && c.point[1] < 140.0f, "overlap: crossed: the point is among their corners");
 }
 
 static void TestResolve() {

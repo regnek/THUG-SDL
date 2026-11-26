@@ -22,6 +22,8 @@
 #include <cstring>
 #include <string>
 
+#include "str.h"
+
 namespace Autosave {
 	struct Spot {
 		uint32_t level;         // the level's checksum (its load script's name: load_NJ ...)
@@ -71,10 +73,10 @@ namespace Autosave {
 			char line[1024];
 			for (int i = 0; i < m_count; i++) {
 				const Spot& s = m_spots[i];
-				int n = snprintf(line, sizeof(line), "level=%08X saved=%u pos=%.9g,%.9g,%.9g,%.9g matrix=", s.level, s.saved,
+				size_t n = Str::Format(line, sizeof(line), "level=%08X saved=%u pos=%.9g,%.9g,%.9g,%.9g matrix=", s.level, s.saved,
 					s.pos[0], s.pos[1], s.pos[2], s.pos[3]);
-				for (int k = 0; k < 16 && n > 0 && n < (int)sizeof(line); k++) {
-					n += snprintf(line + n, sizeof(line) - n, k ? ",%.9g" : "%.9g", s.matrix[k]);
+				for (int k = 0; k < 16; k++) {
+					n += Str::Format(line + n, sizeof(line) - n, k ? ",%.9g" : "%.9g", s.matrix[k]);
 				}
 				out += line;
 				out += "\n";

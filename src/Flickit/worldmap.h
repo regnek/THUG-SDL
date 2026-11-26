@@ -14,6 +14,8 @@
 #include <string>
 #include <vector>
 
+#include "str.h"
+
 namespace WorldMap {
 	/******************************************************************/
 	/*  The spots                                                     */
@@ -103,7 +105,7 @@ namespace WorldMap {
 
 	inline std::string FormatSpot(const Spot& s) {
 		char buf[96];
-		snprintf(buf, sizeof(buf), "%.1f %.1f %.1f %.1f", s.x, s.y, s.z, s.heading * 180.0 / 3.14159265358979323846);
+		Str::Format(buf, sizeof(buf), "%.1f %.1f %.1f %.1f", s.x, s.y, s.z, s.heading * 180.0 / 3.14159265358979323846);
 		return std::string(buf) + " | " + s.district + " | " + s.name;
 	}
 
@@ -121,7 +123,7 @@ namespace WorldMap {
 			}
 		}
 		char buf[32];
-		snprintf(buf, sizeof(buf), "Spot %ld", most + 1);
+		Str::Format(buf, sizeof(buf), "Spot %ld", most + 1);
 		return buf;
 	}
 
