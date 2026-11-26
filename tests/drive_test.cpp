@@ -1,6 +1,6 @@
 // Tests for drive.h: the reach of a car, its speed, the places to get out at, the names of the tunings,
 // the cars that come back, the cars left parked and the ground they are left on.
-// g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -I src tests/drive_test.cpp -o drive_test
+// g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -I src/Flickit tests/drive_test.cpp -o drive_test
 
 #include "drive.h"
 

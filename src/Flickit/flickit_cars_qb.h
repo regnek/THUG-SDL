@@ -1,5 +1,5 @@
 // Made by scripts/flickit/qbc.py from scripts/flickit/cars.q: do not change it here, change the source and
-// run "python3 scripts/flickit/qbc.py --header scripts/flickit/cars.q src/flickit_cars_qb.h" again.
+// run "python3 scripts/flickit/qbc.py --header scripts/flickit/cars.q src/Flickit/flickit_cars_qb.h" again.
 #pragma once
 #include <stdint.h>
 

@@ -1,5 +1,5 @@
 // Tests for autosave.h: the text round trip, the slots, when to write, and when to put the skater back.
-// g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -I src tests/autosave_test.cpp -o autosave_test
+// g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -I src/Flickit tests/autosave_test.cpp -o autosave_test
 
 #include "autosave.h"
 

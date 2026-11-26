@@ -1,6 +1,6 @@
 // Offline tests for Flickit's stick patterns: the loader, the matcher and their use by the recognizer.
 //
-//   g++ -std=c++11 -Wall -Wextra -I src tests/flickit_pattern_test.cpp src/flickit.cpp -o flickit_pattern_test
+//   g++ -std=c++11 -Wall -Wextra -I src/Flickit tests/flickit_pattern_test.cpp src/Flickit/flickit.cpp -o flickit_pattern_test
 //   ./flickit_pattern_test              the made-up patterns below
 //   ./flickit_pattern_test skater.pat   also draws every pattern of that file and reports what was recognized
 //

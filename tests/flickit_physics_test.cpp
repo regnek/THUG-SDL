@@ -1,8 +1,8 @@
-// Offline tests for the physics numbers in src/flickit.cpp: what Flickit asks of the game's gravity
+// Offline tests for the physics numbers in src/Flickit/flickit.cpp: what Flickit asks of the game's gravity
 // and of the speed of a jump, and how it pushes, rolls and steers the board, against Skate's numbers
 // and against THUG's own.
 // No game, SDL or Windows needed:
-//   g++ -std=c++11 -Wall -Wextra -I src tests/flickit_physics_test.cpp src/flickit.cpp -o flickit_physics_test && ./flickit_physics_test
+//   g++ -std=c++11 -Wall -Wextra -I src/Flickit tests/flickit_physics_test.cpp src/Flickit/flickit.cpp -o flickit_physics_test && ./flickit_physics_test
 // Run it from the top of the repository, or pass the folder scripts/qb/source/scripts/game/skater: THUG's numbers
 // in flickit.cpp are checked against the game's own physics.q.
 

@@ -1,6 +1,6 @@
 // Tests for players.h: the made-up players, a run in a file and back, the turns, playing a run back, and the
 // frames a recording keeps.
-// g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -I src tests/players_test.cpp -o players_test
+// g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -I src/Flickit tests/players_test.cpp -o players_test
 
 #include "players.h"
 

@@ -178,7 +178,7 @@ namespace BigWorld {
 	// face numbers over those, two consecutive ones where a pointer was: the crashes while driving across the
 	// joined world (0x0041FBB3 and 0x0041CBC0 with 0x003B003A, 0x004515F7 with 0x001B001A in the suspend
 	// components' list). The list moves into the DLL with room for 65536, and a leaf that does not fit is cut
-	// short and counted (src/facelist.h).
+	// short and counted (src/Flickit/facelist.h).
 	static const uint32_t kFaceCap = 65536;
 	static const uint32_t kGameFaceCap = 6000;
 	static const uint32_t kLeafAt = 0x0041AF92;          // the walk at a leaf: movzx edx, word ptr [esi+2] ...

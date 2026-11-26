@@ -1,5 +1,5 @@
-// Offline tests for src/flickit.cpp. No game, SDL or Windows needed:
-//   g++ -std=c++11 -Wall -Wextra -I src tests/flickit_test.cpp src/flickit.cpp -o flickit_test && ./flickit_test
+// Offline tests for src/Flickit/flickit.cpp. No game, SDL or Windows needed:
+//   g++ -std=c++11 -Wall -Wextra -I src/Flickit tests/flickit_test.cpp src/Flickit/flickit.cpp -o flickit_test && ./flickit_test
 //
 // A simulated right stick is sampled once per frame, the way input.cpp polls it,
 // and the buttons the recognizer asks for are checked frame by frame.

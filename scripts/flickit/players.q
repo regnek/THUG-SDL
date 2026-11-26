@@ -2,15 +2,15 @@
 // runs he records himself (F6, [Flickit] RunKey), each played back by a skater of the game's with a made-up
 // name, sponsors, story and stats. Skate up to one and Circle shows his card.
 //
-// src/players_game.cpp records the runs, moves the players and plays their animations; these scripts make
-// them and put the words on the screen the game's own way. Compiled into src/flickit_players_qb.h by
+// src/Flickit/players_game.cpp records the runs, moves the players and plays their animations; these scripts make
+// them and put the words on the screen the game's own way. Compiled into src/Flickit/flickit_players_qb.h by
 // scripts/flickit/qbc.py; the game reads it once, in the first level.
 
 // A player, made: one of the level's people on a board (Ped_Skateboard_a, profile_ped.q: his head, body and legs
 // picked by the game from the level's own), with the skater's skeleton and animations, made the way the goal editor
 // makes its people (goal_editor.q: its components, the model from a profile, Obj_SetPosition), but for its motion
 // component (the DLL moves him; setdisplaymatrix draws him turned the way the DLL turns him), idling until the DLL
-// takes him on. src/players_game.cpp spawns it, so that it runs with the game's other scripts and not in the middle
+// takes him on. src/Flickit/players_game.cpp spawns it, so that it runs with the game's other scripts and not in the middle
 // of the skater's update. From the DLL: id (a name of his own, another each time he is made), label (the name of
 // his label's screen element), name, pos.
 SCRIPT Flickit_PlayerSpawn
@@ -87,7 +87,7 @@ SCRIPT Flickit_PlayerLabelPick
 	ENDIF
 ENDSCRIPT
 
-// The prompt while a player is in reach (src/players_game.cpp says when, and for whom), in the box of the
+// The prompt while a player is in reach (src/Flickit/players_game.cpp says when, and for whom), in the box of the
 // game's own prompts ("Press Circle to drive."). Only the box: the DLL reads Circle itself.
 SCRIPT Flickit_PlayerPrompt
 	Flickit_PlayerPromptOff

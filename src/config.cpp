@@ -1,9 +1,9 @@
 #include "config.h"
-#include "memory.h"
-#include "bigworld.h"
-#include "camrel_game.h"
-#include "drive_game.h"
-#include "guard_game.h"
+#include "Flickit/memory.h"
+#include "Flickit/bigworld.h"
+#include "Flickit/camrel_game.h"
+#include "Flickit/drive_game.h"
+#include "Flickit/guard_game.h"
 #include <d3d9types.h>
 #include <QB/QB.h>
 #include <QB/QBKey.h>

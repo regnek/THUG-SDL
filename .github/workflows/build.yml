@@ -20,45 +20,45 @@ jobs:
       - uses: actions/checkout@v4
       - name: Flickit recognizer tests
         run: |
-          g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -I src tests/flickit_test.cpp src/flickit.cpp -o flickit_test
+          g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -I src/Flickit tests/flickit_test.cpp src/Flickit/flickit.cpp -o flickit_test
           ./flickit_test
-          g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -I src tests/flickit_pattern_test.cpp src/flickit.cpp -o flickit_pattern_test
+          g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -I src/Flickit tests/flickit_pattern_test.cpp src/Flickit/flickit.cpp -o flickit_pattern_test
           ./flickit_pattern_test
-          g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -I src tests/flickit_grind_test.cpp src/flickit.cpp -o flickit_grind_test
+          g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -I src/Flickit tests/flickit_grind_test.cpp src/Flickit/flickit.cpp -o flickit_grind_test
           ./flickit_grind_test scripts/qb/source/scripts/game/skater
-          g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -I src tests/flickit_physics_test.cpp src/flickit.cpp -o flickit_physics_test
+          g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -I src/Flickit tests/flickit_physics_test.cpp src/Flickit/flickit.cpp -o flickit_physics_test
           ./flickit_physics_test scripts/qb/source/scripts/game/skater
-          g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -I src tests/flickit_pose_test.cpp -o flickit_pose_test
+          g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -I src/Flickit tests/flickit_pose_test.cpp -o flickit_pose_test
           ./flickit_pose_test
-          g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -I src tests/flickit_stance_test.cpp src/flickit.cpp -o flickit_stance_test
+          g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -I src/Flickit tests/flickit_stance_test.cpp src/Flickit/flickit.cpp -o flickit_stance_test
           ./flickit_stance_test scripts/qb/source/scripts/game/skater
-          g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -I src tests/nodenames_test.cpp -o nodenames_test
+          g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -I src/Flickit tests/nodenames_test.cpp -o nodenames_test
           ./nodenames_test
-          g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -I src tests/watchdog_test.cpp -o watchdog_test
+          g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -I src/Flickit tests/watchdog_test.cpp -o watchdog_test
           ./watchdog_test
-          g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -I src tests/autosave_test.cpp -o autosave_test
+          g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -I src/Flickit tests/autosave_test.cpp -o autosave_test
           ./autosave_test
-          g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -I src tests/camrel_test.cpp -o camrel_test
+          g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -I src/Flickit tests/camrel_test.cpp -o camrel_test
           ./camrel_test
-          g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -I src tests/worldmap_test.cpp -o worldmap_test
+          g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -I src/Flickit tests/worldmap_test.cpp -o worldmap_test
           ./worldmap_test
-          g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -I src tests/drive_test.cpp -o drive_test
+          g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -I src/Flickit tests/drive_test.cpp -o drive_test
           ./drive_test
-          g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -I src tests/guard_test.cpp -o guard_test
+          g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -I src/Flickit tests/guard_test.cpp -o guard_test
           ./guard_test
-          g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -I src tests/players_test.cpp -o players_test
+          g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -I src/Flickit tests/players_test.cpp -o players_test
           ./players_test
-          g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -I src tests/gamefiles_test.cpp -o gamefiles_test
+          g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -I src/Flickit tests/gamefiles_test.cpp -o gamefiles_test
           ./gamefiles_test
-          g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -I src tests/crash_test.cpp -o crash_test
+          g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -I src/Flickit tests/crash_test.cpp -o crash_test
           ./crash_test
-          g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -I src tests/peds_test.cpp -o peds_test
+          g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -I src/Flickit tests/peds_test.cpp -o peds_test
           ./peds_test
-          g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -I src tests/daynight_test.cpp -o daynight_test
+          g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -I src/Flickit tests/daynight_test.cpp -o daynight_test
           ./daynight_test
-          g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -I src tests/facelist_test.cpp -o facelist_test
+          g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -I src/Flickit tests/facelist_test.cpp -o facelist_test
           ./facelist_test
-          g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -I src tests/str_test.cpp -o str_test
+          g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -I src/Flickit tests/str_test.cpp -o str_test
           ./str_test
       - name: Flickit's car and player scripts
         run: |
@@ -66,14 +66,14 @@ jobs:
           for f in game/misc/car_scripts game/player_controlled_vehicle game/skater/switch_control game/goal_utilities thugsdl/thugsdl_scripts; do
             python3 scripts/flickit/qbc.py --check scripts/qb/source/scripts/$f.q scripts/qb/compiled/scripts/$f.qb
           done
-          # and src/flickit_cars_qb.h is what scripts/flickit/cars.q compiles to, src/flickit_players_qb.h players.q,
-          # src/flickit_daynight_qb.h daynight.q
+          # and src/Flickit/flickit_cars_qb.h is what scripts/flickit/cars.q compiles to, src/Flickit/flickit_players_qb.h players.q,
+          # src/Flickit/flickit_daynight_qb.h daynight.q
           python3 scripts/flickit/qbc.py --header scripts/flickit/cars.q /tmp/flickit_cars_qb.h
-          diff /tmp/flickit_cars_qb.h src/flickit_cars_qb.h
+          diff /tmp/flickit_cars_qb.h src/Flickit/flickit_cars_qb.h
           python3 scripts/flickit/qbc.py --header scripts/flickit/players.q /tmp/flickit_players_qb.h
-          diff /tmp/flickit_players_qb.h src/flickit_players_qb.h
+          diff /tmp/flickit_players_qb.h src/Flickit/flickit_players_qb.h
           python3 scripts/flickit/qbc.py --header scripts/flickit/daynight.q /tmp/flickit_daynight_qb.h
-          diff /tmp/flickit_daynight_qb.h src/flickit_daynight_qb.h
+          diff /tmp/flickit_daynight_qb.h src/Flickit/flickit_daynight_qb.h
 
   build:
     runs-on: windows-latest
@@ -105,7 +105,7 @@ jobs:
       - name: Build, optimization off
         run: cmake --build build-unoptimized --config Release --target THUG_SDL
 
-      # The guard's write breakpoint, tried on Windows itself: src/guard_game.cpp watching a word of a test
+      # The guard's write breakpoint, tried on Windows itself: src/Flickit/guard_game.cpp watching a word of a test
       # program's (32-bit, as the game is), written over from threads old and new. Both builds. Its result is
       # read from the log: a failure here does not keep the DLL from the run.
       - name: The guard on Windows

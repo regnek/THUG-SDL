@@ -1,4 +1,4 @@
-// Tests of the node name table (src/nodenames.h) that takes the place of the game's.
+// Tests of the node name table (src/Flickit/nodenames.h) that takes the place of the game's.
 //
 // The game's own table is re-expressed here from its code (0x00530F50 fills it, 0x00530AE0 looks a
 // name up): 16384 two-byte slots, a node in at the low 14 bits of its name or the next free slot,

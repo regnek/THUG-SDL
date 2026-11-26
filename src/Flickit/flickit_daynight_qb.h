@@ -1,5 +1,5 @@
 // Made by scripts/flickit/qbc.py from scripts/flickit/daynight.q: do not change it here, change the source and
-// run "python3 scripts/flickit/qbc.py --header scripts/flickit/daynight.q src/flickit_daynight_qb.h" again.
+// run "python3 scripts/flickit/qbc.py --header scripts/flickit/daynight.q src/Flickit/flickit_daynight_qb.h" again.
 #pragma once
 #include <stdint.h>
 

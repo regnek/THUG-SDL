@@ -1,5 +1,5 @@
 // Tests for gamefiles.h: the game's LZSS, its .pre archives and its .img.xbx pictures.
-// g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -I src tests/gamefiles_test.cpp -o gamefiles_test
+// g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -I src/Flickit tests/gamefiles_test.cpp -o gamefiles_test
 // With the path of the game's skaterparts.pre as an argument it also reads every logo in it.
 
 #include "gamefiles.h"

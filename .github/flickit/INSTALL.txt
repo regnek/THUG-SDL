@@ -65,6 +65,8 @@ repeats and leftovers, and a clean-up. What changes for you:
     and night, the map, the guard and Flickit itself each had a copy of
     how to reach the game, of the notes file and of the folder of the
     exe; there is one now. What nothing used is gone.
+  - The mod's own source files are in a folder of their own (src/Flickit),
+    apart from THUG-SDL's, and the README has a table of what is where.
   - Nothing else should behave differently. If something does, that is a
     mistake of this clean-up: the build before it is commit 39ac25b.
   - Not tried in the game yet.

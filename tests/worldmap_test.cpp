@@ -1,5 +1,5 @@
 // Tests for worldmap.h: the spots file, the map file, the view, the controls and the button that opens it.
-// g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -I src tests/worldmap_test.cpp -o worldmap_test
+// g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -I src/Flickit tests/worldmap_test.cpp -o worldmap_test
 
 #include "worldmap.h"
 

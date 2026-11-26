@@ -1,6 +1,6 @@
 // Tests for camrel.h: the moved matrix, the middle and the copy, which buffer a draw bound, the registry,
 // the registration rules, and what it is all for: depth that holds up far from the origin.
-// g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -I src tests/camrel_test.cpp -o camrel_test
+// g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -I src/Flickit tests/camrel_test.cpp -o camrel_test
 
 #include "camrel.h"
 

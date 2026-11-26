@@ -7,7 +7,7 @@
 #include "Resources/Resources.h"
 #include "Mod/mod_template.h"
 #include "observemenu.h"
-#include "guard_game.h"
+#include "Flickit/guard_game.h"
 
 #pragma data_seg (".d3d9_shared")
 HINSTANCE gl_hOriginalDll;

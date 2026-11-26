@@ -1,8 +1,8 @@
 #include "script.h"
-#include "drive_game.h"
-#include "players_game.h"
-#include "daynight_game.h"
-#include "flickit_game.h"
+#include "Flickit/drive_game.h"
+#include "Flickit/players_game.h"
+#include "Flickit/daynight_game.h"
+#include "Flickit/flickit_game.h"
 
 /*
 ADDING SCRIPTS FROM FILES

@@ -1,6 +1,6 @@
 // Tests for peds.h: whether a car's box meets someone, the throw, the flight, the landing, the slide, and when
 // someone run over is back on their way.
-// g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -I src tests/peds_test.cpp -o peds_test
+// g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -I src/Flickit tests/peds_test.cpp -o peds_test
 
 #include "peds.h"
 

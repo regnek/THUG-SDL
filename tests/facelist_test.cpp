@@ -1,6 +1,6 @@
 // Tests for facelist.h: the faces a box reaches, appended to a list that is never written past its end, and the
 // notes on them.
-// g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -I src tests/facelist_test.cpp -o facelist_test
+// g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -I src/Flickit tests/facelist_test.cpp -o facelist_test
 
 #include "facelist.h"
 

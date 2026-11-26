@@ -1,6 +1,6 @@
 // Tests for guard.h: what is done about a write to the pointer, the call test for the words of a stack, and
 // the debug control bits.
-// g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -I src tests/guard_test.cpp -o guard_test
+// g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -I src/Flickit tests/guard_test.cpp -o guard_test
 
 #include "guard.h"
 

@@ -263,7 +263,7 @@ def same_code(mine, game):
 
 def header(data, source_name, symbol):
     lines = ['// Made by scripts/flickit/qbc.py from %s: do not change it here, change the source and' % source_name,
-             '// run "python3 scripts/flickit/qbc.py --header %s src/%s.h" again.' % (source_name, symbol),
+             '// run "python3 scripts/flickit/qbc.py --header %s src/Flickit/%s.h" again.' % (source_name, symbol),
              '#pragma once',
              '#include <stdint.h>',
              '',

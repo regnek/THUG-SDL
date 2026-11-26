@@ -5,7 +5,7 @@
 // Room for a world made of many levels, past three of the game's fixed limits.
 //
 // [Memory] BigNodeNames=1 (the default) gives the game a bigger table from node names to node numbers
-// (src/nodenames.h). The game's has 16384 slots: more named nodes than that hang the load (New Jersey
+// (src/Flickit/nodenames.h). The game's has 16384 slots: more named nodes than that hang the load (New Jersey
 // and Manhattan joined have 9725; one more story level fits, two do not), and nodes numbered past
 // 32767 cannot be found by name.
 //

@@ -1,5 +1,5 @@
 // Tests for daynight.h: the keys, the easing between them, the lights' hours, the clock.
-// g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -I src tests/daynight_test.cpp -o daynight_test
+// g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -I src/Flickit tests/daynight_test.cpp -o daynight_test
 
 #include "daynight.h"
 

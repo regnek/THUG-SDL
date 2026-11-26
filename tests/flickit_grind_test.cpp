@@ -1,7 +1,7 @@
-// Offline tests for the grind side of src/flickit.cpp: the board tilt in the air, the flick-only pop
+// Offline tests for the grind side of src/Flickit/flickit.cpp: the board tilt in the air, the flick-only pop
 // on a rail, the switches between 50-50, 5-0 and nosegrind, the drag on a rail and stepping off it
 // when the speed is gone. No game, SDL or Windows needed:
-//   g++ -std=c++11 -Wall -Wextra -I src tests/flickit_grind_test.cpp src/flickit.cpp -o flickit_grind_test && ./flickit_grind_test
+//   g++ -std=c++11 -Wall -Wextra -I src/Flickit tests/flickit_grind_test.cpp src/Flickit/flickit.cpp -o flickit_grind_test && ./flickit_grind_test
 // Run it from the top of the repository, or pass the folder scripts/qb/source/scripts/game/skater: the rows the mod
 // hands the game are checked against the game's own grind table in grindlist.q.
 //

@@ -1,4 +1,4 @@
-// The guard on Windows itself, outside the game: src/guard_game.cpp as it is, watching a word of this program's
+// The guard on Windows itself, outside the game: src/Flickit/guard_game.cpp as it is, watching a word of this program's
 // instead of the game's pointer (GUARD_TEST). A 32-bit program like the game, so that it runs the way the game
 // does on a 64-bit Windows. CMake builds it as guard_windows_test; the CI runs it.
 //
@@ -6,7 +6,7 @@
 // that starts later, and from one the breakpoint is not on yet, and looks at what the guard did each time.
 #define GUARD_TEST
 #define NOMINMAX
-#include "guard_game.cpp"
+#include "Flickit/guard_game.cpp"
 
 #include <string>
 #include <vector>

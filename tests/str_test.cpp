@@ -1,5 +1,5 @@
 // Tests for str.h: text into a buffer, cut short to fit, never past its end.
-// g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -I src tests/str_test.cpp -o str_test
+// g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -I src/Flickit tests/str_test.cpp -o str_test
 
 #include "str.h"
 

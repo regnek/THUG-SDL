@@ -2,12 +2,12 @@
 // pressing Circle (the button the game gets into its own drivable cars with), and it stays where he gets out,
 // for two minutes (CarParkedTime): then it goes back, and the car it was is at the start of its way again.
 //
-// src/drive_game.cpp finds the car in reach, starts Flickit_CarSteal, and answers the Flickit_Car... commands
+// src/Flickit/drive_game.cpp finds the car in reach, starts Flickit_CarSteal, and answers the Flickit_Car... commands
 // below (the car's place and speed, the place to get out at). These scripts do the rest the game's own way:
 // the car is the game's own drivable car (PlayerVehicle, player_controlled_vehicle.q) with the model of the
 // car taken, and the way in and out is the game's (Switch_OnGroundAI, ToggleUserControlledVehicleMode).
 //
-// Compiled into src/flickit_cars_qb.h by scripts/flickit/qbc.py; the game reads it once, in the first level.
+// Compiled into src/Flickit/flickit_cars_qb.h by scripts/flickit/qbc.py; the game reads it once, in the first level.
 
 // The setup of the game's drivable car that suits each model, and for a model that has no setup of its own
 // the size of its body and wheels (measured from the model: the base and the roof of the body for the
@@ -128,7 +128,7 @@ Flickit_Car_veh_slamcitytruck = {
 	all_wheels = { radius = 19.8 moment = 3570 spring_rate = 200 damping_rate = 28 static_friction = 4.0 min_static_grip_velocity = 8 max_static_grip_velocity = 12 min_dynamic_grip_velocity = 30 handbrake_torque = 3000 brake_torque = 2000 }
 }
 
-// He takes the car in reach. From src/drive_game.cpp: car (its id), model, setup (the setup of the game's
+// He takes the car in reach. From src/Flickit/drive_game.cpp: car (its id), model, setup (the setup of the game's
 // drivable car it gets), tune (the Flickit_Car_ structure for its model).
 SCRIPT Flickit_CarSteal
 	IF Skater : Driving
@@ -170,7 +170,7 @@ SCRIPT Flickit_CarSteal
 ENDSCRIPT
 
 // The game's own prompt for a car to drive, as car_scripts.q shows it for a car of the level's own ("Press
-// Circle to drive."), while a car is in reach (src/drive_game.cpp says when). Only the box: the DLL reads
+// Circle to drive."), while a car is in reach (src/Flickit/drive_game.cpp says when). Only the box: the DLL reads
 // Circle itself. Not over a goal's or the level's own car's box.
 SCRIPT Flickit_CarPrompt
 	IF ObjectExists id = flickit_car_prompt
@@ -239,7 +239,7 @@ ENDSCRIPT
 // A car standing on its own (a car he left, a car knocked off its way): the game's way for a car of the level,
 // but standing: its model's own nodes (the gap triggers on its roof look there: without them the game looked in
 // the level's nodes, found none and crashed) and the rails on its roof, as the game gives a car of the level
-// (its car factory, 0x00506099). Where it stands and how it is turned are src/drive_game.cpp's.
+// (its car factory, 0x00506099). Where it stands and how it is turned are src/Flickit/drive_game.cpp's.
 SCRIPT Flickit_CarMake
 	CreateCompositeObject {
 		components = [
@@ -256,7 +256,7 @@ SCRIPT Flickit_CarMake
 	}
 ENDSCRIPT
 
-// A car of the level knocked off its way in a crash (src/drive_game.cpp: car, parked, model, pos): it goes, and
+// A car of the level knocked off its way in a crash (src/Flickit/drive_game.cpp: car, parked, model, pos): it goes, and
 // a car of the same model stands in its place under a name of its own, to tumble on from there as the hit
 // left it (the DLL moves it), and to be taken like a car he left
 SCRIPT Flickit_CarKnocked
@@ -269,7 +269,7 @@ SCRIPT Flickit_CarKnocked
 	Flickit_CarMake parked = <parked> model = <model> pos = <pos>
 ENDSCRIPT
 
-// The damage a car shows (src/drive_game.cpp picks them): smoke from its engine, heavy smoke, fire, and the
+// The damage a car shows (src/Flickit/drive_game.cpp picks them): smoke from its engine, heavy smoke, fire, and the
 // smoke of a car burnt out. Particles of the game's own kinds, with its own textures that are always there
 // (startup.q), seen from far off. fx: the name of the effect (a new one each time: the game keeps particles by
 // name, and one made under the name of one that died in the same frame left the dead one behind), car: what it
@@ -521,7 +521,7 @@ Flickit_FxBoomSmoke = {
 }
 
 // A car blowing up at pos: the fireball and its smoke, gone by themselves (as the game's own fireball,
-// skutils.q), and the game's fireball sound, as loud as src/drive_game.cpp says for how far he is (vol)
+// skutils.q), and the game's fireball sound, as loud as src/Flickit/drive_game.cpp says for how far he is (vol)
 SCRIPT Flickit_CarBoom
 	CreateCompositeObject {
 		Components = explosion_composite_structure
@@ -585,7 +585,7 @@ SCRIPT Flickit_CarBack
 	ENDIF
 ENDSCRIPT
 
-// A car he left goes back (src/drive_game.cpp says when: it has stood long enough, and he is far from it and
+// A car he left goes back (src/Flickit/drive_game.cpp says when: it has stood long enough, and he is far from it and
 // from the start of the car's way): it goes, and the car of the level it was (car, if it is to come back) is
 // at the start of its way again, in the same frame, so that the level has the cars it had
 SCRIPT Flickit_CarGoesBack
@@ -597,7 +597,7 @@ SCRIPT Flickit_CarGoesBack
 	ENDIF
 ENDSCRIPT
 
-// Someone run over by a car. src/drive_game.cpp finds them in the way of his car (or of a car thrown about),
+// Someone run over by a car. src/Flickit/drive_game.cpp finds them in the way of his car (or of a car thrown about),
 // throws them and lands them (peds.h); these are the game's own falling down and lying there, as
 // Ped_FallDownState has them (sk4_PedCollision.q), but they do not get up. Run on them: their own script
 // becomes Flickit_PedDown.
@@ -630,7 +630,7 @@ SCRIPT Flickit_PedLand
 	Obj_PlaySound BailBodyFall01 vol = <vol>
 ENDSCRIPT
 
-// Back on their way, once he is far (src/drive_game.cpp says when): they go, and a moment later they are made
+// Back on their way, once he is far (src/Flickit/drive_game.cpp says when): they go, and a moment later they are made
 // again from their node (ped), at the start of their way
 SCRIPT Flickit_PedGone
 	IF IsAlive name = <ped>

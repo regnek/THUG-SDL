@@ -1,4 +1,4 @@
-// Tests of the crouch pose (src/flickit_pose.h). The Keeper is run on a list of animation channels
+// Tests of the crouch pose (src/Flickit/flickit_pose.h). The Keeper is run on a list of animation channels
 // laid out as the game lays them out, and the list is run the way the game runs it: PlayAnim with
 // its start of a blend, the update of the channels, and the pose. Those are re-expressed here from
 // what flickit_pose.h says of them, as the hooks see them: the start of a blend between the

@@ -1,6 +1,6 @@
 """Print where the DLL's own functions are, from the MSVC linker's map (thugsdl.map), for the CI log.
 
-The guard (src/guard_game.h) writes an address in the DLL as thugsdl.dll+offset. This lists the offset each of
+The guard (src/Flickit/guard_game.h) writes an address in the DLL as thugsdl.dll+offset. This lists the offset each of
 the DLL's own functions starts at (those of its source files; the C runtime's and SDL's are left out), so that
 the function an offset is in is the last one listed at or below it.
 

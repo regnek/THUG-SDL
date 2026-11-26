@@ -1,4 +1,4 @@
-"""Look at the hooks of src/flickit_game.cpp in a built thugsdl.dll.
+"""Look at the hooks of src/Flickit/flickit_game.cpp in a built thugsdl.dll.
 
 usage: check_hooks.py <built thugsdl.dll> [<built thugsdl.dll> ...]
 

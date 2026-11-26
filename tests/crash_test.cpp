@@ -1,5 +1,5 @@
 // Tests for crash.h: the boxes, their touches, the impulses, a hard hit's launch, damage and its stages.
-// g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -I src tests/crash_test.cpp -o crash_test
+// g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -I src/Flickit tests/crash_test.cpp -o crash_test
 
 #include "crash.h"
 

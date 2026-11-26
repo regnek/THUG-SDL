@@ -1,7 +1,7 @@
 // Offline tests for the stance the stick asks for: Flickit::Output::stance from the recognizer, the
 // StanceKeeper that the game's side asks what to do with it, and what both rely on in THUG's
 // scripts. No game, SDL or Windows needed:
-//   g++ -std=c++11 -Wall -Wextra -I src tests/flickit_stance_test.cpp src/flickit.cpp -o flickit_stance_test
+//   g++ -std=c++11 -Wall -Wextra -I src/Flickit tests/flickit_stance_test.cpp src/Flickit/flickit.cpp -o flickit_stance_test
 //   ./flickit_stance_test scripts/qb/source/scripts/game/skater
 
 #include "flickit.h"

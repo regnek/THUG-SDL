@@ -1,8 +1,8 @@
-// Flickit's day and night. src/daynight_game.cpp keeps the clock and works out the look of the hour
-// (src/daynight.h); these scripts give it to the level the way the game's own time of day does (timeofday.q:
+// Flickit's day and night. src/Flickit/daynight_game.cpp keeps the clock and works out the look of the hour
+// (src/Flickit/daynight.h); these scripts give it to the level the way the game's own time of day does (timeofday.q:
 // script_change_tod, dynamic_tod and set_tod_from_params; Levels.q: set_level_lights, without its fog).
 //
-// Compiled into src/flickit_daynight_qb.h by scripts/flickit/qbc.py; the game reads it once, in the first level.
+// Compiled into src/Flickit/flickit_daynight_qb.h by scripts/flickit/qbc.py; the game reads it once, in the first level.
 
 // The look of the hour, once a second. From the DLL: scene (1: the colours too), color and sky (the level's
 // geometry and its sky, red + green * 256 + blue * 65536, 128 each as the level is), and the lights the skater,

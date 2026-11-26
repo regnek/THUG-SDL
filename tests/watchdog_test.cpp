@@ -1,5 +1,5 @@
 // Tests for watchdog.h: what counts as a number, the history, the policy of tries, and the camera check.
-// g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -I src tests/watchdog_test.cpp -o watchdog_test
+// g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -I src/Flickit tests/watchdog_test.cpp -o watchdog_test
 
 #include "watchdog.h"
 

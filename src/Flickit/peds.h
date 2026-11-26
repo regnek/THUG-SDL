@@ -1,7 +1,7 @@
 #pragma once
 // Flickit's people run over by a car, the parts without the game (tested in tests/peds_test.cpp): whether a car's
 // box meets someone, how they are thrown, their flight, the landing and the slide to a stop, and when someone who
-// lies there can be back on their way. src/drive_game.cpp does the rest with the game.
+// lies there can be back on their way. src/Flickit/drive_game.cpp does the rest with the game.
 //
 // The game's units: inches and seconds, up is +y. Someone is a post kRadius about where they stand, kHeight tall.
 #include <math.h>
