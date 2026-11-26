@@ -804,18 +804,6 @@ namespace Flickit {
 		}
 	}
 
-	const char* StateName(int state) {
-		switch (state) {
-		case STATE_GROUND: return "ground";
-		case STATE_AIR: return "air";
-		case STATE_WALL: return "wall";
-		case STATE_LIP: return "lip";
-		case STATE_RAIL: return "rail";
-		case STATE_OTHER: return "other";
-		default: return "unknown";
-		}
-	}
-
 	void PlanGrind(int grind, bool railOnLeft, GrindPlan& plan) {
 		plan.row = 0;
 		plan.parallel = -1;

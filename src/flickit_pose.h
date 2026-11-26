@@ -388,9 +388,6 @@ namespace FlickitPose {
 			return true;
 		}
 
-		// Whether the last frame's crouch tried to start a standing pose already (once a crouch)
-		bool StandingTried() const { return m_standingTried; }
-
 		// The stick's crouch ended in a pop on this frame, before the game starts the jump: the kept
 		// channel goes now, and blending is switched back to what it was, so that the jump's
 		// animation takes over at once, with a blend or without (the game's nollie has one)
@@ -510,10 +507,8 @@ namespace FlickitPose {
 		}
 
 		bool Holding() const { return m_channel != 0 && !m_fading; }
-		bool Switched() const { return m_switchAnim != 0; }
 		bool Fading() const { return m_channel != 0 && m_fading; }
 		uint8_t* Kept() const { return m_channel; }
-		float Share() const { return m_share; }
 
 	private:
 		uint8_t* m_anim;            // the animation component of the channel kept

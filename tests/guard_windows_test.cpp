@@ -27,12 +27,19 @@ void GuardTestLog(const char* text) {
 	printf("%s", text);
 }
 
-namespace FlickitGame {
-	void WatchNote(const char* text) {
+namespace Game {
+	void Note(const char* format, ...) {
+		char text[1024];
+		va_list args;
+		va_start(args, format);
+		Str::FormatV(text, sizeof(text), format, args);
+		va_end(args);
 		printf("%s", text);
 		s_lines.push_back(text);
 	}
+}
 
+namespace FlickitGame {
 	bool SkaterWhereabouts(Whereabouts&) {
 		return false;
 	}

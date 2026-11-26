@@ -12,6 +12,8 @@
 #include <stdint.h>
 #include <string.h>
 
+#include "str.h"
+
 namespace Drive {
 	// The box of a car's body, along its own left (x), up (y) and the way it faces (z)
 	struct Box {
@@ -434,8 +436,7 @@ namespace Drive {
 			s.box = box;
 			s.origin = origin;
 			s.parkedAt = now;
-			strncpy(s.model, model ? model : "", kModel - 1);
-			s.model[kModel - 1] = 0;
+			Str::Copy(s.model, kModel, model);
 		}
 		void Leave(int slot) {
 			if (slot >= 0 && slot < kSlots) {

@@ -17,6 +17,7 @@
 #include "d3d9.h"
 #include "camrel.h"
 #include "camrel_game.h"
+#include "game.h"
 #include "patch.h"
 #include "Logger/Logger.h"
 
@@ -52,15 +53,8 @@ namespace CamRelGame {
 	typedef void(__cdecl* GameFree_t)(void* p);
 	static const GameFree_t GameFree = (GameFree_t)0x005F9924;
 
-	struct Expect {
-		uint32_t address;
-		int size;
-		uint8_t bytes[25];
-		const char* what;
-	};
-
 	// The places that change, with what is around them, and the code the hooks lean on
-	static const Expect kExpect[] = {
+	static const Game::Expect kExpect[] = {
 		{ 0x004B3CE0, 9, { 0x8B, 0x45, 0xFC, 0x50, 0xE8, 0x97, 0x42, 0x14, 0x00 }, "the unlock's copy to the card (memcpy)" },
 		{ 0x004B3D80, 12, { 0x8B, 0x44, 0x24, 0x08, 0x51, 0x52, 0x50, 0xE8, 0xF4, 0x41, 0x14, 0x00 }, "the remade buffer's copy to the card (memcpy)" },
 		{ 0x004B64B0, 13, { 0x8B, 0x46, 0x0C, 0x85, 0xC0, 0x74, 0x09, 0x50, 0xE8, 0x67, 0x34, 0x14, 0x00 }, "the buffer object's free of its copy" },
@@ -306,8 +300,8 @@ namespace CamRelGame {
 			return;
 		}
 		for (size_t i = 0; i < sizeof(kExpect) / sizeof(kExpect[0]); i++) {
-			if (memcmp((const void*)(uintptr_t)kExpect[i].address, kExpect[i].bytes, (size_t)kExpect[i].size) != 0) {
-				Log::TypedLog(CHN_DLL, "CameraRelative: the game's code at %08X (%s) is not what was expected; the level is drawn as the game does\n",
+			if (!Game::Matches(kExpect[i])) {
+				Game::Note("CameraRelative: the game's code at %08X (%s) is not what was expected; the level is drawn as the game does\n",
 					kExpect[i].address, kExpect[i].what);
 				return;
 			}

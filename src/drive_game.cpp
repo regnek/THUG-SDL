@@ -14,6 +14,7 @@
 #include "config.h"
 #include "flickit.h"
 #include "flickit_game.h"
+#include "game.h"
 #include "patch.h"
 #include "QB/CFuncs.h"
 #include "QB/LazyArray.h"
@@ -29,38 +30,37 @@ namespace DriveGame {
 	/*                                                                */
 	/******************************************************************/
 
-	// Obj::ResolveToObject: an object by its name (a car made from a node has the node's), or 0
-	typedef void* (__cdecl* ResolveToObject_t)(uint32_t id);
-	static const ResolveToObject_t ResolveToObject = (ResolveToObject_t)0x0041E750;
-	// A component of an object by the checksum of its type, or 0
-	typedef void* (__thiscall* GetComponent_t)(void* object, uint32_t type);
-	static const GetComponent_t GetComponent = (GetComponent_t)0x0041BDC0;
-	// A global array by its name (the level's NodeArray), or 0; a structure in an array
-	typedef void* (__cdecl* GetGlobalArray_t)(uint32_t name, int assertIfMissing);
-	static const GetGlobalArray_t GetGlobalArray = (GetGlobalArray_t)0x00413650;
-	typedef void* (__thiscall* ArrayStructure_t)(void* array, uint32_t index);
-	static const ArrayStructure_t ArrayStructure = (ArrayStructure_t)0x00408350;
-	// Script::CStruct: a checksum, a text, a vector (four floats, the last 1), an array, by name. These
-	// look into the structures a node names (its ncomp_ ones) as well.
-	typedef bool(__thiscall* StructChecksum_t)(void* s, uint32_t name, uint32_t* out, int assertIfMissing);
-	static const StructChecksum_t StructChecksum = (StructChecksum_t)0x004110B0;
+	// What the other parts of the mod use as well (game.h): an object by its name (a car made from a node has
+	// the node's), a component of an object, the level's NodeArray and a structure in it, a checksum in a
+	// structure and a vector put in one, a symbol of the scripts, scripts read from memory and run
+	using Game::ResolveToObject;
+	using Game::GetComponent;
+	using Game::kSkaterCorePhysics;
+	using Game::GetGlobalArray;
+	using Game::ArrayStructure;
+	using Game::StructChecksum;
+	using Game::StructAddVector;
+	using Game::LookUpSymbol;
+	using Game::SYMBOL_STRUCTURE;
+	using Game::ParseQBFromMemory;
+	using Game::RunGameScript;
+	using Game::RunScriptOf;
+	using Game::Expect;
+
+	// Script::CStruct: a text, a vector (four floats, the last 1), an array, by name. These look into the
+	// structures a node names (its ncomp_ ones) as well.
 	typedef bool(__thiscall* StructText_t)(void* s, uint32_t name, const char** out, int assertIfMissing);
 	static const StructText_t StructText = (StructText_t)0x00410CE0;
 	typedef bool(__thiscall* StructVector_t)(void* s, uint32_t name, float* out, int assertIfMissing);
 	static const StructVector_t StructVector = (StructVector_t)0x004116A0;
 	typedef bool(__thiscall* StructArray_t)(void* s, uint32_t name, Script::LazyArray** out, int assertIfMissing);
 	static const StructArray_t StructArray = (StructArray_t)0x00410FC0;
-	typedef void(__thiscall* StructAddVector_t)(void* s, uint32_t name, float x, float y, float z);
-	static const StructAddVector_t StructAddVector = (StructAddVector_t)0x004124D0;
 	// CStruct::ContainsFlag: a name in it with no value (CreatedAtStart), in the structures it names too
 	typedef bool(__thiscall* StructFlag_t)(void* s, uint32_t flag);
 	// CStruct::GetInteger
 	typedef bool(__thiscall* StructInteger_t)(void* s, uint32_t name, int* out, int assertIfMissing);
 	static const StructInteger_t StructInteger = (StructInteger_t)0x00410D80;
 	static const StructFlag_t StructFlag = (StructFlag_t)0x004112A0;
-	// A symbol by its name: its type at +1 (7 a script, 10 a structure), its value at +0xC
-	typedef uint8_t* (__cdecl* LookUpSymbol_t)(uint32_t name);
-	static const LookUpSymbol_t LookUpSymbol = (LookUpSymbol_t)0x004133A0;
 	// CVehicleComponent::MoveToNode, what Vehicle_MoveToRestart does with a node: the car on the ground
 	// below the node's Pos, turned to its Angles, its wheels settled, still
 	typedef void(__thiscall* MoveToNode_t)(void* vehicle, void* node);
@@ -69,16 +69,6 @@ namespace DriveGame {
 	// model component's [+0x208], as CVehicleComponent::Finalize gets it
 	typedef const uint8_t* (__thiscall* ModelHierarchy_t)(void* modelData);
 	static const ModelHierarchy_t ModelHierarchy = (ModelHierarchy_t)0x0047DB60;
-	// Script::ParseQB for a file in memory, as the game reads a cutscene's scripts
-	typedef void(__cdecl* ParseQBFromMemory_t)(const char* name, uint8_t* data, int flag);
-	static const ParseQBFromMemory_t ParseQBFromMemory = (ParseQBFromMemory_t)0x00409F90;
-	// Script::RunScript: the name of a script, its parameters, the object it runs on
-	typedef bool(__cdecl* RunScript_t)(uint32_t name, void* params, void* object, void* object2);
-	static const RunScript_t RunGameScript = (RunScript_t)0x0040FD00;
-	// GameNet::Manager::InNetGame
-	typedef bool(__thiscall* InNetGame_t)(void* net);
-	static const InNetGame_t InNetGame = (InNetGame_t)0x004C6B50;
-	static void** const kNetManager = (void**)0x0076914C;
 	// CFeeler, the game's line into the level (the skater's physics has one at +0xA8, which its own line test
 	// uses): its two ends (four floats each), what it ignores (0x10, 0 as the skater's test has it), and whether
 	// the line hits the level, the moving objects too or not (MoveToNode looks for the ground without them).
@@ -95,6 +85,7 @@ namespace DriveGame {
 
 	// An object: where it is, its matrix (left, up, the way it faces, a fourth row), the matrix it is drawn with
 	enum {
+		OBJECT_NAME = 0x14,              // its name (a car made from a node has the node's)
 		OBJECT_TAGS = 0x20,              // its tags (a structure, as GetTags gives them: 0x0041EFFE)
 		OBJECT_POSITION = 0x40,
 		OBJECT_MATRIX = 0x60,
@@ -129,31 +120,12 @@ namespace DriveGame {
 		FEELER_POINT = 0x78,
 		FEELER_NORMAL = 0x88,
 	};
-	static const uint32_t kSkaterCorePhysics = 0x5BD63B29;    // SkaterCorePhysics
-
-	enum {
-		SYMBOL_SCRIPT = 7,
-		SYMBOL_STRUCTURE = 10,
-	};
-
-	struct Expect {
-		uint32_t address;
-		int size;
-		uint8_t bytes[16];
-		const char* what;
-	};
+	// (what game.h has is checked there: Game::Ready)
 	static const Expect kExpect[] = {
-		{ 0x0041E750, 12, { 0x8B, 0x44, 0x24, 0x04, 0x8B, 0x0D, 0xC0, 0xB6, 0x69, 0x00, 0x50, 0xE8 }, "Obj::ResolveToObject" },
-		{ 0x0041BDC0, 12, { 0x8B, 0x81, 0xF0, 0x00, 0x00, 0x00, 0x85, 0xC0, 0x74, 0x12, 0x8B, 0x4C }, "CCompositeObject::GetComponent" },
-		{ 0x00413650, 12, { 0x8B, 0x44, 0x24, 0x04, 0x50, 0xE8, 0x46, 0xFD, 0xFF, 0xFF, 0x83, 0xC4 }, "Script::GetArray" },
-		{ 0x00408350, 12, { 0x83, 0x79, 0x08, 0x01, 0x8B, 0x01, 0x74, 0x07, 0x8B, 0x4C, 0x24, 0x04 }, "CArray::GetStructure" },
-		{ 0x004110B0, 12, { 0x51, 0x53, 0x56, 0x8B, 0x31, 0x32, 0xDB, 0x85, 0xF6, 0x89, 0x4C, 0x24 }, "CStruct::GetChecksum" },
 		{ 0x00410CE0, 12, { 0x56, 0x57, 0x8B, 0x7C, 0x24, 0x0C, 0x8D, 0x44, 0x24, 0x0C, 0x50, 0x6A }, "CStruct::GetText" },
 		{ 0x004116A0, 12, { 0x56, 0x8D, 0x44, 0x24, 0x08, 0x50, 0x8B, 0xF1, 0x8B, 0x4C, 0x24, 0x0C }, "CStruct::GetVector" },
 		{ 0x00410FC0, 12, { 0x56, 0x8D, 0x44, 0x24, 0x08, 0x50, 0x8B, 0xF1, 0x8B, 0x4C, 0x24, 0x0C }, "CStruct::GetArray" },
-		{ 0x004124D0, 12, { 0x6A, 0xFF, 0x68, 0xD6, 0x19, 0x62, 0x00, 0x64, 0xA1, 0x00, 0x00, 0x00 }, "CStruct::AddVector" },
 		{ 0x004112A0, 12, { 0x56, 0x8B, 0x31, 0x85, 0xF6, 0x57, 0x74, 0x41, 0x8B, 0x7C, 0x24, 0x0C }, "CStruct::ContainsFlag" },
-		{ 0x004133A0, 12, { 0x8B, 0x4C, 0x24, 0x04, 0x8B, 0xC1, 0x25, 0xFF, 0x0F, 0x00, 0x00, 0x56 }, "Script::LookUpSymbol" },
 		{ 0x0045BEC0, 12, { 0x6A, 0xFF, 0x68, 0x5B, 0x35, 0x62, 0x00, 0x64, 0xA1, 0x00, 0x00, 0x00 }, "CVehicleComponent::MoveToNode" },
 		{ 0x0047DB60, 12, { 0x66, 0x83, 0xB9, 0xAA, 0x01, 0x00, 0x00, 0x01, 0x75, 0x1C, 0x8B, 0x89 }, "CModel: its hierarchy" },
 		{ 0x0045E49A, 11, { 0x8B, 0x88, 0x08, 0x02, 0x00, 0x00, 0xE8, 0xBB, 0xF6, 0x01, 0x00 }, "CVehicleComponent::Finalize: the model's hierarchy" },
@@ -165,9 +137,6 @@ namespace DriveGame {
 		{ 0x0045A3D0, 16, { 0x51, 0x53, 0x56, 0x8B, 0xF1, 0x8B, 0x8E, 0x14, 0x13, 0x00, 0x00, 0xD9, 0x81, 0x38, 0x02, 0x00 }, "CVehicleComponent: its controls" },
 		{ 0x0045EB49, 7, { 0x3D, 0xA6, 0x13, 0xB7, 0x93, 0x74, 0x28 }, "CVehicleComponent: Vehicle_Kick" },
 		{ 0x0044A3E0, 14, { 0x8B, 0x41, 0x0C, 0x8D, 0x48, 0x60, 0x51, 0x8D, 0x88, 0xB0, 0x00, 0x00, 0x00, 0xE8 }, "CSetDisplayMatrixComponent::Update" },
-		{ 0x00409F90, 13, { 0x8B, 0x44, 0x24, 0x0C, 0x8B, 0x4C, 0x24, 0x08, 0x8B, 0x54, 0x24, 0x04, 0x6A }, "Script::ParseQB, from memory" },
-		{ 0x0040FD00, 12, { 0x6A, 0xFF, 0x68, 0x5B, 0x18, 0x62, 0x00, 0x64, 0xA1, 0x00, 0x00, 0x00 }, "Script::RunScript" },
-		{ 0x004C6B50, 12, { 0x56, 0x8B, 0xF1, 0xF6, 0x86, 0x38, 0x01, 0x00, 0x00, 0x0C, 0x74, 0x24 }, "GameNet::Manager::InNetGame" },
 	};
 	// What the crashes use besides (crashes off, the cars on, if these are not as expected)
 	static const Expect kCrashExpect[] = {
@@ -225,20 +194,8 @@ namespace DriveGame {
 	static int s_ready = 0;                  // 1: the game is as expected, -1: not
 	static int s_parsed = 0;                 // 1: the scripts are the game's, -1: they could not be
 	static bool s_cfuncs = false;
-	// The level the cars were found for: BigWorld's count of level loads (0 while BigNodeNames is off),
-	// the NodeArray and its size, and the level's load script (Skate::Instance() + 0x398, as LevelIs reads it)
-	struct LevelKey {
-		uint32_t loads;
-		const void* nodes;
-		uint32_t count;
-		uint32_t level;
-		bool operator!=(const LevelKey& o) const {
-			return loads != o.loads || nodes != o.nodes || count != o.count || level != o.level;
-		}
-	};
-	static LevelKey s_level = { 0, 0, 0, 0 };
-	static uint8_t** const kSkate = (uint8_t**)0x0076A788;
-	static const uint32_t SKATE_LEVEL = 0x398;
+	// The level the cars were found for (Game::Level)
+	static Game::LevelKey s_level = { 0, 0, 0, 0 };
 
 	enum { kMaxCars = 256, kModelSize = 128 };
 	// A car he got out of stands this long, then goes back: it goes, and the car of the level it was comes
@@ -309,7 +266,7 @@ namespace DriveGame {
 	static bool s_down = false;              // Circle on the frame before (his own press)
 	static bool s_grabMade = false;          // Flickit's own Circle (a trigger grab) on this frame's pad data
 	static bool s_released = true;           // let go since a car was taken
-	static LARGE_INTEGER s_lastFrame;        // zero: no frame yet
+	static Game::FrameTimer s_frameTimer;
 	static uint32_t s_lastComeBack = 0;
 	static uint32_t s_lastGoesBack = 0;
 	static float s_carAway = 1.0e9f;         // the nearest car in reach on this frame (CarAway)
@@ -414,7 +371,7 @@ namespace DriveGame {
 		s_n.promptOffScript = Flickit::NameChecksum("Flickit_CarPromptOff");
 		for (int i = 0; i < Drive::Parking::kSlots; i++) {
 			char name[32];
-			sprintf_s(name, sizeof(name), "Flickit_ParkedCar%d", i);
+			Str::Format(name, sizeof(name), "Flickit_ParkedCar%d", i);
 			s_n.parkedCar[i] = Flickit::NameChecksum(name);
 		}
 		s_n.knockedScript = Flickit::NameChecksum("Flickit_CarKnocked");
@@ -452,9 +409,13 @@ namespace DriveGame {
 	static bool Ready() {
 		if (s_ready == 0) {
 			s_ready = 1;
+			if (!Game::Ready()) {
+				Game::Note("Cars: the game's code is not what was expected; the cars are off\n");
+				s_ready = -1;
+			}
 			for (size_t i = 0; i < sizeof(kExpect) / sizeof(kExpect[0]); i++) {
-				if (memcmp((const void*)kExpect[i].address, kExpect[i].bytes, (size_t)kExpect[i].size) != 0) {
-					Log::TypedLog(CHN_SDL, "Cars: the game's code at %08X (%s) is not what was expected; the cars are off\n",
+				if (!Game::Matches(kExpect[i])) {
+					Game::Note("Cars: the game's code at %08X (%s) is not what was expected; the cars are off\n",
 						kExpect[i].address, kExpect[i].what);
 					s_ready = -1;
 				}
@@ -479,9 +440,7 @@ namespace DriveGame {
 			static uint8_t data[sizeof(flickit_cars_qb)];
 			memcpy(data, flickit_cars_qb, sizeof(data));
 			ParseQBFromMemory("scripts\\flickit\\cars.qb", data, 1);
-			const uint8_t* steal = LookUpSymbol(s_n.stealScript);
-			const uint8_t* tune = LookUpSymbol(s_n.defaultTune);
-			if (steal && steal[1] == SYMBOL_SCRIPT && tune && tune[1] == SYMBOL_STRUCTURE) {
+			if (Game::IsScript(s_n.stealScript) && Game::IsSymbol(s_n.defaultTune, SYMBOL_STRUCTURE)) {
 				s_parsed = 1;
 				Note("Cars: on; Circle near a car takes it (reach %.0f); a car he left goes back after %u s (0: it stays); the game has Flickit's car scripts (%u bytes)\n",
 					s_reach, s_standMs / 1000, (unsigned)sizeof(data));
@@ -492,35 +451,6 @@ namespace DriveGame {
 			}
 		}
 		return s_parsed > 0;
-	}
-
-	// Script::RunScript runs a script to its end, but what it gives back is no yes or no for a script: the low
-	// byte of the address its CScript had, from the free just before it returns (0x0040FE2C -> 0x0040E370 ->
-	// 0x0057A960), so 0 for about one in 64. Only a missing script gives 0 for sure. So: is it a script, then run it.
-	static bool RunScriptOf(uint32_t name, void* params, void* object) {
-		const uint8_t* symbol = LookUpSymbol(name);
-		if (!symbol || symbol[1] != SYMBOL_SCRIPT) {
-			return false;
-		}
-		RunGameScript(name, params, object, 0);
-		return true;
-	}
-
-	static bool InNet() {
-		void* net = *kNetManager;
-		return net && InNetGame(net);
-	}
-
-	static float FrameSeconds() {
-		LARGE_INTEGER now, freq;
-		QueryPerformanceCounter(&now);
-		QueryPerformanceFrequency(&freq);
-		float s = 0.0f;
-		if (s_lastFrame.QuadPart && freq.QuadPart) {
-			s = (float)((double)(now.QuadPart - s_lastFrame.QuadPart) / (double)freq.QuadPart);
-		}
-		s_lastFrame = now;
-		return s;
 	}
 
 	/******************************************************************/
@@ -647,7 +577,7 @@ namespace DriveGame {
 			Car& c = s_cars[s_levelCars++];
 			memset(&c, 0, sizeof(c));
 			c.name = name;
-			strncpy_s(c.model, sizeof(c.model), model, _TRUNCATE);
+			Str::Copy(c.model, sizeof(c.model), model);
 			c.slot = -1;
 			c.start[3] = 1.0f;
 			StructVector(node, s_n.pos, c.start, 0);
@@ -747,26 +677,25 @@ namespace DriveGame {
 	// A line for flickit_watchdog.txt (and the log): what the crashes did, a few hundred a session at most
 	static int s_notes = 0;
 	static void Note(const char* format, ...) {
-		char text[400];
 		va_list args;
 		va_start(args, format);
-		vsnprintf(text, sizeof(text), format, args);
-		va_end(args);
-		text[sizeof(text) - 1] = 0;
 		if (s_notes < 400) {
 			s_notes++;
-			FlickitGame::WatchNote(text);
+			Game::NoteV(format, args);
 		}
 		else {
+			char text[400];
+			Str::FormatV(text, sizeof(text), format, args);
 			Log::TypedLog(CHN_SDL, "%s", text);
 		}
+		va_end(args);
 	}
 
 	static bool CrashReady() {
 		if (s_crashReady == 0) {
 			s_crashReady = 1;
 			for (size_t i = 0; i < sizeof(kCrashExpect) / sizeof(kCrashExpect[0]); i++) {
-				if (memcmp((const void*)kCrashExpect[i].address, kCrashExpect[i].bytes, (size_t)kCrashExpect[i].size) != 0) {
+				if (!Game::Matches(kCrashExpect[i])) {
 					Note("Crashes: the game's code at %08X (%s) is not what was expected; the cars go through each other as before\n",
 						kCrashExpect[i].address, kCrashExpect[i].what);
 					s_crashReady = -1;
@@ -904,7 +833,7 @@ namespace DriveGame {
 
 	static uint32_t NewFxName() {
 		char name[32];
-		sprintf_s(name, sizeof(name), "Flickit_CarFx%u", ++s_fxMade);
+		Str::Format(name, sizeof(name), "Flickit_CarFx%u", ++s_fxMade);
 		return Flickit::NameChecksum(name);
 	}
 
@@ -1780,14 +1709,13 @@ namespace DriveGame {
 		if (s_pedReady == 0) {
 			s_pedReady = 1;
 			for (size_t i = 0; i < sizeof(kPedExpect) / sizeof(kPedExpect[0]); i++) {
-				if (memcmp((const void*)kPedExpect[i].address, kPedExpect[i].bytes, (size_t)kPedExpect[i].size) != 0) {
+				if (!Game::Matches(kPedExpect[i])) {
 					Note("People: the game's code at %08X (%s) is not what was expected; cars go through people as before\n",
 						kPedExpect[i].address, kPedExpect[i].what);
 					s_pedReady = -1;
 				}
 			}
-			const uint8_t* hit = LookUpSymbol(s_n.pedHitScript);
-			if (s_pedReady > 0 && !(hit && hit[1] == SYMBOL_SCRIPT)) {
+			if (s_pedReady > 0 && !Game::IsScript(s_n.pedHitScript)) {
 				Note("People: the game does not have Flickit_PedHit; cars go through people as before\n");
 				s_pedReady = -1;
 			}
@@ -2093,23 +2021,19 @@ namespace DriveGame {
 		if (!s_on || !Ready() || !Parsed() || !s.object || !s.pos || !s.take) {
 			return;
 		}
-		LevelKey key;
-		key.loads = BigWorld::NodeLoads();
-		key.nodes = GetGlobalArray(s_n.nodeArray, 0);
-		key.count = key.nodes ? *(const uint32_t*)((const uint8_t*)key.nodes + 8) : 0;
-		key.level = *kSkate ? *(const uint32_t*)(*kSkate + SKATE_LEVEL) : 0;
+		const Game::LevelKey key = Game::Level();
 		if (key != s_level) {
 			s_level = key;
 			FindCars();
 		}
-		const float seconds = FrameSeconds();
+		const float seconds = (float)s_frameTimer.Step();
 		const bool down = *s.take != 0 && !s_grabMade;     // a grab Flickit made for a trigger takes no car
 		const bool pressed = down && !s_down;
 		s_down = down;
 		if (!down) {
 			s_released = true;
 		}
-		if (InNet()) {
+		if (Game::InNet()) {
 			return;
 		}
 		const uint32_t now = GetTickCount();
@@ -2254,7 +2178,7 @@ namespace DriveGame {
 		s_taken.name = name;
 		s_taken.origin = c->slot >= 0 ? s_parking.Origin(c->slot) : name;
 		s_taken.slot = c->slot;
-		strncpy_s(s_taken.model, sizeof(s_taken.model), c->slot >= 0 ? ParkedModel(c->slot) : c->model, _TRUNCATE);
+		Str::Copy(s_taken.model, sizeof(s_taken.model), c->slot >= 0 ? ParkedModel(c->slot) : c->model);
 		s_taken.box = c->slot >= 0 && s_parking.BoxOf(c->slot) ? *s_parking.BoxOf(c->slot) : c->box;
 		memcpy(s_taken.pos, obj + OBJECT_POSITION, sizeof(s_taken.pos));
 		s_taken.heading = Drive::Heading(m);
@@ -2325,7 +2249,7 @@ namespace DriveGame {
 		s_lastDriven.set = false;
 		s_driven.set = true;
 		s_driven.origin = s_taken.origin;
-		strncpy_s(s_driven.model, sizeof(s_driven.model), s_taken.model, _TRUNCATE);
+		Str::Copy(s_driven.model, sizeof(s_driven.model), s_taken.model);
 		s_driven.box = s_taken.box;
 		Log::TypedLog(CHN_SDL, "Cars: driving it from (%.1f %.1f %.1f), facing %.0f degrees, at %.0f units/s; its body's place %.1f to the side; the camera %.0f up, %.0f back\n",
 			s_taken.pos[0], s_taken.pos[1], s_taken.pos[2], s_taken.heading * 57.29578f, s_taken.speed, bodyX, camera.height, camera.distance);
@@ -2450,7 +2374,7 @@ namespace DriveGame {
 		memcpy(s_leaving.pos, obj + OBJECT_POSITION, sizeof(s_leaving.pos));
 		memcpy(s_leaving.matrix, obj + OBJECT_MATRIX, sizeof(s_leaving.matrix));
 		s_leaving.heading = Drive::Heading(s_leaving.matrix);
-		strncpy_s(s_leaving.model, sizeof(s_leaving.model), s_driven.model, _TRUNCATE);
+		Str::Copy(s_leaving.model, sizeof(s_leaving.model), s_driven.model);
 		s_leaving.box = s_driven.box;
 		const Drive::Box wheels = BoxFromWheels(vehicle, s_driven.box);
 		ParkPlace(vehicle, &s_leaving);
@@ -2607,18 +2531,15 @@ namespace DriveGame {
 		if (s_triggerSaidCount < (int)(sizeof(s_triggerSaid) / sizeof(s_triggerSaid[0]))) {
 			s_triggerSaid[s_triggerSaidCount++] = node;
 		}
-		char text[256];
 		if (object) {
 			const float* p = (const float*)((const uint8_t*)object + OBJECT_POSITION);
-			sprintf_s(text, sizeof(text), "Triggers: a trigger face of node %08X was touched, on object %08X at (%.0f %.0f %.0f): %s; nothing was run (the game read through nothing here: the crash at 0x004110B3)",
-				node, *(const uint32_t*)((const uint8_t*)object + 0x14), p[0], p[1], p[2], why);
+			Game::Note("Triggers: a trigger face of node %08X was touched, on object %08X at (%.0f %.0f %.0f): %s; nothing was run (the game read through nothing here: the crash at 0x004110B3)\n",
+				node, *(const uint32_t*)((const uint8_t*)object + OBJECT_NAME), p[0], p[1], p[2], why);
 		}
 		else {
-			sprintf_s(text, sizeof(text), "Triggers: a trigger face of node %08X was touched, in the level's collision: %s; nothing was run (the game read through nothing here: the crash at 0x004110B3)",
+			Game::Note("Triggers: a trigger face of node %08X was touched, in the level's collision: %s; nothing was run (the game read through nothing here: the crash at 0x004110B3)\n",
 				node, why);
 		}
-		Log::TypedLog(CHN_SDL, "%s\n", text);
-		FlickitGame::WatchNote(text);
 	}
 
 	static void __fastcall TriggerTouched(void* self, void* /*edx*/, uint32_t touch, uint32_t node, void* nodes, void* object) {
@@ -2646,7 +2567,7 @@ namespace DriveGame {
 		// that is not a node of the level (a car he left, his car) is left out of that, as the game would
 		// have it if it had looked
 		if (object) {
-			const int32_t index = FindNamedNode(*(const uint32_t*)((const uint8_t*)object + 0x14), 0);
+			const int32_t index = FindNamedNode(*(const uint32_t*)((const uint8_t*)object + OBJECT_NAME), 0);
 			void* level = GetGlobalArray(s_n.nodeArray, 0);
 			const uint32_t count = level ? *(const uint32_t*)((const uint8_t*)level + 8) : 0;
 			if (index < 0 || (uint32_t)index >= count) {
@@ -2663,7 +2584,7 @@ namespace DriveGame {
 		if (memcmp((const void*)(uintptr_t)kTriggerTouched, kTriggerStart, sizeof(kTriggerStart)) != 0
 			|| memcmp((const void*)(uintptr_t)0x0045696A, kTriggerEnd, sizeof(kTriggerEnd)) != 0
 			|| memcmp((const void*)(uintptr_t)0x004568FE, kTriggerRead, sizeof(kTriggerRead)) != 0) {
-			Log::TypedLog(CHN_SDL, "Triggers: the game's code for a touched trigger face is not what was expected; left as it is\n");
+			Game::Note("Triggers: the game's code for a touched trigger face is not what was expected; left as it is\n");
 			return;
 		}
 		uint8_t* code = (uint8_t*)VirtualAlloc(NULL, 32, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);

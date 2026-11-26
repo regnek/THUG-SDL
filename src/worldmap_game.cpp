@@ -12,6 +12,7 @@
 
 #include "d3d9.h"
 #include "flickit_game.h"
+#include "game.h"
 #include "gamefiles.h"
 #include "patch.h"
 #include "players_game.h"
@@ -28,39 +29,24 @@ namespace WorldMapGame {
 
 	static IDirect3DDevice9** const kDevice = (IDirect3DDevice9**)0x007CEC6C;
 	static uint8_t** const kFrontEnd = (uint8_t**)0x0076A79C;        // Mdl::FrontEnd
-	static uint8_t** const kSkate = (uint8_t**)0x0076A788;           // Mdl::Skate
-	static void** const kNetManager = (void**)0x0076914C;            // GameNet::Manager
 	enum {
 		FRONTEND_PAUSED = 0x30,     // byte: the game is paused (the script command GameIsPaused)
-		SKATE_LEVEL = 0x398,        // the checksum of the level's load script (LevelIs)
 	};
 	// FrontEnd::PauseGame(bool), what the script commands PauseGame and UnPauseGame call: the skaters, the
 	// objects, the scripts and the sound, and the flag
 	typedef void(__thiscall* PauseGame_t)(void* frontEnd, bool pause);
 	static const PauseGame_t PauseGame = (PauseGame_t)0x00503D20;
-	// GameNet::Manager::InNetGame(), what the script command InNetGame jumps to
-	typedef bool(__thiscall* InNetGame_t)(void* manager);
-	static const InNetGame_t InNetGame = (InNetGame_t)0x004C6B50;
 	// The end of the frame: "mov eax, [device] / mov ecx, [eax] / mov edx, [ecx+0A8h] / push eax / call edx",
 	// the device's EndScene. The first of those becomes a call to FrameEndStub.
 	static const uint32_t kFrameEnd = 0x004980CE;
 
-	struct Expect {
-		uint32_t address;
-		int size;
-		uint8_t bytes[16];
-		const char* what;
-	};
-
-	static const Expect kExpect[] = {
+	// (the level loaded and whether this is a net game are game.h's, checked there: Game::Ready)
+	static const Game::Expect kExpect[] = {
 		{ 0x004980CE, 16, { 0xA1, 0x6C, 0xEC, 0x7C, 0x00, 0x8B, 0x08, 0x8B, 0x91, 0xA8, 0x00, 0x00, 0x00, 0x50, 0xFF, 0xD2 }, "the end of the frame: the device's EndScene" },
 		{ 0x00527850, 13, { 0x8B, 0x0D, 0x9C, 0xA7, 0x76, 0x00, 0x6A, 0x01, 0xE8, 0xC3, 0xC4, 0xFD, 0xFF }, "the script command PauseGame" },
 		{ 0x00527870, 13, { 0x8B, 0x0D, 0x9C, 0xA7, 0x76, 0x00, 0x6A, 0x00, 0xE8, 0xA3, 0xC4, 0xFD, 0xFF }, "the script command UnPauseGame" },
 		{ 0x00527880, 13, { 0xA1, 0x9C, 0xA7, 0x76, 0x00, 0x80, 0x78, 0x30, 0x00, 0x0F, 0x95, 0xC0, 0xC3 }, "the script command GameIsPaused" },
 		{ 0x00503D20, 13, { 0x51, 0x53, 0x8B, 0x5C, 0x24, 0x0C, 0x3A, 0x59, 0x30, 0x89, 0x4C, 0x24, 0x04 }, "FrontEnd::PauseGame" },
-		{ 0x00527F90, 11, { 0x8B, 0x0D, 0x4C, 0x91, 0x76, 0x00, 0xE9, 0xB5, 0xEB, 0xF9, 0xFF }, "the script command InNetGame" },
-		{ 0x004C6B50, 12, { 0x56, 0x8B, 0xF1, 0xF6, 0x86, 0x38, 0x01, 0x00, 0x00, 0x0C, 0x74, 0x24 }, "GameNet::Manager::InNetGame" },
-		{ 0x00528DAA, 6, { 0x8B, 0x8E, 0x98, 0x03, 0x00, 0x00 }, "LevelIs: the level loaded" },
 	};
 
 	/******************************************************************/
@@ -79,7 +65,6 @@ namespace WorldMapGame {
 	static bool s_ready = false;        // on, with a map
 	static int s_button = SDL_CONTROLLER_BUTTON_BACK;     // [Flickit] MapButton
 	static int s_key = SDL_SCANCODE_M;                    // [Flickit] MapKey
-	static char s_dir[MAX_PATH] = "";
 	static std::vector<uint8_t> s_file;
 	static WorldMap::MapFile s_map;
 	static std::vector<WorldMap::Spot> s_spots;
@@ -160,17 +145,6 @@ namespace WorldMapGame {
 	};
 	static std::vector<Logo> s_logos;
 
-	static double Seconds() {
-		static double perSecond = 0.0;
-		LARGE_INTEGER v;
-		if (perSecond <= 0.0) {
-			QueryPerformanceFrequency(&v);
-			perSecond = v.QuadPart > 0 ? (double)v.QuadPart : 1000.0;
-		}
-		QueryPerformanceCounter(&v);
-		return (double)v.QuadPart / perSecond;
-	}
-
 	static void Message(const char* text) {
 		s_message = text;
 		s_messageUntil = GetTickCount() + 2500;
@@ -181,23 +155,11 @@ namespace WorldMapGame {
 	/******************************************************************/
 
 	static bool ReadWhole(const char* path, std::vector<uint8_t>* out) {
-		HANDLE f = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-		if (f == INVALID_HANDLE_VALUE) {
-			return false;
-		}
-		LARGE_INTEGER size;
-		bool ok = GetFileSizeEx(f, &size) && size.QuadPart >= 0 && size.QuadPart < 256 * 1024 * 1024;
-		if (ok) {
-			out->resize((size_t)size.QuadPart);
-			DWORD got = 0;
-			ok = size.QuadPart == 0 || (ReadFile(f, &(*out)[0], (DWORD)size.QuadPart, &got, NULL) && got == (DWORD)size.QuadPart);
-		}
-		CloseHandle(f);
-		return ok;
+		return Game::ReadWhole(path, out, 256u * 1024u * 1024u);
 	}
 
 	static std::string Path(const char* name) {
-		return std::string(s_dir) + name;
+		return std::string(Game::ExeDir()) + name;
 	}
 
 	static void ReadSpots() {
@@ -237,21 +199,9 @@ namespace WorldMapGame {
 	/*  Whether it may open                                           */
 	/******************************************************************/
 
-	static uint32_t LevelNow() {
-		const uint8_t* skate = *kSkate;
-		return skate ? *(const uint32_t*)(skate + SKATE_LEVEL) : 0;
-	}
-
-	static bool NetGame() {
-		void* net = *kNetManager;
-		return net && InNetGame(net);
-	}
-
-	// NULL when the map can open now, else why not (for the log)
-	static const char* Refusal(bool inMenu) {
-		if (!s_ready) {
-			return "it is off";
-		}
+	// NULL while the game is being played by a skater who has his controls, else why not (for the log): what
+	// the map and a card both need before they open. w: where he is.
+	static const char* NotPlaying(bool inMenu, FlickitGame::Whereabouts* w) {
 		if (inMenu) {
 			return "a menu is up";
 		}
@@ -259,18 +209,30 @@ namespace WorldMapGame {
 		if (!frontEnd || frontEnd[FRONTEND_PAUSED]) {
 			return "the game is paused";
 		}
-		if (LevelNow() != s_map.level) {
-			return "the map is of another level";
-		}
-		if (NetGame()) {
+		if (Game::InNet()) {
 			return "this is a net game";
 		}
-		FlickitGame::Whereabouts w;
-		if (!FlickitGame::SkaterWhereabouts(w) || GetTickCount() - w.tick > 500) {
+		if (!FlickitGame::SkaterWhereabouts(*w) || GetTickCount() - w->tick > 500) {
 			return "no skater has been seen";
 		}
-		if (!w.controls) {
+		if (!w->controls) {
 			return "the skater's controls are taken";
+		}
+		return NULL;
+	}
+
+	// NULL when the map can open now, else why not (for the log)
+	static const char* Refusal(bool inMenu) {
+		if (!s_ready) {
+			return "it is off";
+		}
+		FlickitGame::Whereabouts w;
+		const char* why = NotPlaying(inMenu, &w);
+		if (why) {
+			return why;
+		}
+		if (Game::LevelScript() != s_map.level) {
+			return "the map is of another level";
 		}
 		if (!w.settled) {
 			return "autosave is still to put him back";
@@ -482,24 +444,8 @@ namespace WorldMapGame {
 		if (!s_ready) {
 			return "the map is off";
 		}
-		if (inMenu) {
-			return "a menu is up";
-		}
-		const uint8_t* frontEnd = *kFrontEnd;
-		if (!frontEnd || frontEnd[FRONTEND_PAUSED]) {
-			return "the game is paused";
-		}
-		if (NetGame()) {
-			return "this is a net game";
-		}
 		FlickitGame::Whereabouts w;
-		if (!FlickitGame::SkaterWhereabouts(w) || GetTickCount() - w.tick > 500) {
-			return "no skater has been seen";
-		}
-		if (!w.controls) {
-			return "the skater's controls are taken";
-		}
-		return NULL;
+		return NotPlaying(inMenu, &w);
 	}
 
 	static Logo* FindLogo(const char* company) {
@@ -510,6 +456,17 @@ namespace WorldMapGame {
 		}
 		return NULL;
 	}
+
+	// A file as GameFiles::WalkPre reads an archive
+	struct FileSource {
+		FILE* f;
+		bool Read(void* to, size_t n) {
+			return fread(to, 1, n, f) == n;
+		}
+		bool Skip(size_t n) {
+			return fseek(f, (long)n, SEEK_CUR) == 0;
+		}
+	};
 
 	// The logos of these companies, read from the game's data\pre\skaterparts.pre the first time each is
 	// wanted, in one pass over it (the other entries are passed by their heads)
@@ -535,46 +492,29 @@ namespace WorldMapGame {
 		if (todo.empty()) {
 			return;
 		}
-		const std::string path = std::string(s_dir) + "data\\pre\\skaterparts.pre";
+		const std::string path = Path("data\\pre\\skaterparts.pre");
 		FILE* f = NULL;
 		if (fopen_s(&f, path.c_str(), "rb") != 0 || !f) {
 			Log::TypedLog(CHN_SDL, "Map: cannot open %s; the card has the companies' names\n", path.c_str());
 			return;
 		}
-		uint8_t head[16];
-		uint32_t count = 0;
+		FileSource src = { f };
 		size_t found = 0;
-		if (fread(head, 1, 12, f) == 12 && GameFiles::ReadPreHead(head, &count)) {
-			std::vector<char> name;
-			std::vector<uint8_t> stored, data;
-			for (uint32_t e = 0; e < count && found < todo.size(); e++) {
-				GameFiles::EntryHead h;
-				if (fread(head, 1, 16, f) != 16 || !GameFiles::ReadEntryHead(head, &h)) {
-					break;
-				}
-				name.resize(h.nameLength);
-				if (fread(&name[0], 1, h.nameLength, f) != h.nameLength) {
-					break;
-				}
-				const uint32_t bytes = GameFiles::Stored(h);
-				Logo* want = NULL;
+		Logo* want = NULL;
+		const bool archive = GameFiles::WalkPre(src,
+			[&](const char* name, size_t length) {
+				want = NULL;
 				for (size_t k = 0; k < todo.size() && !want; k++) {
 					Logo& l = s_logos[todo[k]];
-					if (l.picture.w == 0 && GameFiles::SameName(&name[0], h.nameLength, Players::LogoOf(l.company.c_str()))) {
+					if (l.picture.w == 0 && GameFiles::SameName(name, length, Players::LogoOf(l.company.c_str()))) {
 						want = &l;
 					}
 				}
-				if (!want) {
-					if (fseek(f, (long)GameFiles::Padded(bytes), SEEK_CUR) != 0) {
-						break;
-					}
-					continue;
-				}
-				stored.resize(bytes ? bytes : 1);
-				if (bytes && fread(&stored[0], 1, bytes, f) != bytes) {
-					break;
-				}
-				if (GameFiles::Unpack(h, &stored[0], &data) && !data.empty() && GameFiles::DecodeImg(&data[0], data.size(), &want->picture)) {
+				return want != NULL;
+			},
+			[&](const char*, size_t, const GameFiles::EntryHead& h, const uint8_t* stored) {
+				std::vector<uint8_t> data;
+				if (GameFiles::Unpack(h, stored, &data) && !data.empty() && GameFiles::DecodeImg(&data[0], data.size(), &want->picture)) {
 					found++;
 				}
 				else {
@@ -582,12 +522,9 @@ namespace WorldMapGame {
 					want->picture.w = want->picture.h = 0;
 					Log::TypedLog(CHN_SDL, "Map: the logo of %s in skaterparts.pre is not a picture Flickit can read\n", want->company.c_str());
 				}
-				if (fseek(f, (long)(GameFiles::Padded(bytes) - bytes), SEEK_CUR) != 0) {
-					break;
-				}
-			}
-		}
-		else {
+				return found < todo.size();
+			});
+		if (!archive) {
 			Log::TypedLog(CHN_SDL, "Map: %s is not a .pre archive of the game's\n", path.c_str());
 		}
 		fclose(f);
@@ -604,10 +541,10 @@ namespace WorldMapGame {
 		if (menuUp) {
 			return "a menu of the game's came up";
 		}
-		if (NetGame()) {
+		if (Game::InNet()) {
 			return "a net game";
 		}
-		if (LevelNow() != s_overlayLevel) {
+		if (Game::LevelScript() != s_overlayLevel) {
 			return "the level changed";
 		}
 		FlickitGame::Whereabouts w;
@@ -625,7 +562,7 @@ namespace WorldMapGame {
 		s_cardWas = now;                // a direction down already does nothing
 		s_cardMessage.clear();
 		s_toast.clear();
-		s_overlayLevel = LevelNow();
+		s_overlayLevel = Game::LevelScript();
 		if (s_cardWho.sponsor != Players::kUnsponsored) {
 			const char* companies[2] = { s_cardWho.board, s_cardWho.shoes };
 			ReadLogos(companies, 2);
@@ -735,7 +672,7 @@ namespace WorldMapGame {
 	static void OpenList(const Dpad& now) {
 		ScreenSize();
 		s_listWas = now;
-		s_overlayLevel = LevelNow();
+		s_overlayLevel = Game::LevelScript();
 		ListRows();
 		s_listOpen = true;
 	}
@@ -820,7 +757,7 @@ namespace WorldMapGame {
 			Close(false, c && Button(c, s_button));
 			return;
 		}
-		if (LevelNow() != s_map.level || NetGame() || !*kFrontEnd || !(*kFrontEnd)[FRONTEND_PAUSED]) {
+		if (Game::LevelScript() != s_map.level || Game::InNet() || !*kFrontEnd || !(*kFrontEnd)[FRONTEND_PAUSED]) {
 			// the level went, or something else unpaused the game
 			Log::TypedLog(CHN_SDL, "Map: closed by the game\n");
 			Close(false, c && Button(c, s_button));
@@ -859,10 +796,6 @@ namespace WorldMapGame {
 		Blank(cd, true);
 	}
 
-	bool IsOpen() {
-		return s_open;
-	}
-
 	bool CameraButton(int port, bool down, int button, bool inMenu) {
 		if (port != 0 || !s_ready || button != s_button) {
 			return down;
@@ -891,7 +824,7 @@ namespace WorldMapGame {
 		if (!s_ready) {
 			return;
 		}
-		const double t = Seconds();
+		const double t = Game::Seconds();
 		const double dt = s_lastPoll > 0.0 ? t - s_lastPoll : 0.0;
 		s_lastPoll = t;
 		SDL_GameController* c = controller && SDL_GameControllerGetAttached(controller) ? controller : NULL;
@@ -1423,7 +1356,7 @@ namespace WorldMapGame {
 		Text("MAP", 28.0f * ui, (band - 30.0f * ui) * 0.5f, 30.0f * ui, Rgba(255, 255, 255, 235), -1, 0.25f);
 		{
 			char count[48];
-			sprintf_s(count, sizeof(count), "%u spots", (unsigned)s_spots.size());
+			Str::Format(count, sizeof(count), "%u spots", (unsigned)s_spots.size());
 			Text(count, W - 28.0f * ui, (band - 22.0f * ui) * 0.5f, 22.0f * ui, Rgba(200, 205, 215, 200), 1);
 		}
 		if (s_picked >= 0) {
@@ -1572,7 +1505,7 @@ namespace WorldMapGame {
 		// his story
 		{
 			char goals[16];
-			sprintf_s(goals, sizeof(goals), "%d", p.goals);
+			Str::Format(goals, sizeof(goals), "%d", p.goals);
 			Text("STORY", L, y0 + 226.0f * ui, 15.0f * ui, dim, -1, 0.16f, false);
 			Text("GOALS", R, y0 + 226.0f * ui, 15.0f * ui, dim, 1, 0.16f, false);
 			Text(p.level, L, y0 + 248.0f * ui, 28.0f * ui, white, -1, 0.0f, false);
@@ -1583,7 +1516,7 @@ namespace WorldMapGame {
 		for (int k = 0; k < Players::kStats; k++) {
 			const float cx = L + (k / 5) * (colW + colGap), top = statsTop + (k % 5) * rowPitch;
 			char value[8];
-			sprintf_s(value, sizeof(value), "%d", p.stats[k]);
+			Str::Format(value, sizeof(value), "%d", p.stats[k]);
 			Text(Players::StatName(k), cx, top, 19.0f * ui, soft, -1, 0.0f, false);
 			Text(value, cx + colW, top, 19.0f * ui, white, 1, 0.0f, false);
 		}
@@ -1641,7 +1574,7 @@ namespace WorldMapGame {
 			return;
 		}
 		char count[32];
-		sprintf_s(count, sizeof(count), "%d HERE", n);
+		Str::Format(count, sizeof(count), "%d HERE", n);
 		Text("PLAYERS", L, y0 + 34.0f * ui, 30.0f * ui, white, -1, 0.06f, false);
 		Text(count, R, y0 + 44.0f * ui, 15.0f * ui, dim, 1, 0.16f, false);
 		if (!n) {
@@ -1662,7 +1595,7 @@ namespace WorldMapGame {
 			}
 			Text(about, L + 26.0f * ui, top + 46.0f * ui, 15.0f * ui, dim, -1, 0.1f, false);
 			char away[24];
-			sprintf_s(away, sizeof(away), "%.0f m", r.away * 0.0254f);
+			Str::Format(away, sizeof(away), "%.0f m", r.away * 0.0254f);
 			Text(away, R - 40.0f * ui, top + 26.0f * ui, 23.0f * ui, picked ? white : Rgba(226, 230, 238, 220), 1, 0.0f, false);
 		}
 		static const char* const kPad[][2] = { { "D-pad up / down", "Choose" }, { "Right", "View card" }, { "Left", "Close" } };
@@ -1762,20 +1695,15 @@ namespace WorldMapGame {
 		}
 		if (!s_checked) {
 			s_checked = true;
-			s_codeOk = true;
+			s_codeOk = Game::Ready();
+			if (!s_codeOk) {
+				Game::Note("Map: the game's code is not what was expected; the map is off\n");
+			}
 			for (size_t i = 0; i < sizeof(kExpect) / sizeof(kExpect[0]); i++) {
-				if (memcmp((const void*)(uintptr_t)kExpect[i].address, kExpect[i].bytes, (size_t)kExpect[i].size) != 0) {
-					Log::TypedLog(CHN_SDL, "Map: the game's code at %08X (%s) is not what was expected; the map is off\n", kExpect[i].address, kExpect[i].what);
+				if (!Game::Matches(kExpect[i])) {
+					Game::Note("Map: the game's code at %08X (%s) is not what was expected; the map is off\n", kExpect[i].address, kExpect[i].what);
 					s_codeOk = false;
 				}
-			}
-			const DWORD n = GetModuleFileNameA(NULL, s_dir, MAX_PATH);
-			char* slash = n && n < MAX_PATH ? strrchr(s_dir, '\\') : NULL;
-			if (slash) {
-				slash[1] = 0;
-			}
-			else {
-				s_dir[0] = 0;
 			}
 		}
 		if (!s_codeOk) {
@@ -1806,7 +1734,7 @@ namespace WorldMapGame {
 			s_patched = true;
 		}
 		s_ready = true;
-		Log::TypedLog(CHN_SDL, "Map: on; hold controller button %d for %d ms (a tap still does what it did), or press key %d\n",
-			s_button, hold, s_key);
+		Log::TypedLog(CHN_SDL, "Map: on; press controller button %d, or key %d (where the camera is on that button too: held for %d ms, a tap is still the camera's)\n",
+			s_button, s_key, hold);
 	}
 }

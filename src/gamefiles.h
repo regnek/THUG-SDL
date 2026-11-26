@@ -134,34 +134,46 @@ namespace GameFiles {
 		return h.size == 0 || UnpackLzss(stored, h.packed, &(*out)[0], h.size);
 	}
 
-	// An entry of an archive in memory, by its name
-	inline bool FindInPre(const uint8_t* pre, size_t n, const char* name, std::vector<uint8_t>* out) {
+	// Goes through an archive's entries in order, from a source of its bytes: src.Read(to, n) gives the next n
+	// bytes (false when there are not that many left) and src.Skip(n) passes over n (past the end is no error:
+	// the next Read says so). want(name, nameLength) says whether an entry's data is asked for; got(name,
+	// nameLength, head, stored) is given it as the archive has it (Stored(head) bytes, for Unpack) and answers
+	// whether to go on. False when the source is not an archive; true otherwise, however far it came (an entry
+	// that cannot be read ends it).
+	template <class Source, class Want, class Got>
+	bool WalkPre(Source& src, Want want, Got got) {
+		uint8_t head[16];
 		uint32_t count = 0;
-		if (n < 12 || !ReadPreHead(pre, &count)) {
+		if (!src.Read(head, 12) || !ReadPreHead(head, &count)) {
 			return false;
 		}
-		size_t at = 12;
+		std::vector<char> name;
+		std::vector<uint8_t> stored;
 		for (uint32_t e = 0; e < count; e++) {
 			EntryHead h;
-			if (n - at < 16 || !ReadEntryHead(pre + at, &h)) {
-				return false;
+			if (!src.Read(head, 16) || !ReadEntryHead(head, &h)) {
+				break;
 			}
-			at += 16;
-			if (n - at < h.nameLength) {
-				return false;
+			name.resize(h.nameLength);
+			if (!src.Read(&name[0], h.nameLength)) {
+				break;
 			}
-			const char* stored = (const char*)(pre + at);
-			at += h.nameLength;
 			const uint32_t bytes = Stored(h);
-			if (n - at < bytes) {
-				return false;
+			if (!want(&name[0], (size_t)h.nameLength)) {
+				if (!src.Skip(Padded(bytes))) {
+					break;
+				}
+				continue;
 			}
-			if (SameName(stored, h.nameLength, name)) {
-				return Unpack(h, pre + at, out);
+			stored.resize(bytes ? bytes : 1);
+			if (bytes && !src.Read(&stored[0], bytes)) {
+				break;
 			}
-			at += Padded(bytes) <= n - at ? Padded(bytes) : bytes;
+			if (!got(&name[0], (size_t)h.nameLength, h, &stored[0]) || !src.Skip(Padded(bytes) - bytes)) {
+				break;
+			}
 		}
-		return false;
+		return true;
 	}
 
 	// Where pixel (x, y) is in a swizzled picture (y counted as stored: from the bottom)

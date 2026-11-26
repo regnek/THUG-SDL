@@ -20,13 +20,13 @@ jobs:
       - uses: actions/checkout@v4
       - name: Flickit recognizer tests
         run: |
-          g++ -std=c++11 -Wall -Wextra -I src tests/flickit_test.cpp src/flickit.cpp -o flickit_test
+          g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -I src tests/flickit_test.cpp src/flickit.cpp -o flickit_test
           ./flickit_test
-          g++ -std=c++11 -Wall -Wextra -I src tests/flickit_pattern_test.cpp src/flickit.cpp -o flickit_pattern_test
+          g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -I src tests/flickit_pattern_test.cpp src/flickit.cpp -o flickit_pattern_test
           ./flickit_pattern_test
-          g++ -std=c++11 -Wall -Wextra -I src tests/flickit_grind_test.cpp src/flickit.cpp -o flickit_grind_test
+          g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -I src tests/flickit_grind_test.cpp src/flickit.cpp -o flickit_grind_test
           ./flickit_grind_test scripts/qb/source/scripts/game/skater
-          g++ -std=c++11 -Wall -Wextra -I src tests/flickit_physics_test.cpp src/flickit.cpp -o flickit_physics_test
+          g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -I src tests/flickit_physics_test.cpp src/flickit.cpp -o flickit_physics_test
           ./flickit_physics_test scripts/qb/source/scripts/game/skater
           g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -I src tests/flickit_pose_test.cpp -o flickit_pose_test
           ./flickit_pose_test
@@ -58,6 +58,8 @@ jobs:
           ./daynight_test
           g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -I src tests/facelist_test.cpp -o facelist_test
           ./facelist_test
+          g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -I src tests/str_test.cpp -o str_test
+          ./str_test
       - name: Flickit's car and player scripts
         run: |
           # the compiler gives the game's own compiled files for these sources (but for the order of the names)

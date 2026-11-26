@@ -1,10 +1,10 @@
 #include <windows.h>
 #include <stdint.h>
-#include <stdio.h>
 #include <string.h>
 
 #include "bigworld.h"
 #include "facelist.h"
+#include "game.h"
 #include "nodenames.h"
 #include "patch.h"
 #include "Logger/Logger.h"
@@ -28,16 +28,15 @@ namespace BigWorld {
 	static const uint8_t kFillBytes[] = { 0x51, 0x53, 0x56, 0x57, 0x83, 0xCB, 0xFF, 0x8B, 0xC3 };   // push ecx/ebx/esi/edi, or ebx, -1, mov eax, ebx
 	static const uint8_t kFindBytes[] = { 0x51, 0x57, 0x6A, 0x00, 0x68, 0xC5, 0xEC, 0x72, 0xC4 };   // push ecx/edi, push 0, push "NodeArray"
 
-	static const uint32_t kNodeArray = 0xC472ECC5;   // "NodeArray", the level's nodes (a global array of structures)
 	static const uint32_t kName = 0xA1DC81F9;        // "Name"
 
-	// The game's own functions, as its two use them
-	typedef void* (__cdecl* GetGlobalArray_NativeCall)(uint32_t name, int assertIfMissing);              // 0x00413650: the array, or null
-	typedef void* (__thiscall* GetStructure_NativeCall)(void* array, uint32_t index);                   // 0x00408350: ret 4
-	typedef bool (__thiscall* GetChecksum_NativeCall)(void* structure, uint32_t name, uint32_t* value, int assertIfMissing);   // 0x004110B0: ret 0Ch
-	static const GetGlobalArray_NativeCall GetGlobalArray = (GetGlobalArray_NativeCall)0x00413650;
-	static const GetStructure_NativeCall GetStructure = (GetStructure_NativeCall)0x00408350;
-	static const GetChecksum_NativeCall GetChecksum = (GetChecksum_NativeCall)0x004110B0;
+	// The game's own functions, as its two use them (game.h): the level's nodes, a global array of structures
+	// ("NodeArray"); a structure in an array; a checksum in a structure. Game::Ready is not asked here: the
+	// two functions that are replaced are compared with what is expected below, and they call these three.
+	using Game::kNodeArray;
+	using Game::GetGlobalArray;
+	using Game::ArrayStructure;
+	using Game::StructChecksum;
 
 	static NodeNames::Table s_names;
 
@@ -46,9 +45,9 @@ namespace BigWorld {
 	}
 
 	static bool NameOfNode(void* nodes, uint32_t index, uint32_t* name) {
-		void* node = GetStructure(nodes, index);
+		void* node = ArrayStructure(nodes, index);
 		*name = 0;
-		return node && GetChecksum(node, kName, name, 0);
+		return node && StructChecksum(node, kName, name, 0);
 	}
 
 	static uint32_t s_loads = 0;        // level loads (the table is made once for each)
@@ -236,11 +235,11 @@ namespace BigWorld {
 		}
 		switch (FaceList::NewsOf(s_faceTally, &s_told)) {
 		case FaceList::kDropped:
-			sprintf_s(text, size, "BigWorld: a box in the collision reached more than %u faces; %u face numbers did not fit, all boxes together "
+			Str::Format(text, size, "BigWorld: a box in the collision reached more than %u faces; %u face numbers did not fit, all boxes together "
 				"(those faces were not tried); the most a box reached: %u\n", kFaceCap, s_faceTally.dropped, s_faceTally.most);
 			return true;
 		case FaceList::kMost:
-			sprintf_s(text, size, "BigWorld: a box in the collision reached %u faces, past the game's list of 6000 (past that it wrote over its "
+			Str::Format(text, size, "BigWorld: a box in the collision reached %u faces, past the game's list of 6000 (past that it wrote over its "
 				"managers' pointers: the crashes while driving); %u boxes past 6000 so far\n", s_faceTally.most, s_faceTally.past);
 			return true;
 		default:

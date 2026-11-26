@@ -85,9 +85,6 @@ namespace Guard {
 	// The processor's debug control (DR7) for breakpoint i (0 to 3; its address in DR0 to DR3) on a write of the
 	// 4 bytes at its address: on in this thread (bit 2i), on a write (bits 16+4i, 17+4i: 01), 4 bytes long (bits
 	// 18+4i, 19+4i: 11). The mask is all of breakpoint i's bits, so that the others' are left as they are.
-	static const uint32_t kDr7Mask = 0x000F0003;     // breakpoint 0's
-	static const uint32_t kDr7Bits = 0x000D0001;
-
 	inline uint32_t Dr7Mask(int i) {
 		return (3u << (2 * i)) | (0xFu << (16 + 4 * i));
 	}

@@ -1,6 +1,5 @@
 #include <windows.h>
 #include <tlhelp32.h>
-#include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -8,6 +7,7 @@
 #include "guard.h"
 #include "guard_game.h"
 #include "flickit_game.h"
+#include "game.h"
 
 #define FLICKIT_SECTION "Flickit"
 
@@ -409,7 +409,7 @@ namespace GuardGame {
 	// Where an address is: the game's code as it is, anything else as a module and how far into it
 	static void Where(uint32_t a, char* out, size_t size) {
 		if (InGameCode(a)) {
-			sprintf_s(out, size, "%08X", a);
+			Str::Format(out, size, "%08X", a);
 			return;
 		}
 		HMODULE m = 0;
@@ -417,20 +417,10 @@ namespace GuardGame {
 			char path[MAX_PATH];
 			const DWORD n = GetModuleFileNameA(m, path, MAX_PATH);
 			const char* name = n && n < MAX_PATH ? strrchr(path, '\\') : 0;
-			sprintf_s(out, size, "%s+%X", name ? name + 1 : n && n < MAX_PATH ? path : "?", a - (uint32_t)(uintptr_t)m);
+			Str::Format(out, size, "%s+%X", name ? name + 1 : n && n < MAX_PATH ? path : "?", a - (uint32_t)(uintptr_t)m);
 			return;
 		}
-		sprintf_s(out, size, "%08X (in no module)", a);
-	}
-
-	static void Line(const char* format, ...) {
-		char text[1024];
-		va_list args;
-		va_start(args, format);
-		vsnprintf(text, sizeof(text), format, args);
-		va_end(args);
-		text[sizeof(text) - 1] = 0;
-		FlickitGame::WatchNote(text);
+		Str::Format(out, size, "%08X (in no module)", a);
 	}
 
 	static const char* Skater() {
@@ -439,8 +429,8 @@ namespace GuardGame {
 		if (!FlickitGame::SkaterWhereabouts(w)) {
 			return "the skater not seen yet";
 		}
-		sprintf_s(text, sizeof(text), "the skater %s at (%.0f %.0f %.0f), %u ms before this note", w.driving ? "driving" : "not driving",
-			w.pos[0], w.pos[1], w.pos[2], GetTickCount() - w.tick);
+		Str::Format(text, sizeof(text), "the skater %s at (%.0f %.0f %.0f), %u ms before this note", w.driving ? "driving" : "not driving",
+			w.pos[0], w.pos[1], w.pos[2], (unsigned)(GetTickCount() - w.tick));
 		return text;
 	}
 
@@ -450,22 +440,22 @@ namespace GuardGame {
 		const char* name = kWords[n.word].name;
 		if (n.gamesOwn) {
 			if (n.now) {
-				Line("Guard: the game set its %s to 0x%08X\n", name, n.now);
+				Game::Note("Guard: the game set its %s to 0x%08X\n", name, n.now);
 			}
 			else {
-				Line("Guard: the game cleared its %s (it was 0x%08X)\n", name, n.before);
+				Game::Note("Guard: the game cleared its %s (it was 0x%08X)\n", name, n.before);
 			}
 			return;
 		}
 		const LONG count = (LONG)s_reports + 1;
 		if (s_reports >= kReports || !n.full) {
 			if (s_reports == kReports) {
-				Line("Guard: more writes over the watched pointers: from here on only one in a hundred is written down\n");
+				Game::Note("Guard: more writes over the watched pointers: from here on only one in a hundred is written down\n");
 				s_reports++;
 			}
 			static LONG s_more = 0;
 			if (s_more++ % 100 == 0) {
-				Line("Guard: the %s written over again with 0x%08X, before %s (%ld put back in all)\n", name, n.now, where, s_putBacks);
+				Game::Note("Guard: the %s written over again with 0x%08X, before %s (%ld put back in all)\n", name, n.now, where, s_putBacks);
 			}
 			return;
 		}
@@ -473,20 +463,20 @@ namespace GuardGame {
 		const char* done = n.action == Guard::kPutBack ? "put back"
 			: n.action == Guard::kAccept ? "it points to an object manager, so it is taken as the one now"
 			: n.now == n.before ? "it is what it was" : "there was nothing to put back";
-		Line("Guard: CAUGHT (%ld): 0x%08X written over the game's %s (0x%08X) by the instruction before %s, in thread %u; %s\n",
+		Game::Note("Guard: CAUGHT (%ld): 0x%08X written over the game's %s (0x%08X) by the instruction before %s, in thread %u; %s\n",
 			count, n.now, name, n.before, where, n.thread, done);
-		Line("Guard:   %s; script %08X from %08X\n", Skater(), n.script, n.caller);
-		Line("Guard:   eax %08X ebx %08X ecx %08X edx %08X esi %08X edi %08X ebp %08X esp %08X\n",
+		Game::Note("Guard:   %s; script %08X from %08X\n", Skater(), n.script, n.caller);
+		Game::Note("Guard:   eax %08X ebx %08X ecx %08X edx %08X esi %08X edi %08X ebp %08X esp %08X\n",
 			n.regs[0], n.regs[1], n.regs[2], n.regs[3], n.regs[4], n.regs[5], n.regs[6], n.regs[7]);
 		if (n.codeKnown) {
 			char before[16 * 3 + 1], after[8 * 3 + 1];
 			for (int i = 0; i < 16; i++) {
-				sprintf_s(before + 3 * i, sizeof(before) - 3 * i, "%02X ", n.code[i]);
+				Str::Format(before + 3 * i, sizeof(before) - 3 * i, "%02X ", n.code[i]);
 			}
 			for (int i = 0; i < 8; i++) {
-				sprintf_s(after + 3 * i, sizeof(after) - 3 * i, "%02X ", n.code[16 + i]);
+				Str::Format(after + 3 * i, sizeof(after) - 3 * i, "%02X ", n.code[16 + i]);
 			}
-			Line("Guard:   the code: %s| %s(the write ends at the bar)\n", before, after);
+			Game::Note("Guard:   the code: %s| %s(the write ends at the bar)\n", before, after);
 		}
 		char calls[24 * (MAX_PATH + 2)];
 		calls[0] = 0;
@@ -494,13 +484,9 @@ namespace GuardGame {
 		for (int i = 0; i < n.callCount && used + 64 < sizeof(calls); i++) {
 			char one[MAX_PATH + 32];
 			Where(n.calls[i], one, sizeof(one));
-			const int put = sprintf_s(calls + used, sizeof(calls) - used, "%s%s", i ? " " : "", one);
-			if (put < 0) {
-				break;
-			}
-			used += (size_t)put;
+			used += Str::Format(calls + used, sizeof(calls) - used, "%s%s", i ? " " : "", one);
 		}
-		Line("Guard:   returns on the stack, nearest first: %s\n", n.callCount ? calls : "none found");
+		Game::Note("Guard:   returns on the stack, nearest first: %s\n", n.callCount ? calls : "none found");
 	}
 
 	static void WriteNotes() {
@@ -521,7 +507,7 @@ namespace GuardGame {
 		}
 		static LONG s_lostTold = 0;
 		if (s_lost != s_lostTold) {
-			Line("Guard: %ld notes were written over before they could be written down (too many in one frame)\n", s_lost - s_lostTold);
+			Game::Note("Guard: %ld notes were written over before they could be written down (too many in one frame)\n", s_lost - s_lostTold);
 			s_lostTold = s_lost;
 		}
 	}
@@ -539,19 +525,19 @@ namespace GuardGame {
 		s_threadsOn = p.had + p.added;
 		if (!p.threads) {
 			if (first) {
-				Line("Guard: the game's threads could not be listed (error %lu)\n", p.error);
+				Game::Note("Guard: the game's threads could not be listed (error %lu)\n", p.error);
 			}
 			return;
 		}
 		if (first) {
-			Line("Guard: the breakpoint is on in %d of the game's %d threads%s\n", p.added + p.had, p.threads,
+			Game::Note("Guard: the breakpoint is on in %d of the game's %d threads%s\n", p.added + p.had, p.threads,
 				p.failed ? " (the rest could not be given it)" : "");
 		}
 		else if (p.added) {
-			Line("Guard: the breakpoint is on in %d more thread%s (%d in all)\n", p.added, p.added == 1 ? "" : "s", s_threadsOn);
+			Game::Note("Guard: the breakpoint is on in %d more thread%s (%d in all)\n", p.added, p.added == 1 ? "" : "s", s_threadsOn);
 		}
 		if (p.failed && (first || p.added)) {
-			Line("Guard: %d threads could not be given it (error %lu)\n", p.failed, p.error);
+			Game::Note("Guard: %d threads could not be given it (error %lu)\n", p.failed, p.error);
 		}
 	}
 
@@ -571,13 +557,13 @@ namespace GuardGame {
 		// for nothing and goes on
 		s_handler = AddVectoredExceptionHandler(1, OnException);
 		if (!s_handler) {
-			Line("Guard: no exception handler could be added; off\n");
+			Game::Note("Guard: no exception handler could be added; off\n");
 			s_state = kBroken;
 			return;
 		}
 		s_state = kOn;
 		if (!StartPass(true) || !s_passDone) {
-			Line("Guard: the pass that puts the breakpoints on the game's threads did not finish; the pointers are only looked at once a frame from here on\n");
+			Game::Note("Guard: the pass that puts the breakpoints on the game's threads did not finish; the pointers are only looked at once a frame from here on\n");
 			s_state = kBroken;
 			return;
 		}
@@ -591,17 +577,17 @@ namespace GuardGame {
 			s_testing = 0;
 			caught += s_testSeen ? 1 : 0;
 			if (!s_testSeen) {
-				Line("Guard: the breakpoint on the %s did not go off for a test write\n", kWords[i].name);
+				Game::Note("Guard: the breakpoint on the %s did not go off for a test write\n", kWords[i].name);
 			}
 		}
 		s_works = caught == kWords_;
 		if (s_works) {
-			Line("Guard: on: the game's object manager pointer (0x0069B6C0, now 0x%08X) and component manager pointer (0x0069B6B8, now 0x%08X) "
+			Game::Note("Guard: on: the game's object manager pointer (0x0069B6C0, now 0x%08X) and component manager pointer (0x0069B6B8, now 0x%08X) "
 				"have write breakpoints; a test write to each was caught. A write from anywhere but the game's own places is written down here and put back\n",
 				s_good[0], kWords_ > 1 ? s_good[1] : 0);
 		}
 		else {
-			Line("Guard: the breakpoints did not go off for every test write: this system does not give the game all its breakpoints. "
+			Game::Note("Guard: the breakpoints did not go off for every test write: this system does not give the game all its breakpoints. "
 				"The pointers are still looked at once a frame and put back if they have become something else\n");
 		}
 	}
@@ -662,7 +648,7 @@ namespace GuardGame {
 			}
 			static int s_unseen = 0;
 			if (s_unseen++ < kReports) {
-				Line("Guard: the %s was 0x%08X at the look once a frame, not 0x%08X, and the breakpoint did not see it written%s; %s. %s\n",
+				Game::Note("Guard: the %s was 0x%08X at the look once a frame, not 0x%08X, and the breakpoint did not see it written%s; %s. %s\n",
 					kWords[i].name, now, before, s_works ? " (a thread it is not on, or the system)" : "",
 					action == Guard::kPutBack ? "put back" : action == Guard::kAccept ? "taken as the one now" : "nothing to put back", Skater());
 			}
@@ -677,7 +663,7 @@ namespace GuardGame {
 		if (!s_passBusy && ((s_newThread && tick - s_lastPass >= 500) || tick - s_lastPass >= 10000)) {
 			s_newThread = 0;
 			if (!StartPass(false)) {
-				Line("Guard: no thread could be made for a pass over the game's threads; the pointer is only looked at once a frame from here on\n");
+				Game::Note("Guard: no thread could be made for a pass over the game's threads; the pointer is only looked at once a frame from here on\n");
 				s_state = kBroken;
 			}
 		}

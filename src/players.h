@@ -12,6 +12,8 @@
 
 #include <vector>
 
+#include "str.h"
+
 namespace Players {
 	/******************************************************************/
 	/*                                                                */
@@ -113,15 +115,15 @@ namespace Players {
 		Dice d(seed * 2654435761u + 1u);
 		Identity id;
 		memset(&id, 0, sizeof(id));
-		strncpy(id.name, names[d.Below((int)(sizeof(names) / sizeof(names[0])))], sizeof(id.name) - 1);
+		Str::Copy(id.name, sizeof(id.name), names[d.Below((int)(sizeof(names) / sizeof(names[0])))]);
 		id.sponsor = d.Below(3);
 		if (id.sponsor != kUnsponsored) {
-			strncpy(id.board, boards[d.Below((int)(sizeof(boards) / sizeof(boards[0])))], sizeof(id.board) - 1);
-			strncpy(id.shoes, shoes[d.Below((int)(sizeof(shoes) / sizeof(shoes[0])))], sizeof(id.shoes) - 1);
+			Str::Copy(id.board, sizeof(id.board), boards[d.Below((int)(sizeof(boards) / sizeof(boards[0])))]);
+			Str::Copy(id.shoes, sizeof(id.shoes), shoes[d.Below((int)(sizeof(shoes) / sizeof(shoes[0])))]);
 		}
 		// three story levels for each sponsor level: further on, the more he is sponsored
 		const int stage = id.sponsor * 3 + d.Below(3);
-		strncpy(id.level, StoryLevel(stage), sizeof(id.level) - 1);
+		Str::Copy(id.level, sizeof(id.level), StoryLevel(stage));
 		id.goals = 4 + stage * 12 + d.Below(10);
 		const int base = 3 + id.sponsor * 2;                         // 3, 5, 7: a created skater starts at 3
 		for (int i = 0; i < kStats; i++) {

@@ -35,15 +35,13 @@ namespace Crash {
 		float invInertia;       // about +y; 0: it does not spin
 	};
 
-	// A car's box from where it is (its origin on the ground, as the game's cars have it), its matrix's rows
-	// (row 0 sideways, row 2 the way it faces) and its body: halfWidth, rear (z of its back, below 0), front and
-	// height. False when the matrix has no way along the ground (a car standing on its nose).
-	inline bool MakeBox(const float pos[3], const float row0[3], const float row2[3], float halfWidth, float rear, float front,
-		float height, Body* b) {
+	// The way a box faces along the ground and its sideways, from its matrix's rows (row 0 sideways, row 2 the
+	// way it faces). False when the matrix has no way along the ground.
+	inline bool GroundAxes(const float row0[3], const float row2[3], Body* b) {
 		float zx = row2[0], zz = row2[2];
 		float len = sqrtf(zx * zx + zz * zz);
 		if (len < 0.2f) {
-			// facing up or down: the way along the ground is the sideways one turned
+			// facing up or down (a car standing on its nose): the way along the ground is the sideways one turned
 			zx = -row0[2];
 			zz = row0[0];
 			len = sqrtf(zx * zx + zz * zz);
@@ -55,6 +53,17 @@ namespace Crash {
 		b->axisZ[1] = zz / len;
 		b->axisX[0] = b->axisZ[1];
 		b->axisX[1] = -b->axisZ[0];
+		return true;
+	}
+
+	// A car's box from where it is (its origin on the ground, as the game's cars have it), its matrix's rows
+	// (row 0 sideways, row 2 the way it faces) and its body: halfWidth, rear (z of its back, below 0), front and
+	// height. False when the matrix has no way along the ground.
+	inline bool MakeBox(const float pos[3], const float row0[3], const float row2[3], float halfWidth, float rear, float front,
+		float height, Body* b) {
+		if (!GroundAxes(row0, row2, b)) {
+			return false;
+		}
 		const float mid = 0.5f * (front + rear);
 		b->centre[0] = pos[0] + b->axisZ[0] * mid;
 		b->centre[1] = pos[2] + b->axisZ[1] * mid;
@@ -723,20 +732,9 @@ namespace Crash {
 	// ground from the way it faces, or from its left when it stands on its nose), between its lowest and
 	// highest corner; its spin about up and how hard it is to turn about up
 	inline bool FootprintOf(const Tumbler& t, Body* b) {
-		float zx = t.rows[2][0], zz = t.rows[2][2];
-		float len = sqrtf(zx * zx + zz * zz);
-		if (len < 0.2f) {
-			zx = -t.rows[0][2];
-			zz = t.rows[0][0];
-			len = sqrtf(zx * zx + zz * zz);
-			if (len < 0.2f) {
-				return false;
-			}
+		if (!GroundAxes(t.rows[0], t.rows[2], b)) {
+			return false;
 		}
-		b->axisZ[0] = zx / len;
-		b->axisZ[1] = zz / len;
-		b->axisX[0] = b->axisZ[1];
-		b->axisX[1] = -b->axisZ[0];
 		b->centre[0] = t.com[0];
 		b->centre[1] = t.com[2];
 		b->pivot[0] = t.com[0];

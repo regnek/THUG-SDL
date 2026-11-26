@@ -128,7 +128,7 @@ static void TestDebugBits() {
 		&& Guard::HasBreakpoint(a, Guard::WithBreakpoint(Guard::WithBreakpoint(0, 0), 1), a, 0), "each is there with the other");
 	Check(Guard::WithBreakpoint(Guard::WithBreakpoint(0, 1), 0) == Guard::WithBreakpoint(Guard::WithBreakpoint(0, 0), 1), "in either order");
 	Check(!Guard::HasBreakpoint(a, Guard::WithBreakpoint(0, 0), a, 1), "breakpoint 0 is not breakpoint 1");
-	Check(Guard::Dr7Mask(0) == Guard::kDr7Mask && Guard::Dr7Bits(0) == Guard::kDr7Bits, "breakpoint 0's bits as before");
+	Check(Guard::Dr7Mask(0) == 0x000F0003 && Guard::Dr7Bits(0) == 0x000D0001, "breakpoint 0's bits");
 }
 
 int main() {

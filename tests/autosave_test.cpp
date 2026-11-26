@@ -114,8 +114,9 @@ static void TestThrottle() {
 	Check(t.Due(s, 1000), "the first spot is written at once");
 	t.Wrote(s, 1000);
 	Autosave::Spot moved = Make(1, 5, 0, 0, 0);
-	Check(!t.Due(moved, 1100), "not within a quarter of a second");
-	Check(t.Due(moved, 1250), "moved, a quarter of a second later: written");
+	Check(!t.Due(moved, 1250), "not within a second");
+	Check(!t.Due(moved, 1999), "nor just short of one");
+	Check(t.Due(moved, 2000), "moved, a second later: written");
 	Autosave::Spot still = Make(1, 0.5f, 0, 0, 0);
 	Check(!t.Due(still, 5000), "half a unit and no turn: not written, however long");
 	Autosave::Spot turned = Make(1, 0, 0, 0, 0.05f);
@@ -123,12 +124,13 @@ static void TestThrottle() {
 	Autosave::Spot hair = Make(1, 0, 0, 0, 0.005f);
 	Check(!t.Due(hair, 5000), "turned a third of a degree: not");
 	Autosave::Spot other = Make(2, 0, 0, 0, 0);
-	Check(t.Due(other, 1300), "another level: written");
+	Check(t.Due(other, 2300), "another level: written");
 	// the clock wraps
 	Autosave::Throttle w;
 	w.Wrote(s, 0xFFFFFF00u);
 	Check(!w.Due(moved, 0xFFFFFF80u), "near the wrap, not yet");
-	Check(w.Due(moved, 0x00000100u), "across the wrap, due");
+	Check(!w.Due(moved, 0x00000100u), "across the wrap, half a second on: not yet");
+	Check(w.Due(moved, 0x00000300u), "across the wrap, a second on: due");
 	w.Forget();
 	Check(w.Due(s, 0x00000101u), "forgotten: due at once");
 }

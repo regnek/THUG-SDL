@@ -112,9 +112,9 @@ namespace Memory {
 			if (mbi.State == MEM_FREE) {
 				// Reservations start on the allocation grain; the tail of a grain behind
 				// another allocation cannot be had
-				const uint32_t from = (start + grain - 1) & ~(grain - 1);
-				if (end > from && VirtualAlloc((LPVOID)(uintptr_t)from, end - from, MEM_RESERVE, PAGE_NOACCESS)) {
-					taken += end - from;
+				const uint32_t first = (start + grain - 1) & ~(grain - 1);
+				if (end > first && VirtualAlloc((LPVOID)(uintptr_t)first, end - first, MEM_RESERVE, PAGE_NOACCESS)) {
+					taken += end - first;
 				}
 			}
 			if (end <= at) {

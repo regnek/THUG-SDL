@@ -1,5 +1,6 @@
 #include "flickit_game.h"
 #include "flickit_pose.h"
+#include "game.h"
 #include "watchdog.h"
 #include "autosave.h"
 #include "bigworld.h"
@@ -10,7 +11,6 @@
 #include <windows.h>
 #include <string.h>
 #include <cmath>
-#include <cstdarg>
 #include <cstdio>
 #include <ctime>
 
@@ -25,16 +25,21 @@ namespace FlickitGame {
 	/*  The game, as far as this file knows it                        */
 	/******************************************************************/
 
-	// Skate::Instance(), the module that owns the skaters. 0 until the game has made it.
-	static void** const kSkate = (void**)0x0076A788;
+	// What the other parts of the mod use as well (game.h): Skate::Instance(), a component of an object, a
+	// checksum in a structure, a script run, an animation started
+	using Game::kSkate;
+	using Game::SKATE_LEVEL;
+	using Game::GetComponent;
+	using Game::kSkaterCorePhysics;
+	using Game::StructChecksum;
+	using Game::RunScriptOf;
+	using Game::PlayAnimCore;
+	using Game::AnimExists;
+	using Game::Expect;
 
 	// The first skater that is played on this computer, or 0
 	typedef void* (__thiscall* GetLocalSkater_t)(void* skate);
 	static const GetLocalSkater_t GetLocalSkater = (GetLocalSkater_t)0x004F94F0;
-
-	// A component of an object by the checksum of its type name, or 0
-	typedef void* (__thiscall* GetComponent_t)(void* object, uint32_t type);
-	static const GetComponent_t GetComponent = (GetComponent_t)0x0041BDC0;
 
 	// CSkaterCorePhysicsComponent::do_grind_trick: starts the grind script out of GrindTrickList.
 	// Direction is the row (0 none, 1 Up, 2 Down, 3 Left, 4 Right, 5 Up+Left, 6 Up+Right, 7 Down+Left,
@@ -61,14 +66,6 @@ namespace FlickitGame {
 	// CSkaterFlipAndRotateComponent: carries out a flip or rotation a script left for "after"
 	typedef void(__thiscall* FlipRotateAfters_t)(void* component);
 	static const FlipRotateAfters_t FlipRotateAfters = (FlipRotateAfters_t)0x00570560;
-
-	// The entry of a global script symbol, or 0. Byte 1 of the entry is its type, 7 for a script.
-	typedef void* (__cdecl* LookUpSymbol_t)(uint32_t name);
-	static const LookUpSymbol_t LookUpSymbol = (LookUpSymbol_t)0x004133A0;
-
-	// Script::CStruct::GetChecksum
-	typedef bool(__thiscall* StructGetChecksum_t)(void* structure, uint32_t name, uint32_t* out, bool assert);
-	static const StructGetChecksum_t StructGetChecksum = (StructGetChecksum_t)0x004110B0;
 
 	// Script::CStruct is no more than the head of a list of its items (0x00430620 makes one empty).
 	// AddChecksum puts in a checksum under a name, or with no name as a flag (what ContainsFlag
@@ -183,12 +180,7 @@ namespace FlickitGame {
 	// its skeleton. Once a frame, in the component's update.
 	typedef void(__thiscall* PoseBlend_t)(void* anim);
 	static const PoseBlend_t PoseBlend = (PoseBlend_t)0x00431B60;
-	// CAnimationComponent: start an animation, what PlayAnim does once it has read its parameters:
-	// the name, whether to tell the other players of a net game, where it starts and ends
-	// (seconds), how it loops (0 once, 1 Cycle, 2 PingPong, 3 wobble), the blend's time, and its
-	// speed. The blend starts in it (BlendStartHook).
-	typedef void(__thiscall* PlayAnimCore_t)(void* anim, uint32_t name, int net, float from, float to, int loop, float blend, float speed);
-	static const PlayAnimCore_t PlayAnimCore = (PlayAnimCore_t)0x004320E0;
+	// (Game::PlayAnimCore starts an animation as PlayAnim does: the blend starts in it, BlendStartHook)
 	// The game's clock, in milliseconds (its frames, at 60 a second)
 	typedef int(__cdecl* GameMs_t)();
 	static const GameMs_t GameMs = (GameMs_t)0x00582C20;
@@ -197,10 +189,8 @@ namespace FlickitGame {
 	// script command GetAirTimeLeft asks it with the floor below the skater.
 	typedef float(__thiscall* TimeToHeight_t)(void* core, float floor, float y, float vy);
 	static const TimeToHeight_t TimeToHeight = (TimeToHeight_t)0x0055E730;
-	// CAnimationComponent: whether the object has an animation of that name, and how long it is
-	// (seconds, at its own speed). The script command GetAnimLength asks these two.
-	typedef bool(__thiscall* AnimExists_t)(void* anim, uint32_t name);
-	static const AnimExists_t AnimExists = (AnimExists_t)0x00430650;
+	// CAnimationComponent: how long an animation of the object's is (seconds, at its own speed). The script
+	// command GetAnimLength asks this and Game::AnimExists.
 	typedef float(__thiscall* AnimLength_t)(void* anim, uint32_t name);
 	static const AnimLength_t AnimLength = (AnimLength_t)0x00430630;
 
@@ -328,7 +318,6 @@ namespace FlickitGame {
 
 	// Name checksums
 	static const uint32_t kSkaterState = 0x43686585;          // SkaterState
-	static const uint32_t kSkaterCorePhysics = 0x5BD63B29;    // SkaterCorePhysics
 	static const uint32_t kSlideBalance = 0x8D10119D;         // slide: the balance of a slide. A grind's is "grind"
 	static const uint32_t kGrindBalance = 0x255ED86F;         // grind: the balance of a grind, and the name of the Grind script
 	// DoBalanceTrick ButtonA = Right ButtonB = Left Type = <Type> DoFlipCheck: the balance a grind
@@ -536,13 +525,7 @@ namespace FlickitGame {
 	/*  Is this the game the above was read from?                     */
 	/******************************************************************/
 
-	struct Expect {
-		uint32_t address;
-		int size;
-		uint8_t bytes[18];
-		const char* what;
-	};
-
+	// (what game.h has is checked there: Game::Ready)
 	static const Expect kExpect[] = {
 		// the places that get changed, with the instruction before each
 		{ 0x0056CB5A, 15, { 0x8B, 0x86, 0xB4, 0x04, 0x00, 0x00, 0x80, 0xB8, 0xA0, 0x01, 0x00, 0x00, 0x00, 0x0F, 0x84 }, "rail catch test" },
@@ -601,7 +584,6 @@ namespace FlickitGame {
 		{ 0x004307A2, 16, { 0x85, 0xED, 0xD9, 0x44, 0x24, 0x10, 0xD8, 0x64, 0x24, 0x54, 0x89, 0x6C, 0x24, 0x18, 0xD9, 0x1A }, "pose: the playing channel weighs the rest" },
 		{ 0x00431B60, 16, { 0x83, 0xEC, 0x08, 0x80, 0x3D, 0x60, 0xC8, 0x7C, 0x00, 0x00, 0x53, 0x8B, 0xD9, 0x0F, 0x85, 0xB8 }, "pose" },
 		{ 0x00430F20, 12, { 0x6A, 0xFF, 0x68, 0xEB, 0x2B, 0x62, 0x00, 0x64, 0xA1, 0x00, 0x00, 0x00 }, "blend start" },
-		{ 0x004320E0, 12, { 0x81, 0xEC, 0x4C, 0x05, 0x00, 0x00, 0xA1, 0xB0, 0x4A, 0x69, 0x00, 0x33 }, "PlayAnim's start of an animation" },
 		{ 0x0043210D, 8, { 0x80, 0xBC, 0x24, 0x5C, 0x05, 0x00, 0x00, 0x00 }, "PlayAnim's start: the other players are told when asked" },
 		{ 0x00432345, 3, { 0xC2, 0x1C, 0x00 }, "PlayAnim's start pops seven" },
 		{ 0x0047045F, 15, { 0xD9, 0x44, 0x24, 0x08, 0xD9, 0x59, 0x14, 0xD9, 0x51, 0x18, 0xD8, 0xD1, 0xDF, 0xE0, 0xF6 }, "a channel's Set: start and time" },
@@ -609,15 +591,12 @@ namespace FlickitGame {
 		{ 0x004704A4, 18, { 0x8B, 0x54, 0x24, 0x04, 0x89, 0x41, 0x24, 0x8B, 0x44, 0x24, 0x10, 0x89, 0x41, 0x28, 0xC6, 0x41, 0x2C, 0x00 }, "a channel's Set: backwards and the loop" },
 		// the functions that get called
 		{ 0x004F94F0, 12, { 0x53, 0x56, 0x57, 0x8B, 0xF9, 0x33, 0xF6, 0xE8, 0x84, 0xC0, 0xF3, 0xFF }, "GetLocalSkater" },
-		{ 0x0041BDC0, 12, { 0x8B, 0x81, 0xF0, 0x00, 0x00, 0x00, 0x85, 0xC0, 0x74, 0x12, 0x8B, 0x4C }, "GetComponent" },
 		{ 0x005608C0, 12, { 0x6A, 0xFF, 0x68, 0x0B, 0xB4, 0x62, 0x00, 0x64, 0xA1, 0x00, 0x00, 0x00 }, "do_grind_trick" },
 		{ 0x0050B9C0, 12, { 0x6A, 0xFF, 0x68, 0x5B, 0x8D, 0x62, 0x00, 0x64, 0xA1, 0x00, 0x00, 0x00 }, "balance update" },
 		{ 0x004F6700, 14, { 0xD9, 0x44, 0x24, 0x08, 0x8B, 0x44, 0x24, 0x04, 0x6A, 0x00, 0x51, 0xD9, 0x1C, 0x24 }, "SetBalanceMeter" },
 		{ 0x0040FBC0, 12, { 0x8B, 0x44, 0x24, 0x0C, 0x8B, 0x54, 0x24, 0x08, 0x50, 0x8B, 0x44, 0x24 }, "CScript::SetScript" },
 		{ 0x0040F0A0, 12, { 0x53, 0x56, 0x8B, 0xF1, 0x33, 0xDB, 0x39, 0x5E, 0x0C, 0x88, 0x9E, 0xA9 }, "CScript::Update" },
 		{ 0x00570560, 12, { 0x53, 0x56, 0x8B, 0xF1, 0x32, 0xDB, 0x38, 0x5E, 0x19, 0x74, 0x08, 0xE8 }, "flip and rotate afters" },
-		{ 0x004133A0, 12, { 0x8B, 0x4C, 0x24, 0x04, 0x8B, 0xC1, 0x25, 0xFF, 0x0F, 0x00, 0x00, 0x56 }, "LookUpSymbol" },
-		{ 0x004110B0, 12, { 0x51, 0x53, 0x56, 0x8B, 0x31, 0x32, 0xDB, 0x85, 0xF6, 0x89, 0x4C, 0x24 }, "CStruct::GetChecksum" },
 		{ 0x00516110, 14, { 0x51, 0x56, 0x6A, 0x00, 0x68, 0xDD, 0x89, 0xBC, 0x8C, 0xE8, 0xE2, 0xD4, 0xEF, 0xFF }, "GetPhysicsFloat" },
 		{ 0x00514630, 12, { 0x81, 0xEC, 0x60, 0x01, 0x00, 0x00, 0x53, 0x55, 0x56, 0x8B, 0xF1, 0x57 }, "CRailManager::StickToRail" },
 		{ 0x00514CB6, 3, { 0xC2, 0x1C, 0x00 }, "StickToRail return" },
@@ -767,7 +746,6 @@ namespace FlickitGame {
 		{ 0x0056773D, 5, { 0xE8, 0xEE, 0x6F, 0xFF, 0xFF }, "GetAirTimeLeft: the time to it" },
 		// an animation of the object's, and how long it is
 		{ 0x00430630, 17, { 0x8B, 0x41, 0x38, 0x03, 0x44, 0x24, 0x04, 0x6A, 0x00, 0x50, 0xE8, 0x31, 0x7F, 0x04, 0x00, 0xD9, 0x00 }, "animation length" },
-		{ 0x00430650, 15, { 0x8B, 0x41, 0x38, 0x03, 0x44, 0x24, 0x04, 0x6A, 0x00, 0x50, 0xE8, 0x11, 0x7F, 0x04, 0x00 }, "animation exists" },
 		{ 0x0043065F, 9, { 0x83, 0xC4, 0x08, 0x85, 0xC0, 0x0F, 0x95, 0xC0, 0xC2 }, "animation exists: its answer" },
 		{ 0x00470410, 10, { 0x51, 0xD9, 0x41, 0x20, 0xDC, 0x0D, 0xA8, 0xEE, 0x62, 0x00 }, "channel speed" },
 		{ 0x0062EEA8, 8, { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x4E, 0x40 }, "channel speed: per 60th of a second" },
@@ -858,10 +836,10 @@ namespace FlickitGame {
 			return s_available;
 		}
 		s_checked = true;
-		s_available = true;
+		s_available = Game::Ready();
 		for (size_t i = 0; i < sizeof(kExpect) / sizeof(kExpect[0]); i++) {
-			if (memcmp((const void*)kExpect[i].address, kExpect[i].bytes, (size_t)kExpect[i].size) != 0) {
-				Log::TypedLog(CHN_SDL, "Flickit: the game's code at %08X (%s) is not what was expected\n", kExpect[i].address, kExpect[i].what);
+			if (!Game::Matches(kExpect[i])) {
+				Game::Note("Flickit: the game's code at %08X (%s) is not what was expected\n", kExpect[i].address, kExpect[i].what);
 				s_available = false;
 			}
 		}
@@ -1212,7 +1190,7 @@ namespace FlickitGame {
 			}
 			return;
 		}
-		const uint8_t* skate = (const uint8_t*)*kSkate;
+		const uint8_t* skate = *kSkate;
 		if (core && skate && skater == s_autoKickHeld) {
 			const int32_t player = *(const int32_t*)(skater + OBJECT_PLAYER);
 			if (player >= 0 && player < 8) {
@@ -1323,7 +1301,7 @@ namespace FlickitGame {
 		uint32_t anim = 0;
 		void* params = *(void* const*)((const uint8_t*)script + SCRIPT_PARAMS);
 		if (params) {
-			StructGetChecksum(params, kAnim, &anim, false);
+			StructChecksum(params, kAnim, &anim, 0);
 		}
 		if (anim == kTailGrindRange) {
 			s_grind = Flickit::GRIND_FIVE_O;
@@ -1541,7 +1519,6 @@ namespace FlickitGame {
 		out.offSide = s_rail.side;
 		out.railSeconds = s_rail.run.Seconds();
 		out.railSpeed = s_rail.run.Speed();
-		out.railDrag = s_rail.run.Drag();
 		out.railTerrain = s_rail.terrain;
 		out.railSurface = s_rail.surface;
 		out.dragClass = s_rail.dragClass;
@@ -1851,7 +1828,7 @@ namespace FlickitGame {
 		// <Type>: what the grind script was told it is
 		void* params = *(void* const*)((const uint8_t*)script + SCRIPT_PARAMS);
 		uint32_t type = 0;
-		if (!params || !StructGetChecksum(params, kType, &type, false) || (type != kGrindBalance && type != kSlideBalance)) {
+		if (!params || !StructChecksum(params, kType, &type, 0) || (type != kGrindBalance && type != kSlideBalance)) {
 			return false;
 		}
 		GameStruct command = { 0 };
@@ -1883,8 +1860,7 @@ namespace FlickitGame {
 		name[length] = '\0';
 		const uint32_t checksum = Flickit::NameChecksum(name);
 
-		const uint8_t* symbol = (const uint8_t*)LookUpSymbol(checksum);
-		if (!symbol || symbol[1] != 7) {
+		if (!Game::IsScript(checksum)) {
 			return false;   // this game's scripts have no such grind
 		}
 
@@ -2167,8 +2143,7 @@ namespace FlickitGame {
 		if (!script || (at.running != kGrindBalance && at.caller != kGrindBalance)) {
 			return;
 		}
-		const uint8_t* symbol = (const uint8_t*)LookUpSymbol(kSkateInOrBail);
-		if (!symbol || symbol[1] != 7) {
+		if (!Game::IsScript(kSkateInOrBail)) {
 			return;
 		}
 
@@ -2290,8 +2265,7 @@ namespace FlickitGame {
 		if (!s_installed) {
 			return false;
 		}
-		const uint8_t* symbol = (const uint8_t*)LookUpSymbol(kSkateInOrBail);
-		return symbol && symbol[1] == 7;
+		return Game::IsScript(kSkateInOrBail);
 	}
 
 	bool TakeExit(RailExit& out) {
@@ -2391,79 +2365,7 @@ namespace FlickitGame {
 		{ 0x00517563, 11, { 0x8B, 0x8E, 0x54, 0x02, 0x00, 0x00, 0xE8, 0x72, 0x33, 0xF3, 0xFF }, "the restart moves the camera target" },
 	};
 
-	// The watchdog's notes go to flickit_watchdog.txt next to the exe as well as to the log, each with the
-	// time of day: that file is kept from one start of the game to the next (the log starts again at every
-	// start, and is only written with the console on). Past 2 MB it starts again, the old one kept as .old.
-	static char s_watchPath[MAX_PATH] = "";
-	static int s_watchFile = 0;                       // 1: notes go there, -1: they cannot
-
-	static void WatchAppend(const char* text) {
-		HANDLE f = CreateFileA(s_watchPath, FILE_APPEND_DATA, FILE_SHARE_READ, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-		if (f == INVALID_HANDLE_VALUE) {
-			return;
-		}
-		DWORD put = 0;
-		WriteFile(f, text, (DWORD)strlen(text), &put, NULL);
-		CloseHandle(f);
-	}
-
-	static void WatchFileLine(const char* text) {
-		if (s_watchFile == 0) {
-			s_watchFile = -1;
-			char dir[MAX_PATH];
-			const DWORD n = GetModuleFileNameA(NULL, dir, MAX_PATH);
-			char* slash = n && n < MAX_PATH ? strrchr(dir, '\\') : 0;
-			if (slash) {
-				slash[1] = 0;
-				sprintf_s(s_watchPath, sizeof(s_watchPath), "%sflickit_watchdog.txt", dir);
-				WIN32_FILE_ATTRIBUTE_DATA a;
-				if (GetFileAttributesExA(s_watchPath, GetFileExInfoStandard, &a) && (a.nFileSizeHigh || a.nFileSizeLow > 2u * 1024u * 1024u)) {
-					char old[MAX_PATH];
-					sprintf_s(old, sizeof(old), "%sflickit_watchdog.old.txt", dir);
-					MoveFileExA(s_watchPath, old, MOVEFILE_REPLACE_EXISTING);
-				}
-				SYSTEMTIME t;
-				GetLocalTime(&t);
-				char head[160];
-#ifdef FLICKIT_BUILD
-				const char* build = FLICKIT_BUILD;
-#else
-				const char* build = "a local build";
-#endif
-				sprintf_s(head, sizeof(head), "\r\n=== %04u-%02u-%02u: the first note of this run of the game (Flickit %.12s) ===\r\n", t.wYear, t.wMonth, t.wDay, build);
-				s_watchFile = 1;
-				WatchAppend(head);
-			}
-		}
-		if (s_watchFile > 0) {
-			WatchAppend(text);
-		}
-	}
-
-	// A line for the log and the file
-	static void WatchLog(const char* format, ...) {
-		char text[1024];
-		va_list args;
-		va_start(args, format);
-		vsnprintf(text, sizeof(text), format, args);
-		va_end(args);
-		text[sizeof(text) - 1] = 0;
-		Log::TypedLog(CHN_SDL, "%s", text);
-		size_t n = strlen(text);
-		while (n > 0 && (text[n - 1] == '\n' || text[n - 1] == '\r')) {
-			text[--n] = 0;
-		}
-		SYSTEMTIME t;
-		GetLocalTime(&t);
-		char line[1100];
-		sprintf_s(line, sizeof(line), "%02u:%02u:%02u.%03u %s\r\n", t.wHour, t.wMinute, t.wSecond, t.wMilliseconds, text);
-		WatchFileLine(line);
-	}
-
-	void WatchNote(const char* text) {
-		WatchLog("%s", text);
-	}
-
+	// The watchdog's notes go to flickit_watchdog.txt next to the exe as well as to the log (Game::Note)
 	static Watchdog::History<120> s_watch;            // the last two seconds he was whole
 	static Watchdog::Policy s_watchPolicy;
 	static Watchdog::CameraCheck s_camCheck;
@@ -2494,8 +2396,8 @@ namespace FlickitGame {
 		if (s_viewReady == 0) {
 			s_viewReady = 1;
 			for (size_t i = 0; i < sizeof(kViewExpect) / sizeof(kViewExpect[0]); i++) {
-				if (memcmp((const void*)kViewExpect[i].address, kViewExpect[i].bytes, (size_t)kViewExpect[i].size) != 0) {
-					WatchLog("Watchdog: the game's code at %08X (%s) is not what was expected; the view and the camera target are not watched\n",
+				if (!Game::Matches(kViewExpect[i])) {
+					Game::Note("Watchdog: the game's code at %08X (%s) is not what was expected; the view and the camera target are not watched\n",
 						kViewExpect[i].address, kViewExpect[i].what);
 					s_viewReady = -1;
 				}
@@ -2517,8 +2419,8 @@ namespace FlickitGame {
 		if (s_watchReady == 0) {
 			s_watchReady = 1;
 			for (size_t i = 0; i < sizeof(kWatchExpect) / sizeof(kWatchExpect[0]); i++) {
-				if (memcmp((const void*)kWatchExpect[i].address, kWatchExpect[i].bytes, (size_t)kWatchExpect[i].size) != 0) {
-					WatchLog("Watchdog: the game's code at %08X (%s) is not what was expected; it watches the skater only and does not reset him\n",
+				if (!Game::Matches(kWatchExpect[i])) {
+					Game::Note("Watchdog: the game's code at %08X (%s) is not what was expected; it watches the skater only and does not reset him\n",
 						kWatchExpect[i].address, kWatchExpect[i].what);
 					s_watchReady = -1;
 				}
@@ -2629,30 +2531,29 @@ namespace FlickitGame {
 		const float speed = std::sqrt(s.vel[0] * s.vel[0] + s.vel[1] * s.vel[1] + s.vel[2] * s.vel[2]);
 		char rail[160] = "";
 		if (s.onRail) {
-			sprintf_s(rail, sizeof(rail), ", rail node at (%.1f %.1f %.1f)%s", s.rail[0], s.rail[1], s.rail[2],
+			const size_t n = Str::Format(rail, sizeof(rail), ", rail node at (%.1f %.1f %.1f)%s", s.rail[0], s.rail[1], s.rail[2],
 				s.hasNext ? "" : " (an end)");
 			if (s.hasNext) {
-				const size_t n = strlen(rail);
-				sprintf_s(rail + n, sizeof(rail) - n, " to (%.1f %.1f %.1f)", s.next[0], s.next[1], s.next[2]);
+				Str::Format(rail + n, sizeof(rail) - n, " to (%.1f %.1f %.1f)", s.next[0], s.next[1], s.next[2]);
 			}
 		}
 		char cam[80] = "";
 		if (s.camKnown) {
-			sprintf_s(cam, sizeof(cam), ", camera at (%.1f %.1f %.1f)", s.cam[0], s.cam[1], s.cam[2]);
+			Str::Format(cam, sizeof(cam), ", camera at (%.1f %.1f %.1f)", s.cam[0], s.cam[1], s.cam[2]);
 		}
-		WatchLog("Watchdog: %s frame %u, state %d, script %08X from %08X, at (%.2f %.2f %.2f), moving (%.2f %.2f %.2f) %.1f/s, facing (%.3f %.3f %.3f)%s%s\n",
+		Game::Note("Watchdog: %s frame %u, state %d, script %08X from %08X, at (%.2f %.2f %.2f), moving (%.2f %.2f %.2f) %.1f/s, facing (%.3f %.3f %.3f)%s%s\n",
 			label, s.frame, s.state, s.script, s.caller, s.pos[0], s.pos[1], s.pos[2], s.vel[0], s.vel[1], s.vel[2], speed,
 			s.matrix[8], s.matrix[9], s.matrix[10], rail, cam);
 	}
 
 	// What the camera works from, for the newest frames of a report
 	static void LogDetails(const char* label, const Watchdog::Sample& s) {
-		WatchLog("Watchdog: %s his matrix %s, up (%.3f %.3f %.3f); drawn matrix %s; camera matrix %s, rows (%.3f %.3f %.3f) (%.3f %.3f %.3f) (%.3f %.3f %.3f)\n",
+		Game::Note("Watchdog: %s his matrix %s, up (%.3f %.3f %.3f); drawn matrix %s; camera matrix %s, rows (%.3f %.3f %.3f) (%.3f %.3f %.3f) (%.3f %.3f %.3f)\n",
 			label, Watchdog::Square(s.matrix) ? "square" : "NOT square", s.matrix[4], s.matrix[5], s.matrix[6],
 			Watchdog::Square(s.display) ? "square" : "NOT square", !s.camKnown ? "unknown" : Watchdog::Square(s.camMatrix) ? "square" : "NOT square",
 			s.camMatrix[0], s.camMatrix[1], s.camMatrix[2], s.camMatrix[4], s.camMatrix[5], s.camMatrix[6], s.camMatrix[8], s.camMatrix[9], s.camMatrix[10]);
 		if (s.targetKnown || s.viewKnown) {
-			WatchLog("Watchdog: %s camera target at (%.2f %.2f %.2f) up (%.3f %.3f %.3f)%s; the renderer's eye (%.2f %.2f %.2f), along (%.3f %.3f %.3f), up (%.3f %.3f %.3f); its view %s, row 4 (%.1f %.1f %.1f); draws %u\n",
+			Game::Note("Watchdog: %s camera target at (%.2f %.2f %.2f) up (%.3f %.3f %.3f)%s; the renderer's eye (%.2f %.2f %.2f), along (%.3f %.3f %.3f), up (%.3f %.3f %.3f); its view %s, row 4 (%.1f %.1f %.1f); draws %u\n",
 				label, s.target[0], s.target[1], s.target[2], s.targetUp[0], s.targetUp[1], s.targetUp[2], TargetSane(s) ? "" : " NOT whole",
 				s.eye[0], s.eye[1], s.eye[2], s.at[0], s.at[1], s.at[2], s.up[0], s.up[1], s.up[2],
 				ViewOk(s) ? "whole" : "NOT numbers", s.view[12], s.view[13], s.view[14], s.draws);
@@ -2664,12 +2565,12 @@ namespace FlickitGame {
 			return;
 		}
 		s_watchReports++;
-		WatchLog("Watchdog: the %s %s%s (report %d). Skater object at %08X, camera at %08X%s\n",
+		Game::Note("Watchdog: the %s %s%s (report %d). Skater object at %08X, camera at %08X%s\n",
 			what, happened, s_rail.hasPick ? " on a rail Flickit's pick started" : "", s_watchReports, (uint32_t)(uintptr_t)s_watchSkater,
 			(uint32_t)(uintptr_t)s_watchCamera, (uintptr_t)s_watchSkater >= 0x80000000u ? " (the skater is above 2 GB)" : "");
 		LogSample("now:", now);
 		LogDetails("now:", now);
-		WatchLog("Watchdog: Flickit on the rail: pick %d (%s), grind %d, drag class %d, active %d\n",
+		Game::Note("Watchdog: Flickit on the rail: pick %d (%s), grind %d, drag class %d, active %d\n",
 			s_rail.pick, s_rail.hasPick ? "its own" : "none", s_grind, s_rail.dragClass, s_active ? 1 : 0);
 		// the frames before, oldest first: every frame of the last half second, then every fifth
 		const int count = s_watch.Count();
@@ -2678,7 +2579,7 @@ namespace FlickitGame {
 				continue;
 			}
 			char label[24];
-			sprintf_s(label, sizeof(label), "-%d:", back + 1);
+			Str::Format(label, sizeof(label), "-%d:", back + 1);
 			LogSample(label, *s_watch.Back(back));
 			if (back < 5) {
 				LogDetails(label, *s_watch.Back(back));
@@ -2730,12 +2631,12 @@ namespace FlickitGame {
 				SetTargetPos(target, (const float*)(skater + OBJECT_POSITION));
 				SetTargetUp(target, (const float*)(skater + OBJECT_MATRIX) + 4);
 				if (s_targetBad == 1) {
-					WatchLog("Watchdog: put the camera target back on the skater\n");
+					Game::Note("Watchdog: put the camera target back on the skater\n");
 				}
 			}
 		}
 		else if (s_targetBad > 0) {
-			WatchLog("Watchdog: the camera target is whole again, %d frames later\n", s_targetBad);
+			Game::Note("Watchdog: the camera target is whole again, %d frames later\n", s_targetBad);
 			s_targetBad = 0;
 		}
 		// the level drawn at all (the mesh draws the camera-relative drawing counts)
@@ -2745,7 +2646,7 @@ namespace FlickitGame {
 				Report(now, "level", "has not been drawn for half a second");
 			}
 			else if (dark < 0) {
-				WatchLog("Watchdog: the level is drawn again, %d frames later\n", -dark);
+				Game::Note("Watchdog: the level is drawn again, %d frames later\n", -dark);
 			}
 		}
 		// the view: the camera back first, then the game's restart where he stands
@@ -2757,7 +2658,7 @@ namespace FlickitGame {
 		const Watchdog::ViewAction action = s_viewPolicy.Frame(viewOk, restartable);
 		if (viewOk) {
 			if (s_viewBadFrames > 0) {
-				WatchLog("Watchdog: the view is whole again, %d frames later\n", s_viewBadFrames);
+				Game::Note("Watchdog: the view is whole again, %d frames later\n", s_viewBadFrames);
 				s_viewBadFrames = 0;
 			}
 			return true;
@@ -2767,16 +2668,16 @@ namespace FlickitGame {
 			Report(now, "view the level is drawn with", "stopped being numbers");
 			if (camera) {
 				RestoreCamera(camera, 2);
-				WatchLog("Watchdog: put the camera back as it was a few frames ago\n");
+				Game::Note("Watchdog: put the camera back as it was a few frames ago\n");
 			}
 		}
 		else if (action == Watchdog::VIEW_RESTART) {
 			const bool done = RestartWhereHeIs(skater, now.pos, now.matrix);
-			WatchLog(done ? "Watchdog: had the game restart him where he is, for the view (try %d)\n"
+			Game::Note(done ? "Watchdog: had the game restart him where he is, for the view (try %d)\n"
 				: "Watchdog: could not restart him for the view (try %d)\n", s_viewPolicy.Restarts());
 		}
 		else if (action == Watchdog::VIEW_GIVE_UP) {
-			WatchLog("Watchdog: the view will not come back; leaving it be until it does\n");
+			Game::Note("Watchdog: the view will not come back; leaving it be until it does\n");
 		}
 		return false;
 	}
@@ -2806,7 +2707,7 @@ namespace FlickitGame {
 			s_camCheck.Feed(now.pos, now.cam, now.camMatrix);
 			if (s_camCheck.Decided() && !s_camTold) {
 				s_camTold = true;
-				WatchLog(s_camCheck.Trusted() ? "Watchdog: watching the skater (object at %08X) and the camera (at %08X)%s%s\n"
+				Game::Note(s_camCheck.Trusted() ? "Watchdog: watching the skater (object at %08X) and the camera (at %08X)%s%s\n"
 					: "Watchdog: watching the skater (object at %08X); what was taken for the camera (at %08X) does not behave like it%s%s\n",
 					(uint32_t)(uintptr_t)skater, (uint32_t)(uintptr_t)camera, now.viewKnown ? ", what it follows of him and the view the level is drawn with" : "",
 					CamRelGame::Counting() ? ", and whether the level is drawn" : "");
@@ -2819,7 +2720,7 @@ namespace FlickitGame {
 		const Watchdog::Action action = s_watchPolicy.Frame(skaterOk);
 		if (action == Watchdog::KEEP) {
 			if (s_watchBad > 0) {
-				WatchLog("Watchdog: the skater is whole again, %d frames later\n", s_watchBad);
+				Game::Note("Watchdog: the skater is whole again, %d frames later\n", s_watchBad);
 				s_watchBad = 0;
 			}
 		}
@@ -2829,24 +2730,24 @@ namespace FlickitGame {
 			}
 			const bool restored = RestoreSkater(skater, core);
 			if (action == Watchdog::RESTORE) {
-				WatchLog(restored ? "Watchdog: put the skater back as he was a frame ago\n"
+				Game::Note(restored ? "Watchdog: put the skater back as he was a frame ago\n"
 					: "Watchdog: no whole frame of the skater to put back\n");
 			}
 			else if (WatchReady()) {
 				ResetPhysics(skater, false, false);
-				WatchLog("Watchdog: put the skater back and had the game reset his physics there (try %d)\n", s_watchPolicy.Tries());
+				Game::Note("Watchdog: put the skater back and had the game reset his physics there (try %d)\n", s_watchPolicy.Tries());
 			}
 		}
 		else {
 			s_watchBad++;
 			if (action == Watchdog::GIVE_UP) {
-				WatchLog("Watchdog: the skater's %s will not stay a number; leaving him be until he is whole again\n", what);
+				Game::Note("Watchdog: the skater's %s will not stay a number; leaving him be until he is whole again\n", what);
 			}
 		}
 
 		// the camera, once it has shown that it is the camera
 		if (watchCam && camOk && s_camBad > 0) {
-			WatchLog("Watchdog: the camera is whole again, %d frames later\n", s_camBad);
+			Game::Note("Watchdog: the camera is whole again, %d frames later\n", s_camBad);
 			s_camBad = 0;
 			s_camTries = 0;
 		}
@@ -2858,7 +2759,7 @@ namespace FlickitGame {
 				s_camTries++;
 				RestoreCamera(camera);
 				if (s_camTries == 1 || s_camTries == 30) {
-					WatchLog(s_camTries == 1 ? "Watchdog: put the camera back as it was\n"
+					Game::Note(s_camTries == 1 ? "Watchdog: put the camera back as it was\n"
 						: "Watchdog: the camera will not stay a number; leaving it be\n");
 				}
 			}
@@ -2875,7 +2776,7 @@ namespace FlickitGame {
 		uint8_t* skater = LocalSkater();
 		const uint8_t* core = skater ? (const uint8_t*)GetComponent(skater, kSkaterCorePhysics) : 0;
 		if (!skater || !core) {
-			WatchLog("Watchdog: no skater\n");
+			Game::Note("Watchdog: no skater\n");
 			return;
 		}
 		Watchdog::Sample now;
@@ -2884,14 +2785,14 @@ namespace FlickitGame {
 		const char* camWhat = 0;
 		const bool ok = SkaterSane(now, &what);
 		const bool camOk = !now.camKnown || CameraSane(now, &camWhat);
-		WatchLog("Watchdog: skater object at %08X, %s; camera at %08X, %s; %d reports so far\n",
+		Game::Note("Watchdog: skater object at %08X, %s; camera at %08X, %s; %d reports so far\n",
 			(uint32_t)(uintptr_t)skater, ok ? "whole" : what, (uint32_t)(uintptr_t)SkaterCamera(),
 			!now.camKnown ? "not found" : (camOk ? (s_camCheck.Trusted() ? "whole" : "whole (not yet trusted as the camera)") : camWhat),
 			s_watchReports);
 		LogSample("now:", now);
 		LogDetails("now:", now);
 		if (CamRelGame::Counting()) {
-			WatchLog("Watchdog: the level %s\n", s_blackout.Frames() > 0 ? "was not drawn on the last frames" : "is being drawn");
+			Game::Note("Watchdog: the level %s\n", s_blackout.Frames() > 0 ? "was not drawn on the last frames" : "is being drawn");
 		}
 	}
 
@@ -2900,9 +2801,6 @@ namespace FlickitGame {
 	/*  Autosave: where he was last on the ground, back on a load     */
 	/******************************************************************/
 
-	// Skate::Instance() + 0x398: the checksum of the level loaded (its load script, load_NJ ...), as the
-	// script command LevelIs reads it (0x00528DAA)
-	static const uint32_t SKATE_LEVEL = 0x398;
 	// The skater's custom restart, the one the pause menu's "Set Restart" keeps (his member function
 	// SetCustomRestart, 0x00517405): with Set it copies his position (+0x40) to +0x2C8 and his matrix (+0x60)
 	// to +0x2D8, keeps whether he walks at +0x318 and that there is one at +0x319. SkipToCustomRestart
@@ -2914,31 +2812,17 @@ namespace FlickitGame {
 		SKATER_CUSTOM_WALK = 0x318,
 		SKATER_CUSTOM_SET = 0x319,
 	};
-	// Script::RunScript (0x0040FD00), as THUG-SDL calls it: the name of a script, its parameters, the object
-	typedef bool(__cdecl* RunScript_t)(uint32_t name, void* params, void* object, void* object2);
-	static const RunScript_t RunGameScript = (RunScript_t)0x0040FD00;
 	// The pause menu's script for "Goto Cust Restart": skater : SkipToCustomRestart
 	static const uint32_t kSkipToCustomRestart = 0x3E77D9CA;  // skip_to_custom_restart
 
-	// Script::RunScript runs a script to its end, but what it gives back is no yes or no for a script: the low
-	// byte of the address its CScript had, from the free just before it returns (0x0040FE2C -> 0x0040E370 ->
-	// 0x0057A960), so 0 for about one in 64. Only a missing script gives 0 for sure. So: is it a script, then run it.
-	static bool RunScriptOf(uint32_t name, void* params) {
-		const uint8_t* symbol = (const uint8_t*)LookUpSymbol(name);
-		if (!symbol || symbol[1] != 7) {
-			return false;
-		}
-		RunGameScript(name, params, 0, 0);
-		return true;
-	}
-
+	// (Game::RunScriptOf runs it: Script::RunScript's own answer is no yes or no for a script, but the low byte of
+	// the address its CScript had, from the free just before it returns: 0x0040FE2C -> 0x0040E370 -> 0x0057A960,
+	// so 0 for about one in 64. Only a missing script gives 0 for sure.)
 	static const Expect kAutosaveExpect[] = {
 		{ 0x00517428, 18, { 0x8D, 0x46, 0x40, 0x50, 0x8D, 0x8E, 0xC8, 0x02, 0x00, 0x00, 0xC6, 0x86, 0x19, 0x03, 0x00, 0x00, 0x01, 0xE8 }, "SetCustomRestart: the position and the flag" },
 		{ 0x0051743E, 10, { 0x8D, 0x4E, 0x60, 0x51, 0x8D, 0x8E, 0xD8, 0x02, 0x00, 0x00 }, "SetCustomRestart: the matrix" },
 		{ 0x00517458, 6, { 0x88, 0x86, 0x18, 0x03, 0x00, 0x00 }, "SetCustomRestart: walking" },
 		{ 0x0051776F, 11, { 0x3D, 0xE9, 0x19, 0x3C, 0x5A, 0x0F, 0x84, 0xE4, 0xFC, 0xFF, 0xFF }, "SkipToCustomRestart" },
-		{ 0x00528DAA, 6, { 0x8B, 0x8E, 0x98, 0x03, 0x00, 0x00 }, "LevelIs: the level loaded" },
-		{ 0x0040FD00, 12, { 0x6A, 0xFF, 0x68, 0x5B, 0x18, 0x62, 0x00, 0x64, 0xA1, 0x00, 0x00, 0x00 }, "Script::RunScript" },
 	};
 
 	static bool s_autosaveOn = true;                  // [Flickit] Autosave
@@ -2951,8 +2835,8 @@ namespace FlickitGame {
 	static bool s_slotsRead = false;
 	static bool s_writeTold = false;
 	static bool s_writeFailTold = false;
-	static char s_savePath[MAX_PATH] = "";
-	static char s_saveTemp[MAX_PATH] = "";
+	static char s_savePath[MAX_PATH + 32] = "";
+	static char s_saveTemp[MAX_PATH + 32] = "";
 
 	void SetAutosave(bool on, const char* levels) {
 		s_autosaveOn = on;
@@ -2979,10 +2863,10 @@ namespace FlickitGame {
 
 	static bool AutosaveReady() {
 		if (s_autosaveReady == 0) {
-			s_autosaveReady = 1;
+			s_autosaveReady = Game::Ready() ? 1 : -1;
 			for (size_t i = 0; i < sizeof(kAutosaveExpect) / sizeof(kAutosaveExpect[0]); i++) {
-				if (memcmp((const void*)kAutosaveExpect[i].address, kAutosaveExpect[i].bytes, (size_t)kAutosaveExpect[i].size) != 0) {
-					Log::TypedLog(CHN_SDL, "Autosave: the game's code at %08X (%s) is not what was expected; autosave is off\n",
+				if (!Game::Matches(kAutosaveExpect[i])) {
+					Game::Note("Autosave: the game's code at %08X (%s) is not what was expected; autosave is off\n",
 						kAutosaveExpect[i].address, kAutosaveExpect[i].what);
 					s_autosaveReady = -1;
 				}
@@ -2992,16 +2876,13 @@ namespace FlickitGame {
 			}
 			if (s_autosaveReady > 0) {
 				// next to the exe
-				char dir[MAX_PATH];
-				const DWORD n = GetModuleFileNameA(NULL, dir, MAX_PATH);
-				char* slash = n ? strrchr(dir, '\\') : 0;
-				if (!slash) {
+				const char* dir = Game::ExeDir();
+				if (!dir[0]) {
 					s_autosaveReady = -1;
 				}
 				else {
-					slash[1] = 0;
-					sprintf_s(s_savePath, sizeof(s_savePath), "%sflickit_autosave.txt", dir);
-					sprintf_s(s_saveTemp, sizeof(s_saveTemp), "%sflickit_autosave.tmp", dir);
+					Str::Format(s_savePath, sizeof(s_savePath), "%sflickit_autosave.txt", dir);
+					Str::Format(s_saveTemp, sizeof(s_saveTemp), "%sflickit_autosave.tmp", dir);
 				}
 			}
 		}
@@ -3094,7 +2975,7 @@ namespace FlickitGame {
 		if (!s_autosaveOn || !AutosaveReady()) {
 			return;
 		}
-		const uint8_t* skate = (const uint8_t*)*kSkate;
+		const uint8_t* skate = *kSkate;
 		if (!skate) {
 			return;
 		}
@@ -3296,9 +3177,9 @@ namespace FlickitGame {
 		s_last = now;
 		char news[400];
 		if (BigWorld::FaceListNews(news, sizeof(news))) {
-			WatchNote(news);
+			Game::Note("%s", news);
 			if (++s_notes == 30) {
-				WatchNote("BigWorld: no more notes on the faces in a box this session");
+				Game::Note("BigWorld: no more notes on the faces in a box this session\n");
 			}
 		}
 	}

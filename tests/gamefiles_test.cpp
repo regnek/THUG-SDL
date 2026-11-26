@@ -58,6 +58,37 @@ static void TestLzss() {
 	Check(!GameFiles::UnpackLzss(small, 5, out, sizeof(out)), "lzss: a match cut in two is refused");
 }
 
+// An archive in memory as GameFiles::WalkPre reads one, and an entry of it by its name
+struct MemorySource {
+	const uint8_t* bytes;
+	size_t size;
+	size_t at;
+	bool Read(void* to, size_t n) {
+		if (size - at < n) {
+			return false;
+		}
+		std::memcpy(to, bytes + at, n);
+		at += n;
+		return true;
+	}
+	bool Skip(size_t n) {
+		at = n > size - at ? size : at + n;
+		return true;
+	}
+};
+
+static bool FindInPre(const uint8_t* pre, size_t n, const char* name, std::vector<uint8_t>* out) {
+	MemorySource src = { pre, n, 0 };
+	bool found = false;
+	GameFiles::WalkPre(src,
+		[&](const char* stored, size_t length) { return GameFiles::SameName(stored, length, name); },
+		[&](const char*, size_t, const GameFiles::EntryHead& h, const uint8_t* stored) {
+			found = GameFiles::Unpack(h, stored, out);
+			return false;
+		});
+	return found;
+}
+
 static void TestPre() {
 	std::vector<uint8_t> pre;
 	Put32(pre, 0);
@@ -71,17 +102,17 @@ static void TestPre() {
 	AddEntry(pre, "Textures/Logos/Sht_Packed01.img.xbx", kPacked, sizeof(kPacked), sizeof(kPlain), true);
 	AddEntry(pre, "textures\\logos\\Sht_Last.img.xbx", stored, 3, 3, false);
 	std::vector<uint8_t> out;
-	Check(GameFiles::FindInPre(&pre[0], pre.size(), "TEXTURES\\LOGOS\\sht_first01.img.xbx", &out), "pre: a stored entry, any case");
+	Check(FindInPre(&pre[0], pre.size(), "TEXTURES\\LOGOS\\sht_first01.img.xbx", &out), "pre: a stored entry, any case");
 	Check(out.size() == 5 && std::memcmp(&out[0], stored, 5) == 0, "pre: its bytes");
-	Check(GameFiles::FindInPre(&pre[0], pre.size(), "textures\\logos\\Sht_Packed01.img.xbx", &out), "pre: a packed entry, / for \\");
+	Check(FindInPre(&pre[0], pre.size(), "textures\\logos\\Sht_Packed01.img.xbx", &out), "pre: a packed entry, / for \\");
 	Check(out.size() == sizeof(kPlain) && std::memcmp(&out[0], kPlain, sizeof(kPlain)) == 0, "pre: unpacked");
-	Check(GameFiles::FindInPre(&pre[0], pre.size(), "textures\\logos\\Sht_Last.img.xbx", &out) && out.size() == 3, "pre: the last entry");
-	Check(!GameFiles::FindInPre(&pre[0], pre.size(), "textures\\logos\\Sht_First01.img", &out), "pre: a name that is only the start");
-	Check(!GameFiles::FindInPre(&pre[0], pre.size(), "textures\\logos\\Sht_First01.img.xbx.old", &out), "pre: a longer name");
-	Check(!GameFiles::FindInPre(&pre[0], pre.size() - 8, "textures\\logos\\Sht_Last.img.xbx", &out), "pre: cut short");
+	Check(FindInPre(&pre[0], pre.size(), "textures\\logos\\Sht_Last.img.xbx", &out) && out.size() == 3, "pre: the last entry");
+	Check(!FindInPre(&pre[0], pre.size(), "textures\\logos\\Sht_First01.img", &out), "pre: a name that is only the start");
+	Check(!FindInPre(&pre[0], pre.size(), "textures\\logos\\Sht_First01.img.xbx.old", &out), "pre: a longer name");
+	Check(!FindInPre(&pre[0], pre.size() - 8, "textures\\logos\\Sht_Last.img.xbx", &out), "pre: cut short");
 	std::vector<uint8_t> bad = pre;
 	bad[6] = 0;
-	Check(!GameFiles::FindInPre(&bad[0], bad.size(), "textures\\logos\\Sht_First01.img.xbx", &out), "pre: not a .pre");
+	Check(!FindInPre(&bad[0], bad.size(), "textures\\logos\\Sht_First01.img.xbx", &out), "pre: not a .pre");
 }
 
 static std::vector<uint8_t> ImgHead(uint32_t w, uint32_t h, uint32_t paletteSize) {
@@ -173,7 +204,7 @@ static void TestGameFile(const char* path) {
 		const std::string name = std::string("textures\\logos\\") + kNames[i] + ".img.xbx";
 		std::vector<uint8_t> data;
 		GameFiles::Picture p;
-		const bool found = GameFiles::FindInPre(&all[0], all.size(), name.c_str(), &data);
+		const bool found = FindInPre(&all[0], all.size(), name.c_str(), &data);
 		const bool ok = found && GameFiles::DecodeImg(&data[0], data.size(), &p);
 		Check(ok, name.c_str());
 		if (ok) {

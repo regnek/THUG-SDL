@@ -329,7 +329,6 @@ namespace Flickit {
 	// game's sides are swapped (Settings::grindMirror), for the board's lean as for the stick.
 	int GrindFromBoard(int grind, const RailContact& c, float alongAngle, bool mirror);
 	const char* GrindName(int grind);
-	const char* StateName(int state);
 
 	// How to start a grind in THUG. The game picks its grinds from a table (GrindTrickList in
 	// grindlist.q): one row for each direction the player could hold with the Grind button, and in

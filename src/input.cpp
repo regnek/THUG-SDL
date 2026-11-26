@@ -10,6 +10,7 @@
 #include "keycodes.h"
 #include "flickit.h"
 #include "flickit_game.h"
+#include "game.h"
 #include "camrel_game.h"
 #include "worldmap_game.h"
 #include "drive_game.h"
@@ -373,7 +374,7 @@ void loadFlickitPatterns(const char* configFile, int enabled) {
 		}
 	}
 	char path[MAX_PATH * 2];
-	sprintf_s(path, sizeof(path), "%.*s%s", dirLength, configFile, name);
+	Str::Format(path, sizeof(path), "%.*s%s", dirLength, configFile, name);
 
 	FILE* f = nullptr;
 	if (fopen_s(&f, path, "rb") != 0 || !f) {
@@ -589,10 +590,10 @@ void loadFlickitSettings() {
 static const char* flickitTiltText(const Flickit::Tilt& t, char* buf, size_t size) {
 	static const char* first[] = { "-", "up", "down", "side" };
 	if (!t.valid) {
-		sprintf_s(buf, size, "stick at rest");
+		Str::Format(buf, size, "stick at rest");
 	}
 	else {
-		sprintf_s(buf, size, "stick first %s%s, now %s", first[t.first & 3],
+		Str::Format(buf, size, "stick first %s%s, now %s", first[t.first & 3],
 			t.first == Flickit::TILT_SIDE ? (t.firstLeft ? " (left)" : " (right)") : "", Flickit::DirName(t.cur));
 	}
 	return buf;
@@ -601,13 +602,13 @@ static const char* flickitTiltText(const Flickit::Tilt& t, char* buf, size_t siz
 // The board as it reached the rail, for the log
 static const char* flickitBoardText(const FlickitGame::Pick& p, char* buf, size_t size) {
 	if (!p.byBoard) {
-		sprintf_s(buf, size, "the board's angle not asked");
+		Str::Format(buf, size, "the board's angle not asked");
 	}
 	else if (!p.contact.known) {
-		sprintf_s(buf, size, "the board's angle not known");
+		Str::Format(buf, size, "the board's angle not known");
 	}
 	else {
-		sprintf_s(buf, size, "the board %.0f degrees off the rail with its %s onto it%s", p.contact.angle,
+		Str::Format(buf, size, "the board %.0f degrees off the rail with its %s onto it%s", p.contact.angle,
 			p.contact.noseLeads ? "nose" : "tail",
 			p.contact.across ? ", across" : p.contact.backwards ? ", riding backwards (the stick alone)" : "");
 	}
@@ -636,7 +637,7 @@ static void flickitLogGame(const FlickitGame::Skater& sk, uint32_t now) {
 		char board[96];
 		char asked[64] = "";
 		if (pick.grind != pick.asked) {
-			sprintf_s(asked, sizeof(asked), " (the stick alone: %s)", Flickit::GrindName(pick.asked));
+			Str::Format(asked, sizeof(asked), " (the stick alone: %s)", Flickit::GrindName(pick.asked));
 		}
 		if (pick.started == pick.grind) {
 			Log::TypedLog(CHN_SDL, "Flickit: rail on the %s, %s, %s: %s%s%s\n", pick.railOnLeft ? "left" : "right",
@@ -781,14 +782,11 @@ static void flickitLogGame(const FlickitGame::Skater& sk, uint32_t now) {
 			// four looks to a line
 			Log::TypedLog(CHN_SDL, "Flickit: the toes in %s, look by look (share of the animation: left x y z / right x y z, y is up):\n", sk.footAnim);
 			char line[512];
-			int used = 0;
+			size_t used = 0;
 			for (int i = 0; i < sk.footTraceLooks; i++) {
 				const float* look = sk.footTrace + 7 * i;
-				used += snprintf(line + used, sizeof(line) - used, "%s%.3f: %.1f %.1f %.1f / %.1f %.1f %.1f",
+				used += Str::Format(line + used, sizeof(line) - used, "%s%.3f: %.1f %.1f %.1f / %.1f %.1f %.1f",
 					used ? " | " : "  ", look[0], look[1], look[2], look[3], look[4], look[5], look[6]);
-				if (used >= (int)sizeof(line)) {
-					used = (int)sizeof(line) - 1;
-				}
 				if (i % 4 == 3 || i == sk.footTraceLooks - 1) {
 					Log::TypedLog(CHN_SDL, "%s\n", line);
 					used = 0;
@@ -1045,8 +1043,8 @@ void flickitGameFrame(device* dev, const Flickit::Output& out) {
 	{
 		const float rest = 0.2f;
 		const float side = frame.steer < 0.0f ? -1.0f : 1.0f;
-		const float out = (frame.steer * side - rest) / (1.0f - rest);
-		frame.steer = out <= 0.0f ? 0.0f : (out >= 1.0f ? side : side * out);
+		const float past = (frame.steer * side - rest) / (1.0f - rest);
+		frame.steer = past <= 0.0f ? 0.0f : (past >= 1.0f ? side : side * past);
 	}
 	if (dev->controlData[2] & (0x01 << 7)) {
 		frame.steer = -1.0f;
@@ -1447,11 +1445,9 @@ void pollController(device* dev, SDL_GameController* controller) {
 						// What it did, for the first presses of a run (flickit_watchdog.txt)
 						if (pressed && s_boardTold < 20) {
 							s_boardTold++;
-							char text[160];
-							sprintf_s(text, sizeof(text), "Buttons: the board button (%d) down: %s\n", flickitSettings.boardButton,
+							Game::Note("Buttons: the board button (%d) down: %s\n", flickitSettings.boardButton,
 								boardButton >= 0 ? (flickitMode == FLICKIT_ON ? "L1 + R1 to the game, on the board" : "L1 + R1 to the game, off the board")
 								: flickitMode == FLICKIT_OFF ? "left to the game (Flickit is off)" : "left to the game (in a car)");
-							FlickitGame::WatchNote(text);
 						}
 					}
 					const controllerButton cameraButton = flickitCameraButton();

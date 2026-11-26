@@ -1,6 +1,5 @@
 #include <windows.h>
 #include <math.h>
-#include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -10,9 +9,8 @@
 #include "flickit_daynight_qb.h"
 #include "bigworld.h"
 #include "flickit.h"
-#include "flickit_game.h"
+#include "game.h"
 #include "QB/LazyStruct.h"
-#include "Logger/Logger.h"
 
 #define FLICKIT_SECTION "Flickit"
 
@@ -23,34 +21,14 @@ namespace DayNightGame {
 	/*                                                                */
 	/******************************************************************/
 
-	// Script::ParseQB for a file in memory, as the game reads a cutscene's scripts
-	typedef void(__cdecl* ParseQBFromMemory_t)(const char* name, uint8_t* data, int flag);
-	static const ParseQBFromMemory_t ParseQBFromMemory = (ParseQBFromMemory_t)0x00409F90;
-	// A symbol by its name: its type at +1 (7 a script)
-	typedef uint8_t* (__cdecl* LookUpSymbol_t)(uint32_t name);
-	static const LookUpSymbol_t LookUpSymbol = (LookUpSymbol_t)0x004133A0;
-	// Script::RunScript: the name of a script, its parameters, the object it runs on
-	typedef bool(__cdecl* RunScript_t)(uint32_t name, void* params, void* object, void* object2);
-	static const RunScript_t RunGameScript = (RunScript_t)0x0040FD00;
-	// GameNet::Manager::InNetGame
-	typedef bool(__thiscall* InNetGame_t)(void* net);
-	static const InNetGame_t InNetGame = (InNetGame_t)0x004C6B50;
-	static void** const kNetManager = (void**)0x0076914C;
-	static uint8_t** const kSkate = (uint8_t**)0x0076A788;
-	static const uint32_t SKATE_LEVEL = 0x398;     // the level's load script (LevelIs)
-	enum { SYMBOL_SCRIPT = 7 };
+	// What the other parts of the mod use as well (game.h): scripts read from memory and run, the notes
+	using Game::ParseQBFromMemory;
+	using Game::RunGameScript;
+	using Game::Expect;
+	using Game::Note;
 
-	struct Expect {
-		uint32_t address;
-		int size;
-		uint8_t bytes[16];
-		const char* what;
-	};
+	// (what game.h has is checked there: Game::Ready)
 	static const Expect kExpect[] = {
-		{ 0x00409F90, 13, { 0x8B, 0x44, 0x24, 0x0C, 0x8B, 0x4C, 0x24, 0x08, 0x8B, 0x54, 0x24, 0x04, 0x6A }, "Script::ParseQB, from memory" },
-		{ 0x004133A0, 12, { 0x8B, 0x4C, 0x24, 0x04, 0x8B, 0xC1, 0x25, 0xFF, 0x0F, 0x00, 0x00, 0x56 }, "Script::LookUpSymbol" },
-		{ 0x0040FD00, 12, { 0x6A, 0xFF, 0x68, 0x5B, 0x18, 0x62, 0x00, 0x64, 0xA1, 0x00, 0x00, 0x00 }, "Script::RunScript" },
-		{ 0x004C6B50, 12, { 0x56, 0x8B, 0xF1, 0xF6, 0x86, 0x38, 0x01, 0x00, 0x00, 0x0C, 0x74, 0x24 }, "GameNet::Manager::InNetGame" },
 		// SetSceneColor: color (whole), sky (whole, the colour's by default; for outdoor), lightgroup
 		{ 0x00524E40, 10, { 0x68, 0x40, 0xBB, 0x63, 0x00, 0x8B, 0xCE, 0xE8, 0xB4, 0xC5 }, "SetSceneColor: color" },
 	};
@@ -69,7 +47,7 @@ namespace DayNightGame {
 	static DayNight::Clock s_clock;
 	static int s_ready = 0;                  // 1: the game is as expected, -1: not
 	static int s_parsed = 0;                 // 1: the game has the scripts, -1: it did not take them
-	static LARGE_INTEGER s_lastFrame;
+	static Game::FrameTimer s_frameTimer;
 	static uint32_t s_levelLoads = 0xFFFFFFFFu;
 	static uint32_t s_level = 0;
 	static float s_sinceLook = 1.0e9f;
@@ -87,17 +65,6 @@ namespace DayNightGame {
 		uint32_t heading[2], pitch[2], red[2], green[2], blue[2], mod[2];
 	};
 	static Names s_n;
-
-	// A line for the log and flickit_watchdog.txt (the log is only written with the console on)
-	static void Note(const char* format, ...) {
-		char text[400];
-		va_list args;
-		va_start(args, format);
-		vsnprintf(text, sizeof(text), format, args);
-		va_end(args);
-		text[sizeof(text) - 1] = 0;
-		FlickitGame::WatchNote(text);
-	}
 
 	static void InitNames() {
 		s_n.lookScript = Flickit::NameChecksum("Flickit_DayNightLook");
@@ -117,17 +84,17 @@ namespace DayNightGame {
 		s_n.ambientMod = Flickit::NameChecksum("ambient_mod_factor");
 		for (int i = 0; i < 2; i++) {
 			char name[32];
-			sprintf_s(name, sizeof(name), "heading_%d", i);
+			Str::Format(name, sizeof(name), "heading_%d", i);
 			s_n.heading[i] = Flickit::NameChecksum(name);
-			sprintf_s(name, sizeof(name), "pitch_%d", i);
+			Str::Format(name, sizeof(name), "pitch_%d", i);
 			s_n.pitch[i] = Flickit::NameChecksum(name);
-			sprintf_s(name, sizeof(name), "red_%d", i);
+			Str::Format(name, sizeof(name), "red_%d", i);
 			s_n.red[i] = Flickit::NameChecksum(name);
-			sprintf_s(name, sizeof(name), "green_%d", i);
+			Str::Format(name, sizeof(name), "green_%d", i);
 			s_n.green[i] = Flickit::NameChecksum(name);
-			sprintf_s(name, sizeof(name), "blue_%d", i);
+			Str::Format(name, sizeof(name), "blue_%d", i);
 			s_n.blue[i] = Flickit::NameChecksum(name);
-			sprintf_s(name, sizeof(name), "mod_factor_%d", i);
+			Str::Format(name, sizeof(name), "mod_factor_%d", i);
 			s_n.mod[i] = Flickit::NameChecksum(name);
 		}
 	}
@@ -135,8 +102,12 @@ namespace DayNightGame {
 	static bool Ready() {
 		if (s_ready == 0) {
 			s_ready = 1;
+			if (!Game::Ready()) {
+				Note("Day and night: the game's code is not what was expected; no day and night\n");
+				s_ready = -1;
+			}
 			for (size_t i = 0; i < sizeof(kExpect) / sizeof(kExpect[0]); i++) {
-				if (memcmp((const void*)kExpect[i].address, kExpect[i].bytes, (size_t)kExpect[i].size) != 0) {
+				if (!Game::Matches(kExpect[i])) {
 					Note("Day and night: the game's code at %08X (%s) is not what was expected; no day and night\n",
 						kExpect[i].address, kExpect[i].what);
 					s_ready = -1;
@@ -152,8 +123,7 @@ namespace DayNightGame {
 			static uint8_t data[sizeof(flickit_daynight_qb)];
 			memcpy(data, flickit_daynight_qb, sizeof(data));
 			ParseQBFromMemory("scripts\\flickit\\daynight.qb", data, 1);
-			const uint8_t* look = LookUpSymbol(s_n.lookScript);
-			if (look && look[1] == SYMBOL_SCRIPT) {
+			if (Game::IsScript(s_n.lookScript)) {
 				s_parsed = 1;
 				Note("Day and night: the game has Flickit's day and night scripts (%u bytes)\n", (unsigned)sizeof(data));
 			}
@@ -163,18 +133,6 @@ namespace DayNightGame {
 			}
 		}
 		return s_parsed > 0;
-	}
-
-	static float FrameSeconds() {
-		LARGE_INTEGER now, freq;
-		QueryPerformanceCounter(&now);
-		QueryPerformanceFrequency(&freq);
-		float s = 0.0f;
-		if (s_lastFrame.QuadPart && freq.QuadPart) {
-			s = (float)((double)(now.QuadPart - s_lastFrame.QuadPart) / (double)freq.QuadPart);
-		}
-		s_lastFrame = now;
-		return s;
 	}
 
 	static const char* PartOfDay(float hour) {
@@ -261,9 +219,8 @@ namespace DayNightGame {
 		if (!Ready() || !Parsed()) {
 			return;
 		}
-		const float seconds = FrameSeconds();
-		void* net = *kNetManager;
-		if (net && InNetGame(net)) {
+		const float seconds = (float)s_frameTimer.Step();
+		if (Game::InNet()) {
 			return;
 		}
 		if (!s_on) {
@@ -282,7 +239,7 @@ namespace DayNightGame {
 		}
 		// a new level: everything told again, at once
 		const uint32_t loads = BigWorld::NodeLoads();
-		const uint32_t level = *kSkate ? *(const uint32_t*)(*kSkate + SKATE_LEVEL) : 0;
+		const uint32_t level = Game::LevelScript();
 		const bool fresh = loads != s_levelLoads || level != s_level;
 		if (fresh) {
 			s_levelLoads = loads;

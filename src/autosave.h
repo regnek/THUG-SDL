@@ -4,9 +4,9 @@
 //
 // Every frame (FlickitGame, before the physics) the skater's spot is taken while he is skating on the
 // ground: not walking, not in a bail, not in the air or on a rail or a lip, with the controls his (no
-// cutscene) and his numbers whole. The spot goes to disk whenever it has moved (Throttle), at most four
-// times a second, so a crash loses a quarter of a second at most. One spot per level (Slots), in a text
-// file next to the exe.
+// cutscene) and his numbers whole. The spot goes to disk whenever it has moved (Throttle), at most once a
+// second (the file is written on the game's own thread), so a crash loses a second at most. One spot per
+// level (Slots), in a text file next to the exe.
 //
 // When a level has loaded and the skater has stood ready for half a second (Session), his spot in that
 // level, if there is one, becomes the game's own custom restart (the one the pause menu's "Set Restart"
@@ -83,6 +83,10 @@ namespace Autosave {
 		}
 
 		// Reads what Text wrote. Lines that do not read whole are left out. False if none did.
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable: 4996)      // sscanf, of numbers alone: there is nothing for it to overrun
+#endif
 		bool Read(const char* text) {
 			Clear();
 			const char* p = text;
@@ -115,6 +119,9 @@ namespace Autosave {
 			}
 			return m_count > 0;
 		}
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif
 
 		// Numbers, within reach, and a matrix whose first three rows are unit length
 		static bool Whole(const Spot& s) {
@@ -142,11 +149,11 @@ namespace Autosave {
 		int m_count;
 	};
 
-	// When to write: the spot has moved a unit or turned a degree since the last one written, and a quarter
-	// of a second has gone by since then
+	// When to write: the spot has moved a unit or turned a degree since the last one written, and a second
+	// has gone by since then
 	class Throttle {
 	public:
-		static const uint32_t kGapMs = 250;
+		static const uint32_t kGapMs = 1000;
 		Throttle() : m_have(false), m_at(0) {}
 		bool Due(const Spot& s, uint32_t nowMs) const {
 			if (!m_have) {

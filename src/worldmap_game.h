@@ -46,8 +46,6 @@ namespace WorldMapGame {
 	// for closing the map under one (the game counts any pause as a menu, the map's own as well).
 	void AfterPoll(uint8_t* controlData, SDL_GameController* controller, int cameraButton, bool inMenu, bool menuUp);
 
-	bool IsOpen();
-
 	// A player's card, asked for from the game's frame (Circle by him): it opens at the next look at the
 	// controller, if it can then. False when there is no card to draw (the map is off or has no file).
 	bool AskCard(const Players::Identity& who);
