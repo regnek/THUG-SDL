@@ -12,6 +12,7 @@
 
 #include "d3d9.h"
 #include "flickit_game.h"
+#include "frames_game.h"
 #include "game.h"
 #include "gamefiles.h"
 #include "patch.h"
@@ -1605,6 +1606,7 @@ namespace WorldMapGame {
 	}
 
 	static void __cdecl DrawFrameEnd() {
+		FramesGame::RenderEnd();
 		if (!s_ready) {
 			return;
 		}

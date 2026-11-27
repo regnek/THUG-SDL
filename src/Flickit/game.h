@@ -115,6 +115,8 @@ namespace Game {
 	// the log's lines do (one that is missing is added, and none is doubled).
 	void Note(const char* format, ...) STR_PRINTF(1, 2);
 	void NoteV(const char* format, va_list args);
+	// Several lines at once, each as Note writes one, put in the file in one go (one opening of the file)
+	void NoteLines(const char* const* lines, int count);
 
 	// The folder the game's exe is in, with its last backslash; "" when it cannot be had
 	const char* ExeDir();

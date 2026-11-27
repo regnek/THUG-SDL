@@ -42,8 +42,40 @@ D-pad (card or list up)    up / down choose, right selects, left closes
 F6 (keyboard)              start / stop recording a run for the fake players
 F5 (keyboard)              the clock two hours on (day and night)
 
-New in this build: the code swept and cleaned
----------------------------------------------
+New in this build: a watch on the frames
+----------------------------------------
+You said the frame rate gets really bad sometimes. This build does not make
+it better yet. It finds out where the time goes, so that the fix is for the
+right thing: it could be the camera-relative drawing, the game drawing six
+levels at once, the 4x textures, something that runs once a second, or the
+PC.
+
+What to do:
+  1. Play as usual. When the frame rate gets bad, stay in that place and
+     keep doing what you were doing for half a minute.
+  2. If you can, once in a bad place: stand still for 15 seconds, press F7,
+     stand still for 15 more, press F7 again. F7 switches the
+     camera-relative drawing off and on (far-off things may flicker while
+     it is off), so this compares the two in the same place.
+  3. Send me flickit_watchdog.txt.
+
+What it does: it marks every frame, the first thing drawn in it and the
+end of the drawing, and times Direct3D's draw call for every mesh. And a
+second thread looks at the game's thread about once a millisecond and
+notes where in the code it is. Every ten seconds that ran slow, lines that
+start "Frames:" go into flickit_watchdog.txt: how long the frames were,
+how a frame splits into what comes before the drawing, the drawing and
+what comes after, and the places in the code where the time went. The
+first ten seconds and now and then ten that were fine are written too, to
+compare with.
+  - It costs about a hundredth of the frame rate. FrameWatch=0 in
+    [Flickit] turns it off.
+  - Add FrameWatch=1 to [Flickit] in your thugsdl.ini, or leave it out: it
+    is on by default.
+  - Not tried in the game.
+
+The code swept and cleaned (the last build)
+-------------------------------------------
 Nothing new to play. You asked for a sweep of all the code for bugs,
 repeats and leftovers, and a clean-up. What changes for you:
   - A report could end the game. The watchdog wrote its report of numbers
@@ -69,9 +101,9 @@ repeats and leftovers, and a clean-up. What changes for you:
     apart from THUG-SDL's, and the README has a table of what is where.
   - Nothing else should behave differently. If something does, that is a
     mistake of this clean-up: the build before it is commit 39ac25b.
-  - Not tried in the game yet.
+  - You tried it: everything works as before.
 
-The crashes while driving, found (the last build)
+The crashes while driving, found (two builds ago)
 -------------------------------------------------
 Your crash driving the New Jersey police car into San Diego (at
 0x004515F7, a write of 0x001B003E) is the third of one kind, after the
@@ -98,8 +130,8 @@ ones at 0x0041FBB3 and 0x0041CBC0, and this time the cause is found:
     back, crashes and all.
   - Not tried in the game yet.
 
-Triangle for real, and the car stays yours (two builds ago)
------------------------------------------------------------
+Triangle for real, and the car stays yours (three builds ago)
+-------------------------------------------------------------
 Your notes: Triangle sent its signal 12 times and nothing happened, and
 the truck from San Diego went through everything in New Jersey.
   - Triangle: the game's way off the board here is L1 and R1 pressed
@@ -118,8 +150,8 @@ the truck from San Diego went through everything in New Jersey.
     the crashes every 10 seconds you drive.
   - Not tried in the game yet.
 
-Watching for the crash, notes for Triangle and the crashes (three builds ago)
------------------------------------------------------------------------------
+Watching for the crash, notes for Triangle and the crashes (four builds ago)
+----------------------------------------------------------------------------
 Your report: cars drove through each other, Triangle did not get you
 off the board, and the game crashed (at 0x0041CBC0, a read of
 0x003B007E), maybe after hitting a wall.
@@ -140,7 +172,7 @@ off the board, and the game crashed (at 0x0041CBC0, a read of
     it is.
   - Not tried in the game yet.
 
-Day and night, Triangle, L3 camera, running people over (four builds ago)
+Day and night, Triangle, L3 camera, running people over (five builds ago)
 -------------------------------------------------------------------------
 What you asked for:
   - Day and night: a whole day goes by in 24 minutes of play (a game
@@ -181,8 +213,8 @@ What you asked for:
     night:" and "People:". Please send it if something looks wrong.
   - Not tried in the game yet.
 
-The crash after a car blew up, and the smoke and fire (five builds ago)
------------------------------------------------------------------------
+The crash after a car blew up, and the smoke and fire (six builds ago)
+----------------------------------------------------------------------
 Your report: no smoke or fire showed on the car, and the game crashed
 (at 0x00421BEA) after you got back on your board next to it.
   - The crash: when a car's smoke changed (light to heavy, then burnt
@@ -199,8 +231,8 @@ Your report: no smoke or fire showed on the car, and the game crashed
     fireball is, and follow it. The smoke is a little thicker too.
   - Not tried in the game yet.
 
-Car crashes (six builds ago)
-----------------------------
+Car crashes (seven builds ago)
+------------------------------
 What you asked for: cars that hit each other, take damage, fly in a
 hard enough crash and catch fire, like in GTA.
   - Your car hits the cars on the street and the cars standing on
@@ -236,7 +268,7 @@ hard enough crash and catch fire, like in GTA.
     "Crashes:". Please send it if something looks wrong.
   - Not tried in the game yet.
 
-Skate while a card is open (seven builds ago)
+Skate while a card is open (eight builds ago)
 ---------------------------------------------
 Your notes on the build before: you could not skate with a card open, and
 A both picked in the card and pushed.
@@ -254,8 +286,8 @@ A both picked in the card and pushed.
     of your skater's way.
   - Not tried in the game yet.
 
-The card lets the game run, logos, easier reach (eight builds ago)
-------------------------------------------------------------------
+The card lets the game run, logos, easier reach (nine builds ago)
+-----------------------------------------------------------------
 Your notes on the last build:
   - The card no longer pauses the game. The other players skate on while
     it is up, as real ones would. While it is up the game gets nothing
@@ -284,8 +316,8 @@ Your notes on the last build:
     PlayersButton=12 (the d-pad's down), PlayersKey=19 (P).
   - Not tried in the game yet.
 
-The fake players skate their runs (nine builds ago)
----------------------------------------------------
+The fake players skate their runs (ten builds ago)
+--------------------------------------------------
 Your report: a run you recorded had no skater on it, only people of
 the level in a T-pose, a new one every few seconds along its path.
   - What that was: each player was made, but the DLL then could not
@@ -310,8 +342,8 @@ the level in a T-pose, a new one every few seconds along its path.
   - The people from the last build go when the level loads again.
   - Not tried in the game yet.
 
-The crash at the highway barricades (ten builds ago)
-----------------------------------------------------
+The crash at the highway barricades (eleven builds ago)
+-------------------------------------------------------
 The crash driving into the barricades on Jersey's highway (at
 0x004110B3, "Read of 0x00000000"):
   - When a car's feelers or the skater touch a "trigger" face (one that
@@ -326,7 +358,7 @@ The crash driving into the barricades on Jersey's highway (at
     level too.
   - Not tried in the game yet.
 
-Fake players, to try the online mode from one end (eleven builds ago)
+Fake players, to try the online mode from one end (twelve builds ago)
 ---------------------------------------------------------------------
 Other skaters in your world, each with his card. For now they are fake:
 they skate runs you record yourself, with made-up names, sponsors,
@@ -364,8 +396,8 @@ needs a second player to try with.
     (floating, sunk, turned the wrong way) or in the wrong animation, a
     screenshot and the log lines that start "Players:" help.
 
-Three car fixes, and cars go back after two minutes (twelve builds ago)
------------------------------------------------------------------------
+Three car fixes, and cars go back after two minutes (thirteen builds ago)
+-------------------------------------------------------------------------
 The three things from your last screenshots:
   - The crash on top of a car you had parked (at 0x004110B3): a parked
     cab has gap triggers on its roof, and the game looks for their
@@ -408,7 +440,7 @@ the level has one car fewer in its traffic.
     3600). 0 leaves the cars standing, as before.
   - Not tried in the game yet.
 
-A guard for the crash while driving (thirteen builds ago)
+A guard for the crash while driving (fourteen builds ago)
 ---------------------------------------------------------
 The crash while driving (at 0x0041FBB3, "Read of 0x003B0042") was the
 game's pointer to its object manager, which every look-up of an object
@@ -429,8 +461,8 @@ box, so this build watches that pointer:
   - [Flickit] Guard=0 switches it off.
   - Not tried in the game yet.
 
-The drive prompt, and parked cars on the ground (fourteen builds ago)
----------------------------------------------------------------------
+The drive prompt, and parked cars on the ground (fifteen builds ago)
+--------------------------------------------------------------------
   - Near enough to a car to take it, the game's own "Press Circle to
     drive." box shows (the one its own drivable cars have). It goes
     when you move away.
@@ -439,7 +471,7 @@ The drive prompt, and parked cars on the ground (fourteen builds ago)
     body up on its springs, and the parked car was put there.
   - Not tried in the game yet.
 
-Circle takes a car (fifteen builds ago)
+Circle takes a car (sixteen builds ago)
 ---------------------------------------
 Circle (B on an Xbox pad) by a car takes it, the button the game gets
 into its own drivable cars with ("Press Circle to drive"). The build
@@ -447,8 +479,8 @@ before it used Triangle. Getting out is the game's own, as before:
 hold Triangle. A grab the triggers make (TriggerGrabs) takes no car:
 only the Circle button itself does.
 
-Cars (sixteen builds ago)
--------------------------
+Cars (seventeen builds ago)
+---------------------------
 Any car can be taken, like in GTA, a moving one too.
   - Walk or skate up to a car (near enough to touch it, from any side)
     and press Circle (B on an Xbox pad). You are in it, where it was and
@@ -471,8 +503,8 @@ Any car can be taken, like in GTA, a moving one too.
   - [Flickit] Cars=0 switches it off. CarReach=45 is how near you have
     to be to a car's body, in game units (10 to 200).
 
-The map (seventeen builds ago)
-------------------------------
+The map (eighteen builds ago)
+-----------------------------
 A map of the joined world from above, like Skate's, with spots to travel
 to.
   - Hold Back (the camera button) for a moment to open it; a tap still
@@ -499,8 +531,8 @@ to.
     MapKey=16 the key (an SDL scancode; 16 is M). With MapButton set to
     a button of its own, a press opens the map.
 
-More for the blue screen (seventeen builds ago)
------------------------------------------------
+More for the blue screen (eighteen builds ago)
+----------------------------------------------
 The blue screen came back with the watchdog in, so the watchdog now looks
 further and keeps what it sees. Not tried in the game yet.
   - Its notes go to flickit_watchdog.txt next to THUG-SDL.exe, each with
@@ -516,7 +548,7 @@ further and keeps what it sees. Not tried in the game yet.
     time it happened. F9 while the screen is blue adds where things
     stand at that moment.
 
-Camera-relative drawing (eighteen builds ago)
+Camera-relative drawing (nineteen builds ago)
 ---------------------------------------------
 For the decals that still flash far from New Jersey (in Manhattan and
 Tampa). The game draws the level from points measured from New Jersey's
@@ -537,8 +569,8 @@ Not tried in the game yet.
   - [Render] CameraRelative=0 leaves the game's drawing alone (from the
     next start); CameraRelativeKey=64 is F7 (an SDL scancode; 0: no key).
 
-Autosave (nineteen builds ago)
-------------------------------
+Autosave (twenty builds ago)
+----------------------------
 The game keeps where the skater last was on the ground, and when the
 level loads again it puts him back there.
   - While he skates on the ground (not in the air, on a rail or a lip,
@@ -557,8 +589,8 @@ level loads again it puts him back there.
     name of their load script (load_NY, load_FL ...). Each keeps its own
     spot. Delete flickit_autosave.txt to start at the level's start.
 
-A watchdog for the blue screen (twenty builds ago)
---------------------------------------------------
+A watchdog for the blue screen (twenty-one builds ago)
+------------------------------------------------------
 The blue screen with the score still counting is the game drawing nothing
 but its clear colour: the skater's (or the camera's) numbers have stopped
 being numbers, and stay that way. This build watches them every frame.
@@ -575,13 +607,13 @@ being numbers, and stay that way. This build watches them every frame.
     exe keeps its large-address flag (the main block is 360 MB then). It
     tells whether the blue screen only happens with memory above 2 GB.
 
-A bigger main block for a bigger world (twenty-one builds ago)
+A bigger main block for a bigger world (twenty-two builds ago)
 --------------------------------------------------------------
 The game loads a level's files into one block of memory, 360 MB in
 THUG-SDL. A level's scene file sits in it whole while the level loads,
 and New Jersey with Manhattan and Tampa at 4x is a 230 MB scene file, so
 the next districts would not fit. With the large-address flag on
-THUG-SDL.exe (the 4 GB test from twenty builds ago), the build makes the
+THUG-SDL.exe (the 4 GB test from twenty-one builds ago), the build makes the
 block 1024 MB. Without the flag nothing changes.
   - The log says: Memory: the game's main block will be 1024 MB (...)
     and, once the game has it (F9 adds it again):
@@ -593,8 +625,8 @@ block 1024 MB. Without the flag nothing changes.
   - HighMemoryTest=1 can go back to 0 now: it holds all the address space
     below 2 GB, which a bigger block and the 4x textures need too.
 
-Room for a bigger world (twenty-two builds ago)
------------------------------------------------
+Room for a bigger world (twenty-three builds ago)
+-------------------------------------------------
 Two more of the game's fixed limits, for a world made of more levels than
 New Jersey and Manhattan:
   - Node names. The game finds a level's rails, objects, peds and restart
@@ -617,8 +649,8 @@ adds to every level for goals made in the goal editor.)
 BigNodeNames=0 or BigLights=0 under [Memory] in thugsdl.ini puts the
 game's own back.
 
-Room for two levels in one (twenty-three builds ago)
-----------------------------------------------------
+Room for two levels in one (twenty-four builds ago)
+---------------------------------------------------
 The game keeps its scripts, and every level's list of rails, objects and
 restart points, in a heap of its own with fixed-size pools inside it, and
 every table it looks things up in takes its overflow from one more fixed
@@ -630,8 +662,8 @@ set; with Console=1 and WriteFile=1 under [Logger] the log says:
     Memory: script memory 8 times as big: a 31.6 MB heap, ... 100000 hash table items
 [Memory] BigScriptMemory=0 in thugsdl.ini leaves it all as the game has it.
 
-A test for more memory (optional, twenty-three builds ago)
-----------------------------------------------------------
+A test for more memory (optional, twenty-four builds ago)
+---------------------------------------------------------
 For one big open world the game will need more than the 2 GB of address
 space a 32-bit program gets. One bit in the exe, the large-address flag,
 gives it 4 GB on a 64-bit Windows. Whether THUG copes with memory above
@@ -659,8 +691,8 @@ gives it 4 GB on a 64-bit Windows. Whether THUG copes with memory above
   - Undo: "Large address off.bat", or delete THUG-SDL.exe and rename
     THUG-SDL.exe.before-large-address back.
 
-The board's angle has its say in the grind (twenty-five builds ago)
--------------------------------------------------------------------
+The board's angle has its say in the grind (twenty-six builds ago)
+------------------------------------------------------------------
   - Coming in at an angle, the board was swung straight for whatever the
     stick asked for: a board that looked like a crooked came down a 50-50,
     one coming in across the rail with the stick down a 5-0. In Skate the
@@ -682,8 +714,8 @@ The board's angle has its say in the grind (twenty-five builds ago)
   - The log line of every grind now says the board's angle to the rail,
     which end pointed onto it, and what the stick alone would have given.
 
-No balance meter on a rail (twenty-six builds ago)
---------------------------------------------------
+No balance meter on a rail (twenty-seven builds ago)
+----------------------------------------------------
   - Grinds and slides no longer show THUG's balance meter. The board
     cannot lose its balance on a rail, so the meter only ever sat in the
     middle.
@@ -691,7 +723,7 @@ No balance meter on a rail (twenty-six builds ago)
   - GrindBalance=1 in the [Flickit] section gives grinds THUG's balance
     back, and the meter with it.
 
-The turn stays the trucks' (twenty-seven builds ago)
+The turn stays the trucks' (twenty-eight builds ago)
 ----------------------------------------------------
   - The turn no longer drops into THUG's sharp turn now and then. THUG
     reads Down from how far down the stick is, whatever it does to the
@@ -706,8 +738,8 @@ The turn stays the trucks' (twenty-seven builds ago)
     is THUG's own turning again; Steering=200 keeps the trucks and turns
     at speed about as tightly as THUG does.
 
-Off the rail like Skate (twenty-eight builds ago)
--------------------------------------------------
+Off the rail like Skate (twenty-nine builds ago)
+------------------------------------------------
   - When a grind runs out of speed, the board is pushed off to one side
     and the skater drops, as in Skate. Off a ledge he always goes over
     the edge, away from the top, and lands on the ground below; off a
@@ -726,8 +758,8 @@ Off the rail like Skate (twenty-eight builds ago)
     "Flickit: out of speed on the rail: off to his left (away from the
     ledge; a surface on his right), 80 units/s sideways".
 
-Salads slow down on the rail (twenty-nine builds ago)
------------------------------------------------------
+Salads slow down on the rail (thirty builds ago)
+------------------------------------------------
   - The FS and BS salad lost no speed on a rail: they lasted as long as
     the rail did. Now they slow down and step off like every other grind.
   - Why: THUG's scripts make the salad a grind you switch to from another
@@ -742,8 +774,8 @@ Salads slow down on the rail (twenty-nine builds ago)
     script name; its script leaves the balance of the rail to a grind
     before it, so Flickit started it)".
 
-The flicks go by his feet (thirty builds ago)
----------------------------------------------
+The flicks go by his feet (thirty-one builds ago)
+-------------------------------------------------
   - As in Skate, the kickflip goes toward the skater's heels. Left foot
     forward (a regular skater in his own stance): the kickflip is down,
     flick up-left, the heelflip up-right, the pop shove-it a drag to the
@@ -761,7 +793,7 @@ The flicks go by his feet (thirty builds ago)
     kickflip is ("Flickit: left foot forward (regular): the kickflip is the
     flick up-left") when he is first seen and whenever it changes.
 
-Nollies (thirty-one builds ago)
+Nollies (thirty-two builds ago)
 -------------------------------
   - Push the right stick up and the skater goes into THUG's nollie stance
     and crouches, as deep as the stick is pushed (a third of the way is
@@ -783,15 +815,15 @@ Nollies (thirty-one builds ago)
   - With the console on, the log says "Flickit: the stick crouches up:
     nollie stance" and "Flickit: out of nollie stance".
 
-The crouch you see (thirty-two builds ago)
-------------------------------------------
+The crouch you see (thirty-three builds ago)
+--------------------------------------------
   - The skater crouches as deep as the stick is pulled: a little at a third
     of the way, THUG's full crouch all the way down, and anything between.
     Easing the stick back up eases him back up. CrouchPose=0 in the
     [Flickit] section gives THUG's one crouch back.
 
-The stick (thirty-three builds ago)
------------------------------------
+The stick (thirty-four builds ago)
+----------------------------------
   - Weak flicks count, as in Skate: a crouch starts a third of the way down,
     and a flick 40 percent of the way out pops. If your thugsdl.ini already
     has a [Flickit] section, change these four lines in it (the new section

@@ -17,6 +17,7 @@
 #include "d3d9.h"
 #include "camrel.h"
 #include "camrel_game.h"
+#include "frames_game.h"
 #include "game.h"
 #include "patch.h"
 #include "Logger/Logger.h"
@@ -209,14 +210,30 @@ namespace CamRelGame {
 		s_newFar = 0.0;
 	}
 
-	// In the place of the device's DrawIndexedPrimitive in the mesh draw, with the mesh first (from the stub
-	// below); pops all eight.
-	static HRESULT __stdcall DrawMesh(void* mesh, IDirect3DDevice9* dev, D3DPRIMITIVETYPE type, INT base, UINT minIndex,
-		UINT vertices, UINT start, UINT count) {
-		s_draws++;
-		if (s_newMeshes) {
-			LogNew();
+	// The device's DrawIndexedPrimitive with what the mesh draw gave it, and, while the frames are watched
+	// (frames_game.h), the time Direct3D took over it
+	struct DrawCall {
+		IDirect3DDevice9* dev;
+		D3DPRIMITIVETYPE type;
+		INT base;
+		UINT minIndex, vertices, start, count;
+		uint64_t inCall;
+
+		HRESULT Draw() {
+			if (!FramesGame::Timing()) {
+				return dev->DrawIndexedPrimitive(type, base, minIndex, vertices, start, count);
+			}
+			const uint64_t before = FramesGame::Tick();
+			const HRESULT hr = dev->DrawIndexedPrimitive(type, base, minIndex, vertices, start, count);
+			inCall += FramesGame::Tick() - before;
+			return hr;
 		}
+	};
+
+	// A mesh's draw: a registered one with the view (or the world it brought) moved by its middle. shifted: it
+	// was one.
+	static HRESULT DrawMoved(void* mesh, DrawCall& call, bool* shifted) {
+		IDirect3DDevice9* dev = call.dev;
 		CamRel::Entry entry;
 		bool registered = false;
 		// (a mesh the game writes to the card by itself each frame went there in world units)
@@ -234,21 +251,22 @@ namespace CamRelGame {
 			}
 		}
 		if (!registered) {
-			return dev->DrawIndexedPrimitive(type, base, minIndex, vertices, start, count);
+			return call.Draw();
 		}
 		CamRel::Matrix world;
 		if (FAILED(dev->GetTransform(D3DTS_WORLD, (D3DMATRIX*)&world))) {
-			return dev->DrawIndexedPrimitive(type, base, minIndex, vertices, start, count);
+			return call.Draw();
 		}
 		if (CamRel::IsIdentity(world)) {
 			// the level: the view is moved by the middle, worked out in double
 			CamRel::Matrix view;
 			if (FAILED(dev->GetTransform(D3DTS_VIEW, (D3DMATRIX*)&view))) {
-				return dev->DrawIndexedPrimitive(type, base, minIndex, vertices, start, count);
+				return call.Draw();
 			}
+			*shifted = true;
 			const CamRel::Matrix moved = CamRel::Shifted(view, entry.c);
 			dev->SetTransform(D3DTS_VIEW, (const D3DMATRIX*)&moved);
-			const HRESULT hr = dev->DrawIndexedPrimitive(type, base, minIndex, vertices, start, count);
+			const HRESULT hr = call.Draw();
 			dev->SetTransform(D3DTS_VIEW, (const D3DMATRIX*)&view);
 			return hr;
 		}
@@ -258,10 +276,30 @@ namespace CamRelGame {
 			Log::TypedLog(CHN_DLL, "CameraRelative: a registered mesh drawn with a world of its own (row 4 %.1f %.1f %.1f); its world takes its middle (%.0f %.0f %.0f) back\n",
 				world.m[3][0], world.m[3][1], world.m[3][2], entry.c[0], entry.c[1], entry.c[2]);
 		}
+		*shifted = true;
 		const CamRel::Matrix moved = CamRel::Shifted(world, entry.c);
 		dev->SetTransform(D3DTS_WORLD, (const D3DMATRIX*)&moved);
-		const HRESULT hr = dev->DrawIndexedPrimitive(type, base, minIndex, vertices, start, count);
+		const HRESULT hr = call.Draw();
 		dev->SetTransform(D3DTS_WORLD, (const D3DMATRIX*)&world);
+		return hr;
+	}
+
+	// In the place of the device's DrawIndexedPrimitive in the mesh draw, with the mesh first (from the stub
+	// below); pops all eight.
+	static HRESULT __stdcall DrawMesh(void* mesh, IDirect3DDevice9* dev, D3DPRIMITIVETYPE type, INT base, UINT minIndex,
+		UINT vertices, UINT start, UINT count) {
+		const bool timed = FramesGame::Timing();
+		const uint64_t began = timed ? FramesGame::Tick() : 0;
+		s_draws++;
+		if (s_newMeshes) {
+			LogNew();
+		}
+		DrawCall call = { dev, type, base, minIndex, vertices, start, count, 0 };
+		bool shifted = false;
+		const HRESULT hr = DrawMoved(mesh, call, &shifted);
+		if (timed) {
+			FramesGame::Drawn(began, call.inCall, shifted);
+		}
 		return hr;
 	}
 
@@ -329,6 +367,7 @@ namespace CamRelGame {
 		if (!s_installed) {
 			return;
 		}
+		FramesGame::Switching();    // (the watch on the frames tells the stretches before and after apart)
 		s_on = !s_on;
 		std::vector<void*> vbufs;
 		{
@@ -349,6 +388,10 @@ namespace CamRelGame {
 
 	uint32_t DrawCount() {
 		return s_draws;
+	}
+
+	bool On() {
+		return s_installed && s_on;
 	}
 
 	void LogStatus() {

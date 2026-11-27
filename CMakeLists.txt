@@ -14,6 +14,7 @@ set(SOURCE_FILES
 	"${SRC}/input.cpp"
 	"${SRC}/Flickit/flickit.cpp"
 	"${SRC}/Flickit/flickit_game.cpp"
+	"${SRC}/Flickit/frames_game.cpp"
 	"${SRC}/Flickit/game.cpp"
 	"${SRC}/Flickit/memory.cpp"
 	"${SRC}/Flickit/bigworld.cpp"
@@ -48,6 +49,8 @@ set(HEADER_FILES
 	"${SRC}/Flickit/flickit.h"
 	"${SRC}/Flickit/flickit_game.h"
 	"${SRC}/Flickit/flickit_pose.h"
+	"${SRC}/Flickit/frames.h"
+	"${SRC}/Flickit/frames_game.h"
 	"${SRC}/Flickit/game.h"
 	"${SRC}/Flickit/str.h"
 	"${SRC}/Flickit/memory.h"
@@ -137,6 +140,10 @@ endif()
 if(WIN32)
 	add_executable(guard_windows_test EXCLUDE_FROM_ALL "${CMAKE_SOURCE_DIR}/tests/guard_windows_test.cpp")
 	target_include_directories(guard_windows_test PRIVATE "${SRC}")
+	# The watch on the frames, watching a program that plays the game's part (the CI runs it too)
+	add_executable(frames_windows_test EXCLUDE_FROM_ALL "${CMAKE_SOURCE_DIR}/tests/frames_windows_test.cpp")
+	target_include_directories(frames_windows_test PRIVATE "${SRC}")
+	target_link_libraries(frames_windows_test PRIVATE winmm)
 endif()
 
 add_executable(tsdl-launcher)

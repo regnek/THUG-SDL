@@ -20,4 +20,7 @@ namespace CamRelGame {
 	// every draw of a mesh of the game's, registered or not. The watchdog's sign that the level is drawn at all.
 	bool Counting();
 	uint32_t DrawCount();
+
+	// The level is drawn relative to its meshes' middles now (not off in the ini, not switched off by the key)
+	bool On();
 }

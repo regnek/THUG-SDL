@@ -60,6 +60,8 @@ jobs:
           ./facelist_test
           g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -I src/Flickit tests/str_test.cpp -o str_test
           ./str_test
+          g++ -std=c++11 -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -I src/Flickit tests/frames_test.cpp -o frames_test
+          ./frames_test
       - name: Flickit's car and player scripts
         run: |
           # the compiler gives the game's own compiled files for these sources (but for the order of the names)
@@ -116,6 +118,22 @@ jobs:
             cmake --build $tree --config Release --target guard_windows_test
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
             $exe = (Get-ChildItem -Recurse $tree -Filter guard_windows_test.exe | Select-Object -First 1).FullName
+            Write-Host "== $exe"
+            & $exe
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+
+      # The watch on the frames, tried on Windows itself: src/Flickit/frames_game.cpp watching a test program that
+      # plays the game's part (frames that are fast, slow, and one that hangs in a Sleep), with the second thread
+      # that stops it and looks where it is. Its result is read from the log, like the guard's.
+      - name: The watch on the frames on Windows
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          foreach ($tree in 'build-default', 'build-unoptimized') {
+            cmake --build $tree --config Release --target frames_windows_test
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            $exe = (Get-ChildItem -Recurse $tree -Filter frames_windows_test.exe | Select-Object -First 1).FullName
             Write-Host "== $exe"
             & $exe
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

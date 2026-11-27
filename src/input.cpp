@@ -16,6 +16,7 @@
 #include "Flickit/drive_game.h"
 #include "Flickit/players_game.h"
 #include "Flickit/daynight_game.h"
+#include "Flickit/frames_game.h"
 #include "Flickit/guard_game.h"
 #include "Flickit/flickit_pose.h"
 #include <QB/LazyStruct.h>
@@ -493,6 +494,7 @@ void loadFlickitSettings() {
 	DriveGame::Configure(configFile);
 	PlayersGame::Configure(configFile);
 	DayNightGame::Configure(configFile);
+	FramesGame::Configure(configFile);
 
 	loadFlickitPatterns(configFile, s.enabled && s.patterns);
 
@@ -2167,6 +2169,8 @@ void __cdecl processController(device* dev) {
 		dev->isValid = 1;
 		dev->isPluggedIn = 1;
 
+		// A frame begins here for the watch on the frames
+		FramesGame::Boundary();
 		// The game's rail code does nothing for Flickit on this frame unless the controller poll below says so
 		Memory::LogOnceReady();
 		GuardGame::Frame();

@@ -163,6 +163,22 @@ namespace Game {
 		va_end(args);
 	}
 
+	void NoteLines(const char* const* lines, int count) {
+		static char block[12 * 1100];
+		SYSTEMTIME t;
+		GetLocalTime(&t);
+		size_t used = 0;
+		block[0] = 0;
+		for (int i = 0; i < count; i++) {
+			Log::TypedLog(CHN_SDL, "%s\n", lines[i]);
+			used += Str::Format(block + used, sizeof(block) - used, "%02u:%02u:%02u.%03u %.1000s\r\n", t.wHour, t.wMinute, t.wSecond,
+				t.wMilliseconds, lines[i]);
+		}
+		if (used) {
+			FileLine(block);
+		}
+	}
+
 	/******************************************************************/
 	/*                                                                */
 	/*  Scripts, the net, the level, the clock                        */
